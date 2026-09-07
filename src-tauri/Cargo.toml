@@ -1,0 +1,23 @@
+[package]
+name = "redrob-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "redrob_data_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+redrob-core = { path = "../crates/redrob-core" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["sync"] }
+uuid = { version = "1", features = ["serde"] }
+
+[lints]
+workspace = true

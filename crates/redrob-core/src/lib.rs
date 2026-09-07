@@ -1,0 +1,13 @@
+//! Database and AI runtime for Redrob Data.
+
+pub mod ai;
+pub mod connection;
+pub mod error;
+pub mod models;
+pub(crate) mod profile_store;
+pub mod query;
+pub mod secret;
+
+pub use connection::DataService;
+pub use error::{DataError, Result};
+pub use models::*;

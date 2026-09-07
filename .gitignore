@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+target/
+
+# Build outputs
+dist/
+src-tauri/target/
+*.log
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+
+# Kiro and task planning
+.tasks/
+.agents/tasks/
+.kiro/
+
+# Demo and generated review artifacts
+.demo-recorder/
+semantic-review/
+
+# Test outputs
+coverage/
+test-results/
+playwright-report/
