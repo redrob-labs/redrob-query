@@ -1,5 +1,5 @@
 export type DatabaseKind = 'postgresql' | 'mysql' | 'sqlite' | 'mongodb' | 'sqlserver';
-export type ConnectionState = 'connected' | 'disconnected' | 'testing' | 'error';
+export type ConnectionState = 'connected' | 'connecting' | 'disconnected' | 'testing' | 'error';
 export type DataType = 'string' | 'number' | 'boolean' | 'date' | 'json' | 'null';
 export type CellValue = string | number | boolean | null | Record<string, unknown>;
 export type QueryLanguage = 'sql' | 'mql';
@@ -17,10 +17,12 @@ export interface ConnectionProfile {
   tls: boolean;
   authSource?: string;
   state: ConnectionState;
+  builtIn?: boolean;
   isDemo?: boolean;
 }
 
-export interface ConnectionDraft extends Omit<ConnectionProfile, 'id' | 'state' | 'isDemo'> {
+export interface ConnectionDraft extends Omit<ConnectionProfile, 'id' | 'state' | 'isDemo' | 'builtIn'> {
+  id?: string;
   password?: string;
 }
 
@@ -28,6 +30,15 @@ export interface ConnectionStatus {
   ok: boolean;
   latencyMs?: number;
   message: string;
+}
+
+export interface SaveConnectionOutcome {
+  profile: ConnectionProfile;
+  warning?: string;
+}
+
+export interface RemoveConnectionOutcome {
+  warning?: string;
 }
 
 export type MetadataKind = 'database' | 'schema' | 'table' | 'view' | 'column';
@@ -45,6 +56,7 @@ export interface QueryRequest {
   query: string;
   language: QueryLanguage;
   limit?: number;
+  offset?: number;
 }
 
 export interface ResultColumn {
@@ -60,6 +72,10 @@ export interface QueryResult {
   rows: Record<string, CellValue>[];
   rowCount: number;
   durationMs: number;
+  offset?: number;
+  limit?: number;
+  nextOffset?: number | null;
+  truncated?: boolean;
   message?: string;
   editSource?: {
     table: string;
@@ -105,6 +121,15 @@ export interface QueryTab {
   language: QueryLanguage;
   query: string;
   dirty: boolean;
+}
+
+export interface QueryHistoryEntry {
+  id: string;
+  connectionId: string;
+  name: string;
+  language: QueryLanguage;
+  query: string;
+  executedAt: number;
 }
 
 export type AsyncStatus = 'idle' | 'loading' | 'success' | 'error';

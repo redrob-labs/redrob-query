@@ -1,6 +1,7 @@
 use redrob_core::{
     AiAssistantRequest, AiChatResponse, ConnectionProfile, ConnectionStatus, DataService,
-    MetadataNode, MetadataRequest, QueryRequest, QueryResultPage,
+    MetadataNode, MetadataRequest, QueryRequest, QueryResultPage, RemoveProfileOutcome,
+    SaveProfileOutcome,
 };
 use tauri::State;
 use uuid::Uuid;
@@ -21,9 +22,9 @@ pub async fn save_connection_with_secret(
     service: State<'_, DataService>,
     profile: ConnectionProfile,
     secret: Option<String>,
-) -> Result<ConnectionProfile, String> {
+) -> Result<SaveProfileOutcome, String> {
     service
-        .save_profile_with_secret(profile, secret.as_deref())
+        .save_profile_with_secret_outcome(profile, secret.as_deref())
         .await
         .map_err(message)
 }
@@ -34,8 +35,11 @@ pub fn profile_load_warnings(service: State<'_, DataService>) -> Vec<String> {
 }
 
 #[tauri::command]
-pub async fn remove_connection(service: State<'_, DataService>, id: Uuid) -> Result<(), String> {
-    service.remove_profile(id).await.map_err(message)
+pub async fn remove_connection(
+    service: State<'_, DataService>,
+    id: Uuid,
+) -> Result<RemoveProfileOutcome, String> {
+    service.remove_profile_outcome(id).await.map_err(message)
 }
 
 #[tauri::command]

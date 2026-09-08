@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DemoBridge, type DataBridge } from '../api/bridge';
 import type { ConnectionProfile, MetadataNode, QueryResult } from '../domain/types';
 import { createWorkspaceStore } from './workspaceStore';
+import { MAX_HISTORY_ENTRIES, MAX_PERSISTED_TABS, WORKSPACE_STORAGE_KEY } from './workspacePersistence';
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -26,7 +27,11 @@ const controllableBridge = (mode: DataBridge['mode'] = 'demo') => {
   const bridge: DataBridge = {
     mode,
     listConnections: vi.fn(async () => [postgres, mongo]),
+    profileWarnings: vi.fn(async () => []),
     saveConnection: vi.fn(),
+    removeConnection: vi.fn(async () => ({})),
+    connect: vi.fn(async () => ({ ok: true, message: 'Connected' })),
+    disconnect: vi.fn(),
     testConnection: vi.fn(),
     loadMetadata: vi.fn(async (connectionId: string) => connectionId === postgres.id ? pgRoot : mongoRoot),
     executeQuery: vi.fn(async (request) => result(request.connectionId)),
@@ -107,7 +112,7 @@ describe('workspace state flows', () => {
     await store.getState().initialize();
     await store.getState().runQuery();
     store.getState().stageCell(0, 'plan', 'Enterprise');
-    const profile = await bridge.saveConnection({ name: 'Documents', kind: 'mongodb', host: 'localhost', port: 27017, database: 'accounts', username: 'reader', tls: true, authSource: 'admin' });
+    const profile = (await bridge.saveConnection({ name: 'Documents', kind: 'mongodb', host: 'localhost', port: 27017, database: 'accounts', username: 'reader', tls: true, authSource: 'admin' })).profile;
     await store.getState().addConnection(profile);
 
     const state = store.getState();
@@ -128,7 +133,7 @@ describe('workspace state flows', () => {
     const bridge = new DemoBridge();
     const store = createWorkspaceStore(bridge);
     await store.getState().initialize();
-    const profile = await bridge.saveConnection({ name: 'Local', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/local.sqlite', tls: true });
+    const profile = (await bridge.saveConnection({ name: 'Local', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/local.sqlite', tls: true })).profile;
     await store.getState().addConnection(profile);
     const tab = store.getState().tabs.find((item) => item.id === store.getState().activeTabId)!;
     expect(tab.query).toContain('city');
@@ -166,6 +171,101 @@ describe('workspace state flows', () => {
     expect(store.getState().queryStatus).toBe('success');
   });
 
+  it('loads metadata when a connecting profile is reselected before completion', async () => {
+    const bridge = controllableBridge('desktop');
+    vi.mocked(bridge.listConnections).mockResolvedValueOnce([{ ...postgres, state: 'disconnected' }, mongo]);
+    const pending = deferred<{ ok: boolean; message: string }>();
+    vi.mocked(bridge.connect).mockImplementationOnce(async () => pending.promise);
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+
+    const connecting = store.getState().connectConnection(postgres.id);
+    await store.getState().setActiveConnection(postgres.id);
+    pending.resolve({ ok: true, message: 'Connected' });
+    await connecting;
+
+    expect(store.getState().activeConnectionId).toBe(postgres.id);
+    expect(store.getState().connections.find((item) => item.id === postgres.id)?.state).toBe('connected');
+    expect(store.getState().metadata.root).toEqual(pgRoot);
+    expect(bridge.loadMetadata).toHaveBeenCalledWith(postgres.id, null);
+  });
+
+  it('serializes connect then remove so the committed removal remains authoritative', async () => {
+    const bridge = controllableBridge('desktop');
+    const pendingConnect = deferred<{ ok: boolean; message: string }>();
+    vi.mocked(bridge.connect).mockImplementationOnce(async () => pendingConnect.promise);
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+
+    const connecting = store.getState().connectConnection(postgres.id);
+    await vi.waitFor(() => expect(bridge.connect).toHaveBeenCalledOnce());
+    const removing = store.getState().removeConnection(postgres.id);
+    expect(bridge.removeConnection).not.toHaveBeenCalled();
+    pendingConnect.resolve({ ok: true, message: 'Connected' });
+    await Promise.all([connecting, removing]);
+
+    expect(bridge.removeConnection).toHaveBeenCalledWith(postgres.id);
+    expect(store.getState().connections.some((profile) => profile.id === postgres.id)).toBe(false);
+  });
+
+  it('serializes remove then connect without reconnecting a deleted profile', async () => {
+    const bridge = controllableBridge('desktop');
+    const pendingRemove = deferred<Record<string, never>>();
+    vi.mocked(bridge.removeConnection).mockImplementationOnce(async () => pendingRemove.promise);
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+
+    const removing = store.getState().removeConnection(postgres.id);
+    await vi.waitFor(() => expect(bridge.removeConnection).toHaveBeenCalledOnce());
+    const connecting = store.getState().connectConnection(postgres.id);
+    expect(bridge.connect).not.toHaveBeenCalled();
+    pendingRemove.resolve({});
+    await Promise.all([removing, connecting]);
+
+    expect(bridge.connect).not.toHaveBeenCalled();
+    expect(store.getState().connections.some((profile) => profile.id === postgres.id)).toBe(false);
+  });
+
+  it('serializes save then remove in the same order as the native profile lifecycle lock', async () => {
+    const bridge = controllableBridge('desktop');
+    const pendingSave = deferred<{ profile: ConnectionProfile }>();
+    vi.mocked(bridge.saveConnection).mockImplementationOnce(async () => pendingSave.promise);
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    const draft = { id: postgres.id, name: 'Renamed', kind: 'postgresql' as const, host: 'localhost', port: 5432, database: 'app', username: 'reader', tls: true };
+
+    const saving = store.getState().saveConnection(draft);
+    await vi.waitFor(() => expect(bridge.saveConnection).toHaveBeenCalledOnce());
+    const removing = store.getState().removeConnection(postgres.id);
+    expect(bridge.removeConnection).not.toHaveBeenCalled();
+    pendingSave.resolve({ profile: { ...postgres, name: 'Renamed', state: 'disconnected' } });
+    await Promise.all([saving, removing]);
+
+    expect(bridge.removeConnection).toHaveBeenCalledWith(postgres.id);
+    expect(store.getState().connections.some((profile) => profile.id === postgres.id)).toBe(false);
+  });
+
+  it('serializes remove then save and publishes the later native recreation', async () => {
+    const bridge = controllableBridge('desktop');
+    const pendingRemove = deferred<Record<string, never>>();
+    vi.mocked(bridge.removeConnection).mockImplementationOnce(async () => pendingRemove.promise);
+    vi.mocked(bridge.saveConnection).mockResolvedValueOnce({ profile: { ...postgres, name: 'Recreated', state: 'disconnected' } });
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    const draft = { id: postgres.id, name: 'Recreated', kind: 'postgresql' as const, host: 'localhost', port: 5432, database: 'app', username: 'reader', tls: true };
+
+    const removing = store.getState().removeConnection(postgres.id);
+    await vi.waitFor(() => expect(bridge.removeConnection).toHaveBeenCalledOnce());
+    const saving = store.getState().saveConnection(draft);
+    expect(bridge.saveConnection).not.toHaveBeenCalled();
+    pendingRemove.resolve({});
+    await Promise.all([removing, saving]);
+
+    expect(bridge.saveConnection).toHaveBeenCalledWith(draft);
+    expect(store.getState().connections).toContainEqual(expect.objectContaining({ id: postgres.id, name: 'Recreated' }));
+  });
+
   it('ignores an older completion when the same tab is run again', async () => {
     const bridge = controllableBridge();
     const store = createWorkspaceStore(bridge);
@@ -197,6 +297,31 @@ describe('workspace state flows', () => {
     expect(tab.dirty).toBe(true);
     expect(store.getState().result).toBeNull();
     expect(store.getState().queryStatus).toBe('idle');
+  });
+
+  it('does not overwrite restored history with an in-flight query completion', async () => {
+    const bridge = controllableBridge();
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().runQuery();
+    const entry = store.getState().queryHistory[0];
+    const pending = deferred<QueryResult>();
+    vi.mocked(bridge.executeQuery).mockImplementationOnce(async () => pending.promise);
+
+    const run = store.getState().runQuery('SELECT stale_pending');
+    store.getState().restoreHistory(entry.id);
+    pending.resolve(result('stale'));
+    await run;
+
+    const state = store.getState();
+    const tab = state.tabs.find((item) => item.id === state.activeTabId)!;
+    expect(tab.query).toBe(entry.query);
+    expect(tab.dirty).toBe(true);
+    expect(state.result).toBeNull();
+    expect(state.queryStatus).toBe('idle');
+    expect(state.mutations).toEqual([]);
+    expect(state.mutationStatus).toBe('idle');
+    expect(state.changesOpen).toBe(false);
   });
 
   it('publishes only the newest metadata refresh for a connection and node', async () => {
@@ -248,5 +373,237 @@ describe('workspace state flows', () => {
       query: expect.stringContaining('public.customers'),
     }));
     expect(vi.mocked(bridge.askAi).mock.calls[0][0]).not.toHaveProperty('resultPreview');
+  });
+});
+
+
+
+describe('release workspace contracts', () => {
+  it('restores bounded desktop query-only state without selecting, connecting, or running', async () => {
+    const tabs = Array.from({ length: 35 }, (_, index) => ({ id: `saved-${index}`, connectionId: postgres.id, name: `Saved ${index}`, language: 'sql', query: `SELECT ${index}`, dirty: true, credentials: 'must-not-restore' }));
+    const history = Array.from({ length: 55 }, (_, index) => ({ id: `history-${index}`, connectionId: postgres.id, name: 'Saved', language: 'sql', query: `SELECT ${index}`, executedAt: index, rows: [{ secret: true }], aiPrompt: 'private' }));
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify({ version: 1, tabs, history, credentials: 'top-secret' }));
+    const bridge = controllableBridge('desktop');
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    expect(store.getState().tabs).toHaveLength(MAX_PERSISTED_TABS);
+    expect(store.getState().queryHistory).toHaveLength(MAX_HISTORY_ENTRIES);
+    expect(store.getState().activeConnectionId).toBeNull();
+    expect(bridge.connect).not.toHaveBeenCalled();
+    expect(bridge.executeQuery).not.toHaveBeenCalled();
+
+    await store.getState().setActiveConnection(postgres.id);
+    store.getState().updateQuery('SELECT persisted_immediately');
+    const stored = localStorage.getItem(WORKSPACE_STORAGE_KEY)!;
+    expect(stored).toContain('persisted_immediately');
+    expect(stored).not.toContain('top-secret');
+    expect(stored).not.toContain('must-not-restore');
+    expect(stored).not.toContain('aiPrompt');
+    expect(stored).not.toContain('rows');
+  });
+
+  it('preserves an empty tab draft, unrelated tabs, and nonempty history across reloads', async () => {
+    const bridge = controllableBridge('desktop');
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    await store.getState().runQuery();
+    await store.getState().setActiveConnection(mongo.id);
+    store.getState().updateQuery('{"collection":"customers","operation":"find","filter":{"kept":true}}');
+    await store.getState().setActiveConnection(postgres.id);
+
+    store.getState().updateQuery('');
+
+    const stored = JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY)!) as {
+      tabs: Array<{ connectionId: string; query: string }>;
+      history: Array<{ connectionId: string; query: string }>;
+    };
+    expect(stored.tabs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ connectionId: postgres.id, query: '' }),
+      expect.objectContaining({ connectionId: mongo.id, query: expect.stringContaining('"kept":true') }),
+    ]));
+    expect(stored.history).toEqual([expect.objectContaining({ connectionId: postgres.id, query: expect.stringContaining('SELECT') })]);
+
+    const reloaded = createWorkspaceStore(controllableBridge('desktop'));
+    await reloaded.getState().initialize();
+    expect(reloaded.getState().tabs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ connectionId: postgres.id, query: '' }),
+      expect.objectContaining({ connectionId: mongo.id, query: expect.stringContaining('"kept":true') }),
+    ]));
+    expect(reloaded.getState().queryHistory).toEqual([expect.objectContaining({ connectionId: postgres.id, query: expect.stringContaining('SELECT') })]);
+    expect(reloaded.getState().startupWarnings).toEqual([]);
+  });
+
+  it('records successful first-page history and drives page offsets and size', async () => {
+    const bridge = controllableBridge('desktop');
+    vi.mocked(bridge.executeQuery).mockImplementation(async (query) => ({
+      ...result(query.connectionId), offset: query.offset ?? 0, limit: query.limit ?? 50,
+      nextOffset: (query.offset ?? 0) === 0 ? (query.limit ?? 50) : null, truncated: (query.offset ?? 0) === 0,
+    }));
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    await store.getState().runQuery();
+    expect(store.getState().queryHistory).toHaveLength(1);
+    expect(bridge.executeQuery).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 50, offset: 0 }));
+    await store.getState().nextPage();
+    expect(store.getState().pageOffset).toBe(50);
+    expect(store.getState().queryHistory).toHaveLength(1);
+    await store.getState().previousPage();
+    expect(store.getState().pageOffset).toBe(0);
+    await store.getState().setPageSize(25);
+    expect(store.getState().pageSize).toBe(25);
+    expect(bridge.executeQuery).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 25, offset: 0 }));
+    const entry = store.getState().queryHistory[0];
+    store.getState().updateQuery('SELECT changed');
+    store.getState().restoreHistory(entry.id);
+    expect(store.getState().tabs.find((tab) => tab.id === store.getState().activeTabId)?.query).toBe(entry.query);
+    store.getState().clearHistory(postgres.id);
+    expect(store.getState().queryHistory).toEqual([]);
+  });
+
+  it('clears only the selected connection history and preserves other persisted history', async () => {
+    const bridge = controllableBridge('desktop');
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    store.getState().updateQuery('SELECT pg_history');
+    await store.getState().runQuery();
+    await store.getState().setActiveConnection(mongo.id);
+    store.getState().updateQuery('{"collection":"customers","operation":"find","filter":{"marker":"mongo_history"}}');
+    await store.getState().runQuery();
+
+    store.getState().clearHistory(postgres.id);
+
+    expect(store.getState().queryHistory).toEqual([expect.objectContaining({ connectionId: mongo.id })]);
+    const stored = JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY)!) as { history: Array<{ connectionId: string; query: string }> };
+    expect(stored.history).toEqual([expect.objectContaining({ connectionId: mongo.id })]);
+    expect(JSON.stringify(stored.history)).not.toContain('pg_history');
+  });
+
+  it('reconciles a committed removal before showing its cleanup warning', async () => {
+    const bridge = controllableBridge('desktop');
+    vi.mocked(bridge.removeConnection).mockResolvedValueOnce({ warning: 'Credential cleanup is pending.' });
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    await store.getState().runQuery();
+
+    await store.getState().removeConnection(postgres.id);
+
+    expect(store.getState().connections.some((profile) => profile.id === postgres.id)).toBe(false);
+    expect(store.getState().tabs.some((tab) => tab.connectionId === postgres.id)).toBe(false);
+    expect(store.getState().queryHistory.some((entry) => entry.connectionId === postgres.id)).toBe(false);
+    expect(store.getState().toasts.at(-1)).toEqual(expect.objectContaining({
+      tone: 'info',
+      title: 'Connection removed with a warning',
+      detail: 'Credential cleanup is pending.',
+    }));
+  });
+
+  it('removes active and inactive profile history and queries from persisted workspace state', async () => {
+    const bridge = controllableBridge('desktop');
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    store.getState().updateQuery('SELECT removed_pg_private_text');
+    await store.getState().runQuery();
+    await store.getState().setActiveConnection(mongo.id);
+    store.getState().updateQuery('{"collection":"customers","operation":"find","filter":{"marker":"removed_mongo_private_text"}}');
+    await store.getState().runQuery();
+    const mongoResult = store.getState().result;
+
+    await store.getState().removeConnection(postgres.id);
+
+    expect(store.getState().activeConnectionId).toBe(mongo.id);
+    expect(store.getState().result).toBe(mongoResult);
+    expect(store.getState().tabs.some((tab) => tab.connectionId === postgres.id)).toBe(false);
+    expect(store.getState().queryHistory.every((entry) => entry.connectionId === mongo.id)).toBe(true);
+    let stored = localStorage.getItem(WORKSPACE_STORAGE_KEY)!;
+    expect(stored).not.toContain(postgres.id);
+    expect(stored).not.toContain('removed_pg_private_text');
+    expect(stored).toContain('removed_mongo_private_text');
+
+    await store.getState().removeConnection(mongo.id);
+
+    expect(store.getState()).toEqual(expect.objectContaining({ activeConnectionId: null, activeTabId: '', result: null, queryHistory: [] }));
+    stored = localStorage.getItem(WORKSPACE_STORAGE_KEY)!;
+    expect(stored).not.toContain(mongo.id);
+    expect(stored).not.toContain('removed_mongo_private_text');
+  });
+
+  it('preserves query tabs and history across active and inactive disconnects', async () => {
+    const bridge = controllableBridge('desktop');
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    await store.getState().runQuery();
+    store.getState().updateQuery('SELECT dirty_draft_survives_disconnect');
+    const postgresTabId = store.getState().activeTabId;
+
+    await store.getState().disconnectConnection(postgres.id);
+
+    expect(store.getState()).toEqual(expect.objectContaining({
+      activeConnectionId: postgres.id,
+      activeTabId: postgresTabId,
+      result: null,
+      mutations: [],
+    }));
+    expect(store.getState().connections.find((item) => item.id === postgres.id)?.state).toBe('disconnected');
+    expect(store.getState().tabs.find((tab) => tab.id === postgresTabId)?.query).toBe('SELECT dirty_draft_survives_disconnect');
+    expect(store.getState().queryHistory).toHaveLength(1);
+    expect(localStorage.getItem(WORKSPACE_STORAGE_KEY)).toContain('dirty_draft_survives_disconnect');
+
+    await store.getState().connectConnection(postgres.id);
+    expect(store.getState().connections.find((item) => item.id === postgres.id)?.state).toBe('connected');
+    expect(store.getState().tabs.find((tab) => tab.id === postgresTabId)?.query).toBe('SELECT dirty_draft_survives_disconnect');
+    expect(store.getState().metadata.root).toEqual(pgRoot);
+
+    await store.getState().setActiveConnection(mongo.id);
+    await store.getState().runQuery();
+    const mongoResult = store.getState().result;
+    await store.getState().disconnectConnection(postgres.id);
+    expect(store.getState().activeConnectionId).toBe(mongo.id);
+    expect(store.getState().result).toBe(mongoResult);
+    expect(store.getState().tabs.find((tab) => tab.id === postgresTabId)?.query).toBe('SELECT dirty_draft_survives_disconnect');
+  });
+
+  it('keeps staged edits when a bridge reports a partial mutation application', async () => {
+    const bridge = new DemoBridge();
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().runQuery();
+    store.getState().stageCell(0, 'plan', 'Enterprise');
+    vi.spyOn(bridge, 'applyMutations').mockResolvedValueOnce({ applied: 0, message: 'Conflict' });
+    await store.getState().applyMutations();
+    expect(store.getState().mutations).toHaveLength(1);
+    expect(store.getState().result?.rows[0].plan).toBe('Scale');
+    expect(store.getState().mutationStatus).toBe('error');
+  });
+
+  it('stores sanitized startup warnings persistently in state', async () => {
+    const bridge = controllableBridge('desktop');
+    vi.mocked(bridge.profileWarnings).mockResolvedValue(['bad\u0000 profile\npath']);
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    expect(store.getState().startupWarnings).toEqual(['bad profile path']);
+  });
+});
+
+
+
+describe('profile edit state synchronization', () => {
+  it('clears active results and disables execution when an edit returns disconnected', async () => {
+    const bridge = controllableBridge('desktop');
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    await store.getState().runQuery();
+    await store.getState().addConnection({ ...postgres, name: 'Renamed', state: 'disconnected' });
+    expect(store.getState().result).toBeNull();
+    expect(store.getState().connections.find((item) => item.id === postgres.id)?.state).toBe('disconnected');
+    vi.mocked(bridge.executeQuery).mockClear();
+    await store.getState().runQuery();
+    expect(bridge.executeQuery).not.toHaveBeenCalled();
   });
 });

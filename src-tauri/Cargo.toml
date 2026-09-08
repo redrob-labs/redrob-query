@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "JVM-free Redrob Data desktop application built with Tauri"
+readme = "../README.md"
+publish = false
 
 [lib]
 name = "redrob_data_lib"

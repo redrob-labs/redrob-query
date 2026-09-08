@@ -31,7 +31,7 @@ describe('DemoBridge', () => {
 
   it('saves Mongo profiles with Mongo metadata and an honest read-only find fixture', async () => {
     const bridge = new DemoBridge();
-    const mongo = await bridge.saveConnection({
+    const { profile: mongo } = await bridge.saveConnection({
       name: 'Documents', kind: 'mongodb', host: 'localhost', port: 27017, database: 'accounts', username: 'reader', tls: true, authSource: 'admin',
     });
     expect((await bridge.listConnections()).at(-1)).toEqual(expect.objectContaining({ kind: 'mongodb', database: 'accounts', authSource: 'admin' }));
@@ -61,7 +61,7 @@ describe('DemoBridge', () => {
 
   it('uses SQLite-specific metadata and starter-compatible rows', async () => {
     const bridge = new DemoBridge();
-    const sqlite = await bridge.saveConnection({
+    const { profile: sqlite } = await bridge.saveConnection({
       name: 'Local file', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/demo.sqlite', tls: true,
     });
     const roots = await bridge.loadMetadata(sqlite.id);
@@ -98,7 +98,7 @@ describe('DemoBridge', () => {
     ]);
     expect(result).toEqual(expect.objectContaining({ applied: 2 }));
 
-    const peer = await bridge.saveConnection({
+    const { profile: peer } = await bridge.saveConnection({
       name: 'PostgreSQL peer', kind: 'postgresql', host: 'localhost', port: 5432, database: 'commerce_peer', username: 'demo', tls: true,
     });
     const [ownerCustomers, ownerOrders, peerCustomers, peerOrders] = await Promise.all([
@@ -117,14 +117,14 @@ describe('DemoBridge', () => {
 
   it('isolates MySQL customer edits from a same-engine peer saved afterward', async () => {
     const bridge = new DemoBridge();
-    const owner = await bridge.saveConnection({
+    const { profile: owner } = await bridge.saveConnection({
       name: 'MySQL owner', kind: 'mysql', host: 'localhost', port: 3306, database: 'commerce', username: 'demo', tls: true,
     });
     await bridge.applyMutations([
       { id: 'mysql-plan', connectionId: owner.id, table: 'customers', primaryKey: 'id', rowKey: 'cus_0001', column: 'plan', previousValue: 'Scale', nextValue: 'MySQL Enterprise' },
     ]);
 
-    const peer = await bridge.saveConnection({
+    const { profile: peer } = await bridge.saveConnection({
       name: 'MySQL peer', kind: 'mysql', host: 'localhost', port: 3306, database: 'commerce_peer', username: 'demo', tls: true,
     });
     const [ownerCustomers, peerCustomers] = await Promise.all([
@@ -137,14 +137,14 @@ describe('DemoBridge', () => {
 
   it('isolates SQLite customer edits from a same-engine peer saved afterward', async () => {
     const bridge = new DemoBridge();
-    const owner = await bridge.saveConnection({
+    const { profile: owner } = await bridge.saveConnection({
       name: 'SQLite owner', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/owner.sqlite', tls: true,
     });
     await bridge.applyMutations([
       { id: 'sqlite-city', connectionId: owner.id, table: 'customers', primaryKey: 'id', rowKey: '1', column: 'city', previousValue: 'Austin', nextValue: 'Portland' },
     ]);
 
-    const peer = await bridge.saveConnection({
+    const { profile: peer } = await bridge.saveConnection({
       name: 'SQLite peer', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/peer.sqlite', tls: true,
     });
     const [ownerCustomers, peerCustomers] = await Promise.all([
@@ -161,12 +161,15 @@ describe('TauriBridge wire adapter', () => {
 
   it('saves nested connection config and its secret through one atomic command', async () => {
     invokeMock.mockResolvedValueOnce({
-      id: 'a8e5165c-a925-4f9c-b065-e395bbd433b4', name: 'Production', kind: 'postgre_sql',
-      config: { host: 'db.internal', port: 5432, database: 'warehouse', username: 'analyst', tls: true, options: {} },
-      readOnly: false, builtIn: false,
+      profile: {
+        id: 'a8e5165c-a925-4f9c-b065-e395bbd433b4', name: 'Production', kind: 'postgre_sql',
+        config: { host: 'db.internal', port: 5432, database: 'warehouse', username: 'analyst', tls: true, options: {} },
+        readOnly: false, builtIn: false,
+      },
+      warning: null,
     });
     const bridge = new TauriBridge();
-    const profile = await bridge.saveConnection({ name: 'Production', kind: 'postgresql', host: 'db.internal', port: 5432, database: 'warehouse', username: 'analyst', password: 'secret', tls: true });
+    const { profile } = await bridge.saveConnection({ name: 'Production', kind: 'postgresql', host: 'db.internal', port: 5432, database: 'warehouse', username: 'analyst', password: 'secret', tls: true });
     expect(profile).toEqual(expect.objectContaining({ state: 'disconnected', tls: true }));
     expect(invokeMock).toHaveBeenCalledTimes(1);
     expect(invokeMock).toHaveBeenCalledWith('save_connection_with_secret', {
@@ -178,9 +181,12 @@ describe('TauriBridge wire adapter', () => {
 
   it('treats a whitespace-only password as no secret', async () => {
     invokeMock.mockResolvedValueOnce({
-      id: 'sqlite-1', name: 'Local', kind: 's_q_lite',
-      config: { filePath: '/tmp/local.sqlite', srv: false, tls: false, options: {} },
-      readOnly: false, builtIn: false,
+      profile: {
+        id: 'sqlite-1', name: 'Local', kind: 's_q_lite',
+        config: { filePath: '/tmp/local.sqlite', srv: false, tls: false, options: {} },
+        readOnly: false, builtIn: false,
+      },
+      warning: null,
     });
     const bridge = new TauriBridge();
     await bridge.saveConnection({ name: 'Local', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/local.sqlite', password: '   ', tls: false });
@@ -190,12 +196,15 @@ describe('TauriBridge wire adapter', () => {
 
   it('maps controlled TLS and separate Mongo authSource on save and hydration', async () => {
     invokeMock.mockResolvedValueOnce({
-      id: 'mongo-1', name: 'Documents', kind: 'mongo_db',
-      config: { host: 'mongo.internal', port: 27017, database: 'app', username: 'reader', srv: false, tls: false, options: { authSource: 'admin' } },
-      readOnly: false, builtIn: false,
+      profile: {
+        id: 'mongo-1', name: 'Documents', kind: 'mongo_db',
+        config: { host: 'mongo.internal', port: 27017, database: 'app', username: 'reader', srv: false, tls: false, options: { authSource: 'admin' } },
+        readOnly: false, builtIn: false,
+      },
+      warning: null,
     });
     const bridge = new TauriBridge();
-    const profile = await bridge.saveConnection({ name: 'Documents', kind: 'mongodb', host: 'mongo.internal', port: 27017, database: 'app', username: 'reader', tls: false, authSource: 'admin' });
+    const { profile } = await bridge.saveConnection({ name: 'Documents', kind: 'mongodb', host: 'mongo.internal', port: 27017, database: 'app', username: 'reader', tls: false, authSource: 'admin' });
     expect(invokeMock).toHaveBeenCalledTimes(1);
     expect(invokeMock).toHaveBeenCalledWith('save_connection_with_secret', {
       profile: expect.objectContaining({ config: expect.objectContaining({ database: 'app', tls: false, options: { authSource: 'admin' } }) }),
@@ -204,11 +213,23 @@ describe('TauriBridge wire adapter', () => {
     expect(profile).toEqual(expect.objectContaining({ kind: 'mongodb', database: 'app', authSource: 'admin', tls: false }));
   });
 
-  it('maps a fulfilled unsupported connection status without inventing latency', async () => {
-    invokeMock.mockResolvedValueOnce({ state: 'unsupported', message: 'SQL Server is not available in this preview.' });
+  it('tests an edited profile by ID without exposing its blank stored secret', async () => {
+    invokeMock.mockResolvedValueOnce({ state: 'connected', message: 'Connection test succeeded', latencyMs: 12 });
     const bridge = new TauriBridge();
-    const status = await bridge.testConnection({ name: 'Planned SQL Server', kind: 'sqlserver', host: 'localhost', port: 1433, database: 'master', username: 'sa', tls: true });
-    expect(status).toEqual({ ok: false, latencyMs: undefined, message: 'SQL Server is not available in this preview.' });
+    await bridge.testConnection({ id: 'profile-1', name: 'Production', kind: 'postgresql', host: 'db.internal', port: 5432, database: 'warehouse', username: 'analyst', password: '', tls: true });
+    expect(invokeMock).toHaveBeenCalledWith('test_connection', {
+      profile: expect.objectContaining({ id: 'profile-1', kind: 'postgre_sql', readOnly: true }),
+      secret: null,
+    });
+    expect(invokeMock.mock.calls[0][1].profile).not.toHaveProperty('password');
+  });
+
+  it('rejects SQL Server save and test calls before invoking native commands', async () => {
+    const bridge = new TauriBridge();
+    const draft = { name: 'SQL Server', kind: 'sqlserver' as const, host: 'localhost', port: 1433, database: 'master', username: 'sa', tls: true };
+    await expect(bridge.testConnection(draft)).rejects.toThrow('not supported');
+    await expect(bridge.saveConnection(draft)).rejects.toThrow('not supported');
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it('rejects desktop mutations without invoking native commands', async () => {
@@ -330,5 +351,132 @@ describe('TauriBridge wire adapter', () => {
     const bridge = new TauriBridge();
     const result = await bridge.executeQuery({ connectionId: 'connection-1', query: 'SELECT values', language: 'sql' });
     expect(result.rows[0]).toEqual({ safe: 42, unsafe: '9007199254740993', ratio: 0.00125, amount: '42.50', invalid: 'NaN' });
+  });
+});
+
+
+
+describe('release bridge contracts', () => {
+  beforeEach(() => invokeMock.mockReset());
+
+  it('provides demo lifecycle truth and protects the built-in profile', async () => {
+    const bridge = new DemoBridge();
+    expect(await bridge.profileWarnings()).toEqual([]);
+    await bridge.disconnect('demo-postgres');
+    expect((await bridge.listConnections())[0].state).toBe('disconnected');
+    await expect(bridge.connect('demo-postgres')).resolves.toEqual(expect.objectContaining({ ok: true }));
+    expect((await bridge.listConnections())[0].state).toBe('connected');
+    await expect(bridge.removeConnection('demo-postgres')).rejects.toThrow('Built-in');
+    const { profile: added } = await bridge.saveConnection({ name: 'Disposable', kind: 'mysql', host: 'localhost', port: 3306, database: 'db', username: 'reader', tls: true });
+    await bridge.removeConnection(added.id);
+    expect((await bridge.listConnections()).some((profile) => profile.id === added.id)).toBe(false);
+  });
+
+  it('pages demo fixtures deterministically with honest continuation metadata', async () => {
+    const bridge = new DemoBridge();
+    const first = await bridge.executeQuery({ ...request('SELECT * FROM public.customers LIMIT 250;'), limit: 25, offset: 0 });
+    const second = await bridge.executeQuery({ ...request('SELECT * FROM public.customers LIMIT 250;'), limit: 25, offset: first.nextOffset! });
+    const last = await bridge.executeQuery({ ...request('SELECT * FROM public.customers LIMIT 250;'), limit: 25, offset: 50 });
+    expect(first).toEqual(expect.objectContaining({ offset: 0, limit: 25, nextOffset: 25, truncated: true, rowCount: 25 }));
+    expect(second.rows[0].id).toBe('cus_0026');
+    expect(last).toEqual(expect.objectContaining({ offset: 50, nextOffset: null, truncated: false, rowCount: 14 }));
+  });
+
+  it('rejects an entirely stale demo mutation batch without partially writing valid cells', async () => {
+    const bridge = new DemoBridge();
+    await expect(bridge.applyMutations([
+      { id: 'valid', connectionId: 'demo-postgres', table: 'public.customers', primaryKey: 'id', rowKey: 'cus_0001', column: 'plan', previousValue: 'Scale', nextValue: 'Enterprise' },
+      { id: 'stale', connectionId: 'demo-postgres', table: 'public.customers', primaryKey: 'id', rowKey: 'cus_0002', column: 'plan', previousValue: 'outdated', nextValue: 'Enterprise' },
+    ])).rejects.toThrow('changed since');
+    const result = await bridge.executeQuery(request('SELECT * FROM public.customers LIMIT 2;'));
+    expect(result.rows[0].plan).toBe('Scale');
+    expect(result.rows[1].plan).toBe('Growth');
+  });
+
+  it('invokes native warning and lifecycle commands with exact arguments', async () => {
+    const bridge = new TauriBridge();
+    invokeMock.mockResolvedValueOnce(['Skipped corrupt profile']);
+    await expect(bridge.profileWarnings()).resolves.toEqual(['Skipped corrupt profile']);
+    expect(invokeMock).toHaveBeenLastCalledWith('profile_load_warnings');
+
+    invokeMock.mockResolvedValueOnce([{ id: 'profile-1', name: 'Local', kind: 'postgre_sql', config: { host: 'localhost', port: 5432, database: 'db', username: 'reader', tls: true, options: {} }, builtIn: false }]);
+    await bridge.listConnections();
+    invokeMock.mockResolvedValueOnce({ state: 'connected', message: 'Connected', latencyMs: 8 });
+    await expect(bridge.connect('profile-1')).resolves.toEqual({ ok: true, message: 'Connected', latencyMs: 8 });
+    expect(invokeMock).toHaveBeenLastCalledWith('connect', { id: 'profile-1' });
+    invokeMock.mockResolvedValueOnce(undefined);
+    await bridge.disconnect('profile-1');
+    expect(invokeMock).toHaveBeenLastCalledWith('disconnect', { id: 'profile-1' });
+    invokeMock.mockResolvedValueOnce({ warning: 'Credential cleanup is pending.' });
+    await expect(bridge.removeConnection('profile-1')).resolves.toEqual({ warning: 'Credential cleanup is pending.' });
+    expect(invokeMock).toHaveBeenLastCalledWith('remove_connection', { id: 'profile-1' });
+  });
+
+  it('sends and maps native paging fields', async () => {
+    invokeMock.mockResolvedValueOnce({
+      columns: [{ name: 'id', dataType: 'integer', nullable: false }], rows: [[{ type: 'integer', value: 51 }]],
+      stats: { elapsedMs: 7, rowsReturned: 1, truncated: true }, nextOffset: 51, message: 'partial page',
+    });
+    const bridge = new TauriBridge();
+    const result = await bridge.executeQuery({ connectionId: 'profile-1', query: 'SELECT id FROM t', language: 'sql', limit: 25, offset: 50 });
+    expect(invokeMock).toHaveBeenCalledWith('execute_query', { request: expect.objectContaining({ connectionId: 'profile-1', limit: 25, offset: 50 }) });
+    expect(result).toEqual(expect.objectContaining({ offset: 50, limit: 25, nextOffset: 51, truncated: true, message: 'partial page' }));
+  });
+});
+
+
+
+describe('profile edit wire contract', () => {
+  beforeEach(() => invokeMock.mockReset());
+  it('includes the existing profile id and leaves secret replacement unspecified when scope is unchanged', async () => {
+    invokeMock.mockResolvedValueOnce({
+      profile: { id: 'profile-1', name: 'Renamed', kind: 'postgre_sql', config: { host: 'localhost', port: 5432, database: 'db', username: 'reader', tls: true, options: {} }, builtIn: false },
+      warning: 'Transaction cleanup is pending.',
+    });
+    const bridge = new TauriBridge();
+    const outcome = await bridge.saveConnection({ id: 'profile-1', name: 'Renamed', kind: 'postgresql', host: 'localhost', port: 5432, database: 'db', username: 'reader', password: '', tls: true });
+    expect(outcome).toEqual(expect.objectContaining({
+      profile: expect.objectContaining({ id: 'profile-1', name: 'Renamed' }),
+      warning: 'Transaction cleanup is pending.',
+    }));
+    expect(invokeMock).toHaveBeenCalledWith('save_connection_with_secret', { profile: expect.objectContaining({ id: 'profile-1', name: 'Renamed' }), secret: null });
+    expect(JSON.stringify(invokeMock.mock.calls[0][1])).not.toContain('password');
+  });
+});
+
+
+
+describe('lifecycle edge cases', () => {
+  beforeEach(() => invokeMock.mockReset());
+
+  it('does not reuse demo profile ids after deletion', async () => {
+    const bridge = new DemoBridge();
+    const draft = { name: 'Peer', kind: 'mysql' as const, host: 'localhost', port: 3306, database: 'db', username: 'reader', tls: true };
+    const { profile: first } = await bridge.saveConnection(draft);
+    const { profile: second } = await bridge.saveConnection({ ...draft, name: 'Second' });
+    await bridge.removeConnection(first.id);
+    const { profile: third } = await bridge.saveConnection({ ...draft, name: 'Third' });
+    expect(new Set([second.id, third.id]).size).toBe(2);
+  });
+
+  it('rejects forged primary-key metadata without changing the actual id', async () => {
+    const bridge = new DemoBridge();
+    await expect(bridge.applyMutations([{ id: 'forged', connectionId: 'demo-postgres', table: 'public.customers', primaryKey: 'plan', rowKey: 'Scale', column: 'id', previousValue: 'cus_0001', nextValue: 'forged-id' }])).rejects.toThrow('primary key');
+    const result = await bridge.executeQuery(request('SELECT * FROM public.customers LIMIT 1;'));
+    expect(result.rows[0].id).toBe('cus_0001');
+  });
+
+  it('marks a previously connected native profile disconnected after edit save', async () => {
+    const bridge = new TauriBridge();
+    invokeMock.mockResolvedValueOnce([{ id: 'profile-1', name: 'Local', kind: 'postgre_sql', config: { host: 'localhost', port: 5432, database: 'db', username: 'reader', tls: true, options: {} }, builtIn: false }]);
+    await bridge.listConnections();
+    invokeMock.mockResolvedValueOnce({ state: 'connected', message: 'Connected' });
+    await bridge.connect('profile-1');
+    invokeMock.mockResolvedValueOnce({
+      profile: { id: 'profile-1', name: 'Renamed', kind: 'postgre_sql', config: { host: 'localhost', port: 5432, database: 'db', username: 'reader', tls: true, options: {} }, builtIn: false },
+      warning: null,
+    });
+    const edited = await bridge.saveConnection({ id: 'profile-1', name: 'Renamed', kind: 'postgresql', host: 'localhost', port: 5432, database: 'db', username: 'reader', tls: true });
+    expect(edited.profile.state).toBe('disconnected');
   });
 });

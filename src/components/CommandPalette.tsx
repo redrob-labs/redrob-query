@@ -4,7 +4,7 @@ import { useWorkspace } from '../store/WorkspaceProvider';
 
 const commandList = [
   { id: 'run', label: 'Run current query', group: 'Query', hint: '⌘ ↵', icon: Play },
-  { id: 'new-query', label: 'Create new SQL query', group: 'Query', hint: '⌘ N', icon: FilePlus2 },
+  { id: 'new-query', label: 'Create new query', group: 'Query', hint: '⌘ N', icon: FilePlus2 },
   { id: 'connect', label: 'Add a database connection', group: 'Workspace', hint: '', icon: Database },
   { id: 'ai', label: 'Ask Redrob AI', group: 'AI', hint: '⌘ I', icon: Sparkles },
   { id: 'changes', label: 'Review staged changes', group: 'Data', hint: '', icon: GitCompareArrows },
@@ -13,6 +13,7 @@ const commandList = [
 export function CommandPalette() {
   const open = useWorkspace((state) => state.commandPaletteOpen);
   const setUi = useWorkspace((state) => state.setUi);
+  const openConnectionModal = useWorkspace((state) => state.openConnectionModal);
   const runQuery = useWorkspace((state) => state.runQuery);
   const newTab = useWorkspace((state) => state.newTab);
   const [search, setSearch] = useState('');
@@ -25,7 +26,7 @@ export function CommandPalette() {
     setUi({ commandPaletteOpen: false });
     if (id === 'run') void runQuery();
     if (id === 'new-query') newTab();
-    if (id === 'connect') setUi({ connectionModalOpen: true });
+    if (id === 'connect') openConnectionModal();
     if (id === 'ai') setUi({ aiOpen: true });
     if (id === 'changes') setUi({ changesOpen: true });
   };

@@ -5,13 +5,14 @@
   "identifier": "ai.redrob.data",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Redrob Data",
         "width": 1440,
         "height": 900,
@@ -24,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://console.redrob.ai; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; script-src 'self' 'wasm-unsafe-eval'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; script-src 'self' 'wasm-unsafe-eval'"
     }
   },
   "bundle": {
@@ -32,7 +33,8 @@
     "targets": "all",
     "category": "DeveloperTool",
     "shortDescription": "A fast, AI-native database workspace",
-    "longDescription": "Connect, query, and understand PostgreSQL, MySQL, SQLite, and MongoDB with Redrob AI. Desktop query results are read-only in this preview. Identity-verifying TLS uses publicly trusted CAs; private and self-signed CAs are not supported in this preview. SQL Server support is planned.",
+    "longDescription": "Connect, inspect metadata, and run bounded read-only queries against PostgreSQL, MySQL, SQLite, and MongoDB with optional Redrob AI assistance. Identity-verifying TLS uses publicly trusted certificate authorities; custom and self-signed certificate authorities are not supported in this release.",
+    "copyright": "Copyright © 2026 Redrob",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

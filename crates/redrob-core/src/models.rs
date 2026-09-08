@@ -40,7 +40,7 @@ impl DatabaseKind {
                 connect: true,
                 metadata: true,
                 query: true,
-                mutation: true,
+                mutation: false,
                 transactions: true,
                 document_query: false,
                 unsupported_reason: None,
@@ -49,7 +49,7 @@ impl DatabaseKind {
                 connect: true,
                 metadata: true,
                 query: true,
-                mutation: true,
+                mutation: false,
                 transactions: false,
                 document_query: true,
                 unsupported_reason: None,
@@ -710,6 +710,30 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(request.model, "auto");
+    }
+
+    #[test]
+    fn connector_capabilities_hide_unavailable_desktop_mutations() {
+        for kind in [
+            DatabaseKind::PostgreSql,
+            DatabaseKind::MySql,
+            DatabaseKind::SQLite,
+            DatabaseKind::MongoDb,
+        ] {
+            assert!(!kind.capabilities().mutation, "{kind:?}");
+        }
+
+        for kind in [
+            DatabaseKind::PostgreSql,
+            DatabaseKind::MySql,
+            DatabaseKind::SQLite,
+        ] {
+            assert!(kind.capabilities().transactions, "{kind:?}");
+            assert!(!kind.capabilities().document_query, "{kind:?}");
+        }
+        let mongo = DatabaseKind::MongoDb.capabilities();
+        assert!(!mongo.transactions);
+        assert!(mongo.document_query);
     }
 
     #[test]

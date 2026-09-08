@@ -8,6 +8,6 @@ pub(crate) mod profile_store;
 pub mod query;
 pub mod secret;
 
-pub use connection::DataService;
+pub use connection::{DataService, RemoveProfileOutcome, SaveProfileOutcome};
 pub use error::{DataError, Result};
 pub use models::*;

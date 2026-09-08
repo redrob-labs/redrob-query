@@ -13,12 +13,18 @@ import type {
   MutationResult,
   QueryRequest,
   QueryResult,
+  RemoveConnectionOutcome,
+  SaveConnectionOutcome,
 } from '../domain/types';
 
 export interface DataBridge {
   readonly mode: 'desktop' | 'demo';
   listConnections(): Promise<ConnectionProfile[]>;
-  saveConnection(draft: ConnectionDraft): Promise<ConnectionProfile>;
+  profileWarnings(): Promise<string[]>;
+  saveConnection(draft: ConnectionDraft): Promise<SaveConnectionOutcome>;
+  removeConnection(id: string): Promise<RemoveConnectionOutcome>;
+  connect(id: string): Promise<ConnectionStatus>;
+  disconnect(id: string): Promise<void>;
   testConnection(draft: ConnectionDraft): Promise<ConnectionStatus>;
   loadMetadata(connectionId: string, parentId?: string | null): Promise<MetadataNode[]>;
   executeQuery(request: QueryRequest): Promise<QueryResult>;
@@ -28,11 +34,19 @@ export interface DataBridge {
 }
 
 const wait = (ms = 180) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const deepEqual = (left: unknown, right: unknown): boolean => {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => deepEqual(value, right[index]));
+  const leftRecord = left as Record<string, unknown>; const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort(); const rightKeys = Object.keys(rightRecord).sort();
+  return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => key === rightKeys[index] && deepEqual(leftRecord[key], rightRecord[key]));
+};
 
 const seededConnections: ConnectionProfile[] = [
   {
     id: 'demo-postgres', name: 'Acme Warehouse', kind: 'postgresql', host: 'demo.local', port: 5432,
-    database: 'commerce', username: 'demo_user', tls: true, state: 'connected', isDemo: true,
+    database: 'commerce', username: 'demo_user', tls: true, state: 'connected', builtIn: true, isDemo: true,
   },
 ];
 
@@ -144,9 +158,19 @@ const createRelationalFixture = (kind: RelationalDatabaseKind): RelationalFixtur
   orderRows: structuredClone(seededOrderRows),
 });
 
+const pageRows = <T>(rows: T[], offset = 0, limit = 50, maximum = rows.length) => {
+  const safeOffset = Math.max(0, offset);
+  const safeLimit = Math.max(1, limit);
+  const available = rows.slice(0, Math.max(0, maximum));
+  const page = available.slice(safeOffset, safeOffset + safeLimit);
+  const nextOffset = safeOffset + page.length < available.length ? safeOffset + page.length : null;
+  return { rows: page, offset: safeOffset, limit: safeLimit, nextOffset, truncated: nextOffset !== null };
+};
+
 export class DemoBridge implements DataBridge {
   readonly mode = 'demo' as const;
   private connections = structuredClone(seededConnections);
+  private connectionSequence = seededConnections.length;
   private relationalFixtures = new Map<string, RelationalFixture>([
     ['demo-postgres', createRelationalFixture('postgresql')],
   ]);
@@ -156,27 +180,62 @@ export class DemoBridge implements DataBridge {
     return structuredClone(this.connections);
   }
 
-  async saveConnection(draft: ConnectionDraft): Promise<ConnectionProfile> {
+  async profileWarnings(): Promise<string[]> {
+    return [];
+  }
+
+  async saveConnection(draft: ConnectionDraft): Promise<SaveConnectionOutcome> {
     await wait();
+    if (draft.kind === 'sqlserver') throw new Error('SQL Server is not supported.');
     if (!draft.name.trim()) throw new Error('Connection name is required.');
-    const { password: _password, ...profileDraft } = draft;
+    const existingIndex = draft.id ? this.connections.findIndex((item) => item.id === draft.id) : -1;
+    const existing = existingIndex >= 0 ? this.connections[existingIndex] : undefined;
+    const { password: _password, id: _id, ...profileDraft } = draft;
     const profile: ConnectionProfile = {
       ...profileDraft,
-      id: `demo-${draft.kind}-${this.connections.length + 1}`,
-      state: 'connected',
+      id: existing?.id ?? `demo-${draft.kind}-${++this.connectionSequence}`,
+      state: existing?.state ?? 'connected',
+      builtIn: existing?.builtIn ?? false,
       isDemo: true,
     };
-    if (profile.kind !== 'mongodb') {
+    if (profile.kind !== 'mongodb' && (!existing || existing.kind !== profile.kind)) {
       this.relationalFixtures.set(profile.id, createRelationalFixture(profile.kind));
     }
-    this.connections.push(profile);
-    return structuredClone(profile);
+    if (existingIndex >= 0) this.connections[existingIndex] = profile;
+    else this.connections.push(profile);
+    return { profile: structuredClone(profile) };
+  }
+
+  async removeConnection(id: string): Promise<RemoveConnectionOutcome> {
+    await wait(80);
+    const profile = this.connections.find((item) => item.id === id);
+    if (!profile) throw new Error('Connection not found.');
+    if (profile.builtIn) throw new Error('Built-in demo connections cannot be removed.');
+    this.connections = this.connections.filter((item) => item.id !== id);
+    this.relationalFixtures.delete(id);
+    return {};
+  }
+
+  async connect(id: string): Promise<ConnectionStatus> {
+    const profile = this.connections.find((item) => item.id === id);
+    if (!profile) throw new Error('Connection not found.');
+    profile.state = 'connecting';
+    await wait(120);
+    profile.state = 'connected';
+    return { ok: true, latencyMs: 18, message: 'Connected' };
+  }
+
+  async disconnect(id: string): Promise<void> {
+    const profile = this.connections.find((item) => item.id === id);
+    if (!profile) throw new Error('Connection not found.');
+    await wait(60);
+    profile.state = 'disconnected';
   }
 
   async testConnection(draft: ConnectionDraft): Promise<ConnectionStatus> {
     await wait(260);
+    if (draft.kind === 'sqlserver') throw new Error('SQL Server is not supported.');
     if (!draft.name.trim()) throw new Error('Add a connection name before testing.');
-    if (draft.kind === 'sqlserver') return { ok: false, message: 'SQL Server is not available in this preview.' };
     if (draft.host.toLowerCase().includes('fail')) throw new Error('Demo test failed: host is unreachable.');
     return { ok: true, latencyMs: 28, message: 'Demo configuration looks valid' };
   }
@@ -202,8 +261,9 @@ export class DemoBridge implements DataBridge {
       if (operation.operation !== 'find') throw new Error('MongoDB demo supports the read-only find operation.');
       if (operation.collection !== 'customers') throw new Error('MongoDB demo collection not found.');
       const filter = operation.filter ?? {};
-      const rows = seededMongoRows.filter((row) => Object.entries(filter).every(([key, value]) => row[key as keyof typeof row] === value));
-      const limit = Math.min(operation.limit ?? request.limit ?? 50, rows.length);
+      const matches = seededMongoRows.filter((row) => Object.entries(filter).every(([key, value]) => row[key as keyof typeof row] === value));
+      const maximum = Math.min(operation.limit ?? matches.length, matches.length);
+      const page = pageRows(matches, request.offset, request.limit ?? 50, maximum);
       return {
         columns: [
           { key: '_id', label: '_id', dataType: 'string', primaryKey: true },
@@ -212,7 +272,8 @@ export class DemoBridge implements DataBridge {
           { key: 'tier', label: 'tier', dataType: 'string' },
           { key: 'active', label: 'active', dataType: 'boolean' },
           { key: 'joinedAt', label: 'joinedAt', dataType: 'date' },
-        ], rows: structuredClone(rows.slice(0, limit)), rowCount: limit, durationMs: 31,
+        ], rows: structuredClone(page.rows), rowCount: page.rows.length, durationMs: 31,
+        offset: page.offset, limit: page.limit, nextOffset: page.nextOffset, truncated: page.truncated,
       };
     }
     if (request.language !== 'sql') throw new Error('Relational connections accept SQL, not MQL.');
@@ -226,8 +287,8 @@ export class DemoBridge implements DataBridge {
     if (!fixture) throw new Error('Demo relational fixture not found.');
     if (profile.kind === 'sqlite') {
       const limitMatch = normalized.match(/limit\s+(\d+)/);
-      const limit = Math.min(Number(limitMatch?.[1] ?? request.limit ?? 50), fixture.customerRows.length);
-      const rows = fixture.customerRows.slice(0, limit);
+      const maximum = Math.min(Number(limitMatch?.[1] ?? fixture.customerRows.length), fixture.customerRows.length);
+      const page = pageRows(fixture.customerRows, request.offset, request.limit ?? 50, maximum);
       return {
         columns: [
           { key: 'id', label: 'id', dataType: 'number', primaryKey: true },
@@ -235,22 +296,26 @@ export class DemoBridge implements DataBridge {
           { key: 'email', label: 'email', dataType: 'string' },
           { key: 'city', label: 'city', dataType: 'string' },
           { key: 'created_at', label: 'created_at', dataType: 'date' },
-        ], rows, rowCount: rows.length, durationMs: 24, editSource: { table: 'customers', primaryKey: 'id' },
+        ], rows: page.rows, rowCount: page.rows.length, durationMs: 24, editSource: { table: 'customers', primaryKey: 'id' },
+        offset: page.offset, limit: page.limit, nextOffset: page.nextOffset, truncated: page.truncated,
       };
     }
     if (normalized.includes('sum(') || normalized.includes('revenue') || normalized.includes('group by')) {
+      const limitMatch = normalized.match(/limit\s+(\d+)/);
+      const page = pageRows(revenueRows, request.offset, request.limit ?? 50, Number(limitMatch?.[1] ?? revenueRows.length));
       return {
         columns: [
           { key: 'month', label: 'month', dataType: 'string' },
           { key: 'revenue', label: 'revenue', dataType: 'number' },
           { key: 'orders', label: 'orders', dataType: 'number' },
-        ], rows: revenueRows, rowCount: revenueRows.length, durationMs: 42,
+        ], rows: page.rows, rowCount: page.rows.length, durationMs: 42,
+        offset: page.offset, limit: page.limit, nextOffset: page.nextOffset, truncated: page.truncated,
       };
     }
     if (normalized.includes('from public.orders')) {
       const limitMatch = normalized.match(/limit\s+(\d+)/);
-      const limit = Math.min(Number(limitMatch?.[1] ?? request.limit ?? 50), fixture.orderRows.length);
-      const rows = fixture.orderRows.slice(0, limit);
+      const maximum = Math.min(Number(limitMatch?.[1] ?? fixture.orderRows.length), fixture.orderRows.length);
+      const page = pageRows(fixture.orderRows, request.offset, request.limit ?? 50, maximum);
       return {
         columns: [
           { key: 'id', label: 'id', dataType: 'string', primaryKey: true },
@@ -259,12 +324,14 @@ export class DemoBridge implements DataBridge {
           { key: 'total', label: 'total', dataType: 'number' },
           { key: 'currency', label: 'currency', dataType: 'string' },
           { key: 'created_at', label: 'created_at', dataType: 'date' },
-        ], rows, rowCount: rows.length, durationMs: 39, editSource: { table: 'public.orders', primaryKey: 'id' },
+        ], rows: page.rows, rowCount: page.rows.length, durationMs: 39, editSource: { table: 'public.orders', primaryKey: 'id' },
+        offset: page.offset, limit: page.limit, nextOffset: page.nextOffset, truncated: page.truncated,
       };
     }
     const limitMatch = normalized.match(/limit\s+(\d+)/);
-    const limit = Math.min(Number(limitMatch?.[1] ?? request.limit ?? 50), fixture.customerRows.length);
-    const rows = normalized.includes("active = false") ? fixture.customerRows.filter((row) => !row.active).slice(0, limit) : fixture.customerRows.slice(0, limit);
+    const matchingRows = normalized.includes("active = false") ? fixture.customerRows.filter((row) => !row.active) : fixture.customerRows;
+    const maximum = Math.min(Number(limitMatch?.[1] ?? matchingRows.length), matchingRows.length);
+    const page = pageRows(matchingRows, request.offset, request.limit ?? 50, maximum);
     return {
       columns: [
         { key: 'id', label: 'id', dataType: 'string', primaryKey: true },
@@ -274,31 +341,41 @@ export class DemoBridge implements DataBridge {
         { key: 'mrr', label: 'mrr', dataType: 'number' },
         { key: 'active', label: 'active', dataType: 'boolean' },
         { key: 'created_at', label: 'created_at', dataType: 'date' },
-      ], rows, rowCount: rows.length, durationMs: 36, editSource: { table: profile.kind === 'postgresql' ? 'public.customers' : 'customers', primaryKey: 'id' },
+      ], rows: page.rows, rowCount: page.rows.length, durationMs: 36, editSource: { table: profile.kind === 'postgresql' ? 'public.customers' : 'customers', primaryKey: 'id' },
+      offset: page.offset, limit: page.limit, nextOffset: page.nextOffset, truncated: page.truncated,
     };
   }
 
   async applyMutations(mutations: CellMutation[]): Promise<MutationResult> {
     await wait(260);
     if (!mutations.length) throw new Error('There are no staged changes to apply.');
-    let applied = 0;
-    for (const mutation of mutations) {
-      const profile = this.connections.find((item) => item.id === mutation.connectionId);
-      if (!profile) throw new Error('Connection not found.');
-      if (profile.kind === 'mongodb') throw new Error('MongoDB demo results are read-only.');
-      const expectedTables = profile.kind === 'postgresql' ? ['public.customers', 'public.orders'] : ['customers'];
+    const connectionId = mutations[0].connectionId;
+    if (mutations.some((mutation) => mutation.connectionId !== connectionId)) throw new Error('All changes must belong to the same connection.');
+    const profile = this.connections.find((item) => item.id === connectionId);
+    if (!profile) throw new Error('Connection not found.');
+    if (profile.kind === 'mongodb') throw new Error('MongoDB demo results are read-only.');
+    const fixture = this.relationalFixtures.get(connectionId);
+    if (!fixture) throw new Error('Demo relational fixture not found.');
+    const expectedTables = profile.kind === 'postgresql' ? ['public.customers', 'public.orders'] : ['customers'];
+    const seen = new Set<string>();
+    const validated = mutations.map((mutation) => {
       if (!expectedTables.includes(mutation.table)) throw new Error('Mutation target does not belong to this demo connection.');
-      const fixture = this.relationalFixtures.get(mutation.connectionId);
-      if (!fixture) throw new Error('Demo relational fixture not found.');
+      if (mutation.primaryKey !== 'id') throw new Error('Mutation primary key does not match the demo table schema.');
+      if (mutation.column === 'id') throw new Error('Primary keys cannot be edited.');
+      const identity = `${mutation.table}:${mutation.rowKey}:${mutation.column}`;
+      if (seen.has(identity)) throw new Error('The mutation batch contains duplicate cell changes.');
+      seen.add(identity);
       const sourceRows = mutation.table === 'public.orders' ? fixture.orderRows : fixture.customerRows;
-      const row = sourceRows.find((item) => String(item[mutation.primaryKey]) === mutation.rowKey);
-      if (row && mutation.column in row) {
-        Object.assign(row, { [mutation.column]: mutation.nextValue });
-        applied += 1;
+      const row = sourceRows.find((item) => String(item.id) === mutation.rowKey);
+      if (!row) throw new Error(`Row ${mutation.rowKey} no longer exists.`);
+      if (!(mutation.column in row)) throw new Error(`Column ${mutation.column} does not exist.`);
+      if (!deepEqual(row[mutation.column], mutation.previousValue)) {
+        throw new Error(`Cell ${mutation.column} changed since it was loaded.`);
       }
-    }
-    if (!applied) throw new Error('No matching demo rows were found.');
-    return { applied, message: `${applied} change${applied === 1 ? '' : 's'} applied in demo memory` };
+      return { row, mutation };
+    });
+    validated.forEach(({ row, mutation }) => { row[mutation.column] = structuredClone(mutation.nextValue); });
+    return { applied: validated.length, message: `${validated.length} change${validated.length === 1 ? '' : 's'} applied in demo memory` };
   }
 
   async saveAiKey(secret: string): Promise<void> {
@@ -350,13 +427,17 @@ interface WireProfile {
   readOnly?: boolean;
   builtIn?: boolean;
 }
+interface WireSaveProfileOutcome { profile: WireProfile; warning?: string | null }
+interface WireRemoveProfileOutcome { warning?: string | null }
 interface WireMetadataNode {
   id: string; name: string; kind: string; dataType?: string; hasChildren: boolean;
 }
 interface WireResult {
   columns: Array<{ name: string; dataType: string; nullable: boolean | null }>;
   rows: WireValue[][];
-  stats: { elapsedMs: number; rowsReturned: number };
+  stats: { elapsedMs: number; rowsReturned: number; truncated?: boolean };
+  nextOffset?: number | null;
+  message?: string;
 }
 
 const kindToWire: Record<DatabaseKind, WireKind> = {
@@ -366,6 +447,7 @@ const wireToKind: Record<WireKind, DatabaseKind> = {
   postgre_sql: 'postgresql', my_sql: 'mysql', s_q_lite: 'sqlite', mongo_db: 'mongodb', sql_server: 'sqlserver',
 };
 const toWireProfile = (draft: ConnectionDraft): Omit<WireProfile, 'id'> & { id?: string } => ({
+  ...(draft.id ? { id: draft.id } : {}),
   name: draft.name,
   kind: kindToWire[draft.kind],
   config: {
@@ -394,6 +476,7 @@ const fromWireProfile = (profile: WireProfile): ConnectionProfile => ({
   tls: profile.config.tls,
   authSource: profile.kind === 'mongo_db' ? profile.config.options.authSource : undefined,
   state: 'disconnected',
+  builtIn: Boolean(profile.builtIn),
   isDemo: Boolean(profile.builtIn),
 });
 const fromWireValue = (cell: WireValue): CellValue => {
@@ -426,21 +509,55 @@ export class TauriBridge implements DataBridge {
 
   async listConnections(): Promise<ConnectionProfile[]> {
     const profiles = (await invoke<WireProfile[]>('list_connections')).map(fromWireProfile);
-    profiles.forEach((profile) => this.profiles.set(profile.id, profile));
+    this.profiles = new Map(profiles.map((profile) => [profile.id, profile]));
     return profiles;
   }
 
-  async saveConnection(draft: ConnectionDraft): Promise<ConnectionProfile> {
-    const wire = await invoke<WireProfile>('save_connection_with_secret', {
+  async profileWarnings(): Promise<string[]> {
+    return invoke<string[]>('profile_load_warnings');
+  }
+
+  async saveConnection(draft: ConnectionDraft): Promise<SaveConnectionOutcome> {
+    if (draft.kind === 'sqlserver') throw new Error('SQL Server is not supported.');
+    const outcome = await invoke<WireSaveProfileOutcome>('save_connection_with_secret', {
       profile: toWireProfile(draft),
       secret: draft.password?.trim() ? draft.password : null,
     });
-    const profile = fromWireProfile(wire);
+    const profile = fromWireProfile(outcome.profile);
     this.profiles.set(profile.id, profile);
-    return profile;
+    return { profile, ...(outcome.warning ? { warning: outcome.warning } : {}) };
+  }
+
+  async removeConnection(id: string): Promise<RemoveConnectionOutcome> {
+    const outcome = await invoke<WireRemoveProfileOutcome>('remove_connection', { id });
+    this.profiles.delete(id);
+    return outcome.warning ? { warning: outcome.warning } : {};
+  }
+
+  async connect(id: string): Promise<ConnectionStatus> {
+    const profile = this.profiles.get(id);
+    if (profile) this.profiles.set(id, { ...profile, state: 'connecting' });
+    try {
+      const status = await invoke<{ state: string; message: string; latencyMs?: number }>('connect', { id });
+      const current = this.profiles.get(id);
+      const ok = status.state === 'connected';
+      if (current) this.profiles.set(id, { ...current, state: ok ? 'connected' : 'error' });
+      return { ok, latencyMs: status.latencyMs, message: status.message };
+    } catch (error) {
+      const current = this.profiles.get(id);
+      if (current) this.profiles.set(id, { ...current, state: 'error' });
+      throw error;
+    }
+  }
+
+  async disconnect(id: string): Promise<void> {
+    await invoke<void>('disconnect', { id });
+    const profile = this.profiles.get(id);
+    if (profile) this.profiles.set(id, { ...profile, state: 'disconnected' });
   }
 
   async testConnection(draft: ConnectionDraft): Promise<ConnectionStatus> {
+    if (draft.kind === 'sqlserver') throw new Error('SQL Server is not supported.');
     const status = await invoke<{ state: string; message: string; latencyMs?: number }>('test_connection', { profile: toWireProfile(draft), secret: draft.password || null });
     return { ok: status.state === 'connected', latencyMs: status.latencyMs, message: status.message };
   }
@@ -460,7 +577,7 @@ export class TauriBridge implements DataBridge {
       connectionId: request.connectionId,
       query: request.query,
       language: request.language === 'mql' ? 'mongo_json' : 'sql',
-      parameters: [], limit: request.limit ?? 500, offset: 0, timeoutMs: 30000,
+      parameters: [], limit: request.limit ?? 500, offset: request.offset ?? 0, timeoutMs: 30000,
     } });
     const keys = page.columns.map((column, index) => page.columns.findIndex((item) => item.name === column.name) === index ? column.name : `${column.name}_${index + 1}`);
     return {
@@ -468,6 +585,11 @@ export class TauriBridge implements DataBridge {
       rows: page.rows.map((row) => Object.fromEntries(keys.map((key, index) => [key, fromWireValue(row[index] ?? { type: 'null' })]))),
       rowCount: page.stats.rowsReturned,
       durationMs: page.stats.elapsedMs,
+      offset: request.offset ?? 0,
+      limit: request.limit ?? 500,
+      nextOffset: page.nextOffset ?? null,
+      truncated: Boolean(page.stats.truncated),
+      message: page.message,
     };
   }
 

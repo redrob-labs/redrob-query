@@ -51,8 +51,11 @@ pub fn build_assistant_chat_request(input: &AiAssistantRequest) -> Result<AiChat
         (DatabaseKind::SQLite, QueryLanguage::Sql) => {
             "When writing a query, return executable SQLite SQL in a fenced sql block."
         }
-        (DatabaseKind::SqlServer, QueryLanguage::Sql) => {
-            "When writing a query, return executable SQL Server SQL in a fenced sql block."
+        (DatabaseKind::SqlServer, _) => {
+            return Err(DataError::AiRejected(
+                "SQL Server is unsupported because no connector or connection profile is available"
+                    .to_owned(),
+            ));
         }
         (DatabaseKind::MongoDb, QueryLanguage::MongoJson) => {
             "When writing a query, return a fenced mql or json block containing an object with collection, operation, filter, and optional limit. Use read-only operations such as find."
@@ -98,6 +101,8 @@ pub struct AiClient {
     client: Client,
     endpoint: String,
     secrets: Arc<dyn SecretStore>,
+    #[cfg(test)]
+    api_key_override: Option<SecretString>,
 }
 
 impl AiClient {
@@ -117,6 +122,8 @@ impl AiClient {
             client,
             endpoint,
             secrets,
+            #[cfg(test)]
+            api_key_override: None,
         }
     }
 
@@ -162,6 +169,10 @@ impl AiClient {
     }
 
     fn api_key(&self) -> Result<SecretString> {
+        #[cfg(test)]
+        if let Some(value) = self.api_key_override.as_ref() {
+            return Ok(value.clone());
+        }
         if let Ok(value) = std::env::var("REDROB_API_KEY")
             && !value.trim().is_empty()
         {
@@ -297,7 +308,167 @@ fn parse_response(bytes: &[u8]) -> Result<AiChatResponse> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{Arc, mpsc},
+        thread,
+        time::Duration as StdDuration,
+    };
+
+    use crate::secret::MemorySecretStore;
+
     use super::*;
+
+    fn mock_http_response(
+        status: &'static str,
+        body: Vec<u8>,
+        content_length: usize,
+    ) -> (String, mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(StdDuration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let expected_length = loop {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0, "mock request ended before headers were complete");
+                request.extend_from_slice(&buffer[..count]);
+                let Some(headers_end) = request.windows(4).position(|value| value == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = std::str::from_utf8(&request[..headers_end]).unwrap();
+                let body_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                break headers_end + 4 + body_length;
+            };
+            while request.len() < expected_length {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0, "mock request body ended early");
+                request.extend_from_slice(&buffer[..count]);
+            }
+            request_tx.send(request).unwrap();
+
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            stream.write_all(&body).unwrap();
+            stream.flush().unwrap();
+        });
+        (
+            format!("http://{address}/chat/completions"),
+            request_rx,
+            handle,
+        )
+    }
+
+    fn test_ai_client(endpoint: String) -> AiClient {
+        let mut client = AiClient::with_endpoint(Arc::new(MemorySecretStore::default()), endpoint);
+        client.api_key_override = Some(SecretString::from("local-test-key".to_owned()));
+        client
+    }
+
+    fn test_chat_request() -> AiChatRequest {
+        AiChatRequest {
+            model: "auto".to_owned(),
+            messages: vec![AiMessage {
+                role: AiRole::User,
+                content: "show indexes".to_owned(),
+            }],
+            temperature: Some(0.2),
+            max_tokens: Some(128),
+        }
+    }
+
+    #[tokio::test]
+    async fn ai_client_sends_bearer_request_and_parses_success() {
+        let body = br#"{
+            "id":"chat-local","model":"mock-model",
+            "choices":[{"message":{"role":"assistant","content":"Use an index."}}],
+            "usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}
+        }"#
+        .to_vec();
+        let (endpoint, requests, server) = mock_http_response("200 OK", body.clone(), body.len());
+        let client = test_ai_client(endpoint);
+
+        let response = client.chat(test_chat_request()).await.unwrap();
+        assert_eq!(response.id, "chat-local");
+        assert_eq!(response.model, "mock-model");
+        assert_eq!(response.message.content, "Use an index.");
+        assert_eq!(response.usage.unwrap().total_tokens, 7);
+
+        let request = requests.recv_timeout(StdDuration::from_secs(5)).unwrap();
+        server.join().unwrap();
+        let headers_end = request
+            .windows(4)
+            .position(|value| value == b"\r\n\r\n")
+            .unwrap();
+        let headers = std::str::from_utf8(&request[..headers_end]).unwrap();
+        assert!(headers.starts_with("POST /chat/completions HTTP/1.1\r\n"));
+        let authorization = headers.lines().find(|line| {
+            line.split_once(':')
+                .is_some_and(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        });
+        assert_eq!(authorization, Some("authorization: Bearer local-test-key"));
+        assert!(headers.lines().any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.eq_ignore_ascii_case("content-type")
+                    && value.trim().eq_ignore_ascii_case("application/json")
+            })
+        }));
+
+        let request_body: serde_json::Value =
+            serde_json::from_slice(&request[headers_end + 4..]).unwrap();
+        assert_eq!(request_body["model"], "auto");
+        assert_eq!(request_body["messages"][0]["role"], "user");
+        assert_eq!(request_body["messages"][0]["content"], "show indexes");
+        assert_eq!(request_body["temperature"], 0.2);
+        assert_eq!(request_body["maxTokens"], 128);
+    }
+
+    #[tokio::test]
+    async fn ai_client_does_not_retry_auth_failures() {
+        let body = br#"{"error":"unauthorized"}"#.to_vec();
+        let (endpoint, requests, server) =
+            mock_http_response("401 Unauthorized", body.clone(), body.len());
+        let client = test_ai_client(endpoint);
+
+        assert!(matches!(
+            client.chat(test_chat_request()).await,
+            Err(DataError::AiAuthentication)
+        ));
+        requests.recv_timeout(StdDuration::from_secs(5)).unwrap();
+        server.join().unwrap();
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn ai_client_rejects_declared_oversized_response() {
+        let (endpoint, requests, server) =
+            mock_http_response("200 OK", Vec::new(), 2 * 1024 * 1024 + 1);
+        let client = test_ai_client(endpoint);
+
+        assert!(matches!(
+            client.chat(test_chat_request()).await,
+            Err(DataError::AiInvalidResponse)
+        ));
+        requests.recv_timeout(StdDuration::from_secs(5)).unwrap();
+        server.join().unwrap();
+    }
 
     #[test]
     fn parses_openai_response() {
@@ -397,6 +568,18 @@ mod tests {
         assert!(matches!(
             build_assistant_chat_request(&mismatched),
             Err(DataError::AiRejected(message)) if message.contains("does not match")
+        ));
+
+        let sql_server = AiAssistantRequest {
+            prompt: "write a query".to_owned(),
+            active_query: None,
+            database_kind: DatabaseKind::SqlServer,
+            query_language: QueryLanguage::Sql,
+        };
+        assert!(matches!(
+            build_assistant_chat_request(&sql_server),
+            Err(DataError::AiRejected(message))
+                if message.contains("no connector or connection profile")
         ));
     }
 

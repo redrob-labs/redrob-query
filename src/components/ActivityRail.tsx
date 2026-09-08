@@ -7,15 +7,18 @@ export function ActivityRail() {
   const navigatorOpen = useWorkspace((state) => state.navigatorOpen);
   const aiOpen = useWorkspace((state) => state.aiOpen);
   const mutations = useWorkspace((state) => state.mutations.length);
+  const activeTabId = useWorkspace((state) => state.activeTabId);
+  const openConnectionModal = useWorkspace((state) => state.openConnectionModal);
+  const focusNavigatorSearch = useWorkspace((state) => state.focusNavigatorSearch);
   const setUi = useWorkspace((state) => state.setUi);
   return (
     <nav className="activity-rail" aria-label="Workspace tools">
       <img className="brand-mark" src={logo} alt="Redrob Data" />
       <div className="rail-group">
-        <IconButton label="Connections" active={navigatorOpen} onClick={() => setUi({ navigatorOpen: !navigatorOpen })}><Database size={18} /></IconButton>
-        <IconButton label="New connection" data-testid="open-connection-modal" onClick={() => setUi({ connectionModalOpen: true })}><Plus size={18} /></IconButton>
-        <IconButton label="Schema search" onClick={() => setUi({ navigatorOpen: true })}><Search size={18} /></IconButton>
-        <IconButton label="SQL workspace" active><FileCode2 size={18} /></IconButton>
+        <IconButton label="Connections" active={navigatorOpen} aria-pressed={navigatorOpen} onClick={() => setUi({ navigatorOpen: !navigatorOpen })}><Database size={18} /></IconButton>
+        <IconButton label="New connection" data-testid="open-connection-modal" onClick={() => openConnectionModal()}><Plus size={18} /></IconButton>
+        <IconButton label="Schema search" onClick={focusNavigatorSearch}><Search size={18} /></IconButton>
+        <IconButton label="Query workspace" active aria-current="page" disabled={!activeTabId} onClick={() => document.querySelector<HTMLElement>('[data-testid="query-editor"] textarea')?.focus()}><FileCode2 size={18} /></IconButton>
         <IconButton label="Staged changes" badge={mutations} onClick={() => setUi({ changesOpen: true })}><GitCompareArrows size={18} /></IconButton>
       </div>
       <div className="rail-spacer" />

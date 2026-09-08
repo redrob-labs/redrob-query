@@ -1,9 +1,10 @@
 Redrob Data
 Copyright 2026 Redrob
 
-This product is informed by the architecture and user workflows of DBeaver
-Community, Copyright (c) 2010-2026 DBeaver Corp and contributors, licensed
-under Apache License 2.0. Redrob Data is a clean implementation and does not
-distribute DBeaver source code, binaries, plugins, or branding.
+This JVM-free Rust/React product is informed by the architecture and user
+workflows of DBeaver Community, Copyright (c) 2010-2026 DBeaver Corp and
+contributors, licensed under the Apache License 2.0. Redrob Data is a clean
+implementation and does not distribute DBeaver source code, binaries, plugins,
+branding, Eclipse RCP/OSGi components, JDBC drivers, Java, or a JVM.
 
 Third-party components remain subject to their respective licenses.

@@ -2,6 +2,22 @@
   "name": "redrob-data",
   "version": "0.1.0",
   "private": true,
+  "description": "A JVM-free, AI-native desktop database workspace for PostgreSQL, MySQL, SQLite, and MongoDB.",
+  "license": "Apache-2.0",
+  "author": "Redrob",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/savagemanage/openDB.git"
+  },
+  "homepage": "https://github.com/savagemanage/openDB#readme",
+  "bugs": {
+    "url": "https://github.com/savagemanage/openDB/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0",
+    "npm": ">=11.0.0"
+  },
+  "packageManager": "npm@11.4.2",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -10,17 +26,18 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json --pretty false",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "release:check": "node scripts/validate-release.mjs",
     "tauri": "tauri",
     "rust:fmt": "cargo fmt --all -- --check",
-    "rust:clippy": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
-    "rust:test": "cargo test --workspace --all-features",
-    "check": "npm run typecheck && npm test && npm run build && npm run rust:fmt && npm run rust:clippy && npm run rust:test"
+    "rust:clippy": "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+    "rust:test": "cargo test --locked --workspace --all-features",
+    "check": "npm run release:check && npm test && npm run build && npm run rust:fmt && npm run rust:clippy && npm run rust:test"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
-    "@tauri-apps/api": "^2.8.0",
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.13.12",
+    "@tauri-apps/api": "^2.8.0",
     "clsx": "^2.1.1",
     "framer-motion": "^12.23.12",
     "lucide-react": "^0.544.0",
@@ -40,6 +57,7 @@
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.2",
+    "@vitest/coverage-v8": "^3.2.7",
     "jsdom": "^26.1.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.5",

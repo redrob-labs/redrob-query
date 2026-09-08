@@ -8,6 +8,8 @@ edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.94"
 authors = ["Redrob"]
+repository = "https://github.com/savagemanage/openDB"
+homepage = "https://github.com/savagemanage/openDB"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

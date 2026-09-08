@@ -10,7 +10,7 @@ use mongodb::{
     Client as MongoClient,
     bson::{Bson, Document, doc},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{
     AssertSqlSafe, Column, Encode, MySql, MySqlPool, PgPool, Postgres, Row, Sqlite, SqlitePool,
     Type, TypeInfo, ValueRef,
@@ -76,12 +76,27 @@ struct Approval {
     expires_at: DateTime<Utc>,
 }
 
+/// Result of a committed profile save, including any non-secret cleanup warning.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProfileOutcome {
+    pub profile: ConnectionProfile,
+    pub warning: Option<String>,
+}
+
+/// Result of a committed profile removal, including any non-secret cleanup warning.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveProfileOutcome {
+    pub warning: Option<String>,
+}
+
 /// Thread-safe backend service managed by Tauri.
 pub struct DataService {
     profiles: RwLock<HashMap<Uuid, ConnectionProfile>>,
     active: RwLock<HashMap<Uuid, ActiveConnection>>,
     approvals: RwLock<HashMap<String, Approval>>,
-    connection_lock: Mutex<()>,
+    lifecycle_lock: Mutex<()>,
     profile_store_lock: Mutex<()>,
     profile_repository: Option<Arc<dyn ProfileRepository>>,
     profile_load_warnings: Vec<String>,
@@ -163,7 +178,7 @@ impl DataService {
             profiles: RwLock::new(profiles),
             active: RwLock::new(HashMap::new()),
             approvals: RwLock::new(HashMap::new()),
-            connection_lock: Mutex::new(()),
+            lifecycle_lock: Mutex::new(()),
             profile_store_lock: Mutex::new(()),
             profile_repository,
             profile_load_warnings,
@@ -213,20 +228,50 @@ impl DataService {
     }
 
     /// Saves a normalized profile and, when supplied, its secret as one logical operation.
-    /// Existing secrets are preserved when `secret` is `None`.
+    /// Existing secrets are preserved only when `secret` is `None` and the credential scope is unchanged.
     pub async fn save_profile_with_secret(
+        &self,
+        profile: ConnectionProfile,
+        secret: Option<&str>,
+    ) -> Result<ConnectionProfile> {
+        self.save_profile_with_secret_outcome(profile, secret)
+            .await
+            .map(|outcome| outcome.profile)
+    }
+
+    /// Saves a profile and reports cleanup work that remains after a proven commit.
+    pub async fn save_profile_with_secret_outcome(
         &self,
         mut profile: ConnectionProfile,
         secret: Option<&str>,
-    ) -> Result<ConnectionProfile> {
+    ) -> Result<SaveProfileOutcome> {
         Self::normalize_and_validate_profile(&mut profile)?;
         if secret.is_some_and(str::is_empty) {
             return Err(DataError::SecretUnavailable);
         }
+        if profile.kind == DatabaseKind::SQLite && secret.is_some() {
+            return Err(DataError::InvalidProfile(
+                "SQLite profiles cannot store a password".to_owned(),
+            ));
+        }
 
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
         let _store_guard = self.profile_store_lock.lock().await;
         self.ensure_recovery_available()?;
         let original_profiles = self.profiles.read().await.clone();
+        if let Some(original) = original_profiles.get(&profile.id) {
+            if original.kind != profile.kind {
+                return Err(DataError::InvalidProfile(
+                    "database type cannot be changed; create a new profile instead".to_owned(),
+                ));
+            }
+            if secret.is_none() && credential_scope_changed(original, &profile) {
+                return Err(DataError::InvalidProfile(
+                    "a password is required after changing the endpoint or database identity"
+                        .to_owned(),
+                ));
+            }
+        }
         let mut updated_profiles = original_profiles.clone();
         updated_profiles.insert(profile.id, profile.clone());
 
@@ -261,23 +306,38 @@ impl DataService {
                 target_visible && journal_committed
             });
         if result.is_err() && !committed_after_error {
-            return result.and(Ok(profile));
+            return result.and(Ok(SaveProfileOutcome {
+                profile,
+                warning: None,
+            }));
         }
         *self.profiles.write().await = updated_profiles;
 
         if let Some(active) = self.active.write().await.remove(&profile.id) {
             active.close().await;
         }
-        result.map(|()| profile)
+        Ok(SaveProfileOutcome {
+            profile,
+            warning: committed_after_error.then(|| {
+                "The connection was saved, but transaction cleanup is pending. Restart Redrob Data to retry cleanup."
+                    .to_owned()
+            }),
+        })
     }
 
     pub async fn remove_profile(&self, id: Uuid) -> Result<()> {
+        self.remove_profile_outcome(id).await.map(|_| ())
+    }
+
+    /// Removes a profile and reports cleanup work that remains after a proven commit.
+    pub async fn remove_profile_outcome(&self, id: Uuid) -> Result<RemoveProfileOutcome> {
         if id == DEMO_PROFILE_ID {
             return Err(DataError::InvalidProfile(
                 "the demo profile cannot be removed".to_owned(),
             ));
         }
 
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
         let _store_guard = self.profile_store_lock.lock().await;
         self.ensure_recovery_available()?;
         let original_profiles = self.profiles.read().await.clone();
@@ -316,13 +376,19 @@ impl DataService {
         });
         // Once a durable delete journal and target profile file exist, failures are
         // completed forward. Keep this process from republishing the removed profile.
-        if result.is_ok() || target_is_visible {
-            *self.profiles.write().await = updated_profiles;
-            if let Some(active) = self.active.write().await.remove(&id) {
-                active.close().await;
-            }
+        if result.is_err() && !target_is_visible {
+            return result.map(|()| RemoveProfileOutcome { warning: None });
         }
-        result
+        *self.profiles.write().await = updated_profiles;
+        if let Some(active) = self.active.write().await.remove(&id) {
+            active.close().await;
+        }
+        Ok(RemoveProfileOutcome {
+            warning: result.is_err().then(|| {
+                "The connection was removed, but credential or transaction cleanup is pending. Restart Redrob Data to retry cleanup."
+                    .to_owned()
+            }),
+        })
     }
 
     fn save_profile_ephemerally(
@@ -615,12 +681,22 @@ impl DataService {
     }
 
     fn normalize_and_validate_profile(profile: &mut ConnectionProfile) -> Result<()> {
+        if profile.kind == DatabaseKind::SqlServer {
+            return Err(DataError::Unsupported(
+                "SQL Server connection profiles are unsupported in this release".to_owned(),
+            ));
+        }
         if profile.built_in && profile.id != DEMO_PROFILE_ID {
             return Err(DataError::InvalidProfile(
                 "custom profiles cannot be marked built-in".to_owned(),
             ));
         }
         profile.normalize();
+        if profile.kind == DatabaseKind::SQLite
+            && profile.config.file_path.as_deref() != Some(":memory:")
+        {
+            profile.read_only = true;
+        }
         profile.validate()?;
         if profile.id.is_nil() || profile.id == DEMO_PROFILE_ID || profile.id == AI_SECRET_ID {
             return Err(DataError::InvalidProfile(
@@ -675,18 +751,55 @@ impl DataService {
         self.secrets.set(AI_SECRET_ID, secret)
     }
 
+    async fn connection_test_secret(
+        &self,
+        profile: &ConnectionProfile,
+        supplied: Option<&str>,
+    ) -> Result<Option<secrecy::SecretString>> {
+        if profile.kind == DatabaseKind::SQLite {
+            if supplied.is_some() {
+                return Err(DataError::InvalidProfile(
+                    "SQLite profiles cannot use a password".to_owned(),
+                ));
+            }
+            return Ok(None);
+        }
+        if let Some(secret) = supplied {
+            if secret.is_empty() {
+                return Err(DataError::SecretUnavailable);
+            }
+            return Ok(Some(secrecy::SecretString::from(secret.to_owned())));
+        }
+        let profiles = self.profiles.read().await;
+        let Some(original) = profiles.get(&profile.id) else {
+            return Ok(None);
+        };
+        if credential_scope_changed(original, profile) {
+            return Err(DataError::InvalidProfile(
+                "a password is required after changing the endpoint or database identity"
+                    .to_owned(),
+            ));
+        }
+        self.secrets.get(profile.id)
+    }
+
     pub async fn test_connection(
         &self,
         profile: &ConnectionProfile,
         secret: Option<&str>,
     ) -> Result<ConnectionStatus> {
         self.ensure_persistent_storage_available()?;
-        profile.validate()?;
         if profile.kind == DatabaseKind::SqlServer {
             return Ok(unsupported_status(profile));
         }
+        let mut profile = profile.clone();
+        Self::normalize_and_validate_profile(&mut profile)?;
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
+        let secret = self.connection_test_secret(&profile, secret).await?;
         let started = Instant::now();
-        let active = self.open_connection(profile, secret).await?;
+        let active = self
+            .open_connection(&profile, secret.as_ref().map(exposed))
+            .await?;
         active.close().await;
         Ok(ConnectionStatus {
             profile_id: profile.id,
@@ -699,11 +812,11 @@ impl DataService {
 
     pub async fn connect(&self, id: Uuid) -> Result<ConnectionStatus> {
         self.ensure_persistent_storage_available()?;
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
         let profile = self.profile(id).await?;
         if profile.kind == DatabaseKind::SqlServer {
             return Ok(unsupported_status(&profile));
         }
-        let _connection_guard = self.connection_lock.lock().await;
         if self.active.read().await.contains_key(&id) {
             return Ok(connected_status(&profile, None));
         }
@@ -722,6 +835,7 @@ impl DataService {
 
     pub async fn disconnect(&self, id: Uuid) -> Result<()> {
         self.ensure_persistent_storage_available()?;
+        let _lifecycle_guard = self.lifecycle_lock.lock().await;
         self.profile(id).await?;
         if let Some(active) = self.active.write().await.remove(&id) {
             active.close().await;
@@ -1097,6 +1211,17 @@ fn unsupported_status(profile: &ConnectionProfile) -> ConnectionStatus {
     }
 }
 
+fn credential_scope_changed(original: &ConnectionProfile, updated: &ConnectionProfile) -> bool {
+    original.kind != updated.kind
+        || original.config.host != updated.config.host
+        || original.config.port != updated.config.port
+        || original.config.database != updated.config.database
+        || original.config.username != updated.config.username
+        || original.config.srv != updated.config.srv
+        || original.config.tls != updated.config.tls
+        || original.config.options.get("authSource") != updated.config.options.get("authSource")
+}
+
 fn connected_status(profile: &ConnectionProfile, latency_ms: Option<u64>) -> ConnectionStatus {
     ConnectionStatus {
         profile_id: profile.id,
@@ -1134,7 +1259,7 @@ fn relational_url(profile: &ConnectionProfile, secret: Option<&str>) -> Result<S
         return Ok(if path == ":memory:" {
             "sqlite::memory:".to_owned()
         } else {
-            format!("sqlite://{path}?mode=rwc")
+            format!("sqlite://{path}?mode=ro")
         });
     }
     Ok(server_url(profile, secret)?.to_string())
@@ -1443,6 +1568,8 @@ async fn load_sqlite_metadata(
         .collect()
 }
 
+const MAX_MONGO_METADATA_SAMPLES: i64 = 25;
+
 async fn load_mongo_metadata(
     client: &MongoClient,
     database: &str,
@@ -1453,26 +1580,14 @@ async fn load_mongo_metadata(
         let collection = id
             .strip_prefix("collection:")
             .ok_or_else(|| DataError::InvalidQuery("invalid metadata node".to_owned()))?;
-        let sample = db
+        let cursor = db
             .collection::<Document>(collection)
-            .find_one(doc! {})
+            .find(doc! {})
+            .limit(MAX_MONGO_METADATA_SAMPLES)
             .await
             .map_err(|error| DataError::database("MongoDB metadata load failed", &error))?;
-        return Ok(sample.map_or_else(Vec::new, |document| {
-            document
-                .into_iter()
-                .map(|(name, value)| MetadataNode {
-                    id: format!("field:{collection}.{name}"),
-                    name,
-                    kind: MetadataKind::Column,
-                    data_type: Some(bson_type_name(&value).to_owned()),
-                    nullable: None,
-                    has_children: false,
-                    children: Vec::new(),
-                    attributes: std::collections::BTreeMap::new(),
-                })
-                .collect()
-        }));
+        let samples = collect_mongo_documents(cursor).await?;
+        return Ok(summarize_mongo_metadata(collection, &samples));
     }
     let names = db
         .list_collection_names()
@@ -1491,6 +1606,39 @@ async fn load_mongo_metadata(
             attributes: std::collections::BTreeMap::new(),
         })
         .collect())
+}
+
+fn summarize_mongo_metadata(collection: &str, samples: &[Document]) -> Vec<MetadataNode> {
+    let mut fields: std::collections::BTreeMap<
+        String,
+        (std::collections::BTreeSet<&'static str>, usize, bool),
+    > = std::collections::BTreeMap::new();
+    for document in samples {
+        for (name, value) in document {
+            let (types, present, has_null) = fields.entry(name.clone()).or_default();
+            types.insert(bson_type_name(value));
+            *present += 1;
+            *has_null |= matches!(value, Bson::Null);
+        }
+    }
+
+    let document_count = samples.len();
+    fields
+        .into_iter()
+        .map(|(name, (types, present, has_null))| MetadataNode {
+            id: format!("field:{collection}.{name}"),
+            name,
+            kind: MetadataKind::Column,
+            data_type: Some(types.into_iter().collect::<Vec<_>>().join(" | ")),
+            nullable: Some(has_null || present < document_count),
+            has_children: false,
+            children: Vec::new(),
+            attributes: std::collections::BTreeMap::from([
+                ("presentInSamples".to_owned(), present.to_string()),
+                ("sampledDocuments".to_owned(), document_count.to_string()),
+            ]),
+        })
+        .collect()
 }
 
 async fn execute_postgres_query(pool: &PgPool, request: &QueryRequest) -> Result<QueryResultPage> {
@@ -2253,6 +2401,7 @@ async fn apply_sqlite_mutation(pool: &SqlitePool, plan: &MutationPlan) -> Result
 const MAX_MONGO_QUERY_BYTES: usize = 1024 * 1024;
 const MAX_MONGO_PIPELINE_STAGES: usize = 100;
 const MAX_MONGO_STAGE_BYTES: usize = 64 * 1024;
+const MAX_MONGO_TOTAL_LIMIT: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MongoExplainVerbosity {
@@ -2277,7 +2426,7 @@ struct MongoFind {
     filter: Document,
     projection: Option<Document>,
     sort: Option<Document>,
-    limit: usize,
+    total_limit: Option<usize>,
     explain: Option<MongoExplainVerbosity>,
 }
 
@@ -2285,7 +2434,7 @@ struct MongoFind {
 struct MongoAggregate {
     collection: String,
     pipeline: Vec<Document>,
-    limit: usize,
+    total_limit: Option<usize>,
     explain: Option<MongoExplainVerbosity>,
 }
 
@@ -2295,7 +2444,7 @@ enum MongoReadQuery {
     Aggregate(MongoAggregate),
 }
 
-fn parse_mongo_read_query(query: &str, request_limit: usize) -> Result<MongoReadQuery> {
+fn parse_mongo_read_query(query: &str, _request_limit: usize) -> Result<MongoReadQuery> {
     if query.len() > MAX_MONGO_QUERY_BYTES {
         return Err(DataError::InvalidQuery(format!(
             "MongoDB query exceeds {MAX_MONGO_QUERY_BYTES} bytes"
@@ -2346,7 +2495,7 @@ fn parse_mongo_read_query(query: &str, request_limit: usize) -> Result<MongoRead
     }
 
     let collection = parse_mongo_collection(&mut body)?;
-    let limit = parse_mongo_body_limit(&mut body, request_limit)?;
+    let total_limit = parse_mongo_body_limit(&mut body)?;
     let explain = parse_mongo_explain(&mut body)?;
     match operation {
         "find" => Ok(MongoReadQuery::Find(Box::new(MongoFind {
@@ -2354,13 +2503,13 @@ fn parse_mongo_read_query(query: &str, request_limit: usize) -> Result<MongoRead
             filter: parse_mongo_document(&mut body, "filter")?.unwrap_or_default(),
             projection: parse_mongo_document(&mut body, "projection")?,
             sort: parse_mongo_document(&mut body, "sort")?,
-            limit,
+            total_limit,
             explain,
         }))),
         "aggregate" => Ok(MongoReadQuery::Aggregate(MongoAggregate {
             collection,
             pipeline: parse_mongo_pipeline(&mut body)?,
-            limit,
+            total_limit,
             explain,
         })),
         _ => unreachable!("operation is validated above"),
@@ -2396,10 +2545,9 @@ fn parse_mongo_collection(body: &mut serde_json::Map<String, serde_json::Value>)
 
 fn parse_mongo_body_limit(
     body: &mut serde_json::Map<String, serde_json::Value>,
-    request_limit: usize,
-) -> Result<usize> {
+) -> Result<Option<usize>> {
     let Some(value) = body.remove("limit") else {
-        return Ok(request_limit);
+        return Ok(None);
     };
     let limit = value
         .as_u64()
@@ -2410,12 +2558,12 @@ fn parse_mongo_body_limit(
             "limit must be a positive integer".to_owned(),
         ));
     }
-    if limit > request_limit {
+    if limit > MAX_MONGO_TOTAL_LIMIT {
         return Err(DataError::InvalidQuery(format!(
-            "limit must not exceed the request limit ({request_limit})"
+            "limit must not exceed {MAX_MONGO_TOTAL_LIMIT}"
         )));
     }
-    Ok(limit)
+    Ok(Some(limit))
 }
 
 fn parse_mongo_explain(
@@ -2508,26 +2656,70 @@ fn contains_mongo_write_stage(value: &serde_json::Value) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MongoPageWindow {
+    page_capacity: usize,
+    fetch_limit: usize,
+}
+
+fn mongo_page_window(
+    page_limit: usize,
+    offset: usize,
+    total_limit: Option<usize>,
+) -> Option<MongoPageWindow> {
+    let page_capacity = total_limit.map_or(page_limit, |total| {
+        total.saturating_sub(offset).min(page_limit)
+    });
+    if page_capacity == 0 {
+        return None;
+    }
+    let look_ahead_allowed =
+        total_limit.is_none_or(|total| offset.saturating_add(page_capacity) < total);
+    Some(MongoPageWindow {
+        page_capacity,
+        fetch_limit: page_capacity.saturating_add(usize::from(look_ahead_allowed)),
+    })
+}
+
 async fn execute_mongo_query(
     client: &MongoClient,
     database: &str,
     request: &QueryRequest,
 ) -> Result<QueryResultPage> {
-    let request_limit = request.validated_limit()?;
-    let parsed = parse_mongo_read_query(&request.query, request_limit)?;
+    let page_limit = request.validated_limit()?;
+    let parsed = parse_mongo_read_query(&request.query, page_limit)?;
     let started = Instant::now();
     let query_timeout = request.timeout();
-    let (limit, future) = match parsed {
-        MongoReadQuery::Find(find) => {
-            let limit = find.limit;
-            let future = execute_mongo_find(client, database, *find, request.offset, query_timeout);
-            (limit, futures_util::future::Either::Left(future))
-        }
+    let total_limit = match &parsed {
+        MongoReadQuery::Find(find) => find.total_limit,
+        MongoReadQuery::Aggregate(aggregate) => aggregate.total_limit,
+    };
+    let Some(window) = mongo_page_window(page_limit, request.offset, total_limit) else {
+        return Ok(shape_mongo_documents(
+            Vec::new(),
+            0,
+            request.offset,
+            elapsed_ms(started),
+        ));
+    };
+    let future = match parsed {
+        MongoReadQuery::Find(find) => futures_util::future::Either::Left(execute_mongo_find(
+            client,
+            database,
+            *find,
+            request.offset,
+            window.fetch_limit,
+            query_timeout,
+        )),
         MongoReadQuery::Aggregate(aggregate) => {
-            let limit = aggregate.limit;
-            let future =
-                execute_mongo_aggregate(client, database, aggregate, request.offset, query_timeout);
-            (limit, futures_util::future::Either::Right(future))
+            futures_util::future::Either::Right(execute_mongo_aggregate(
+                client,
+                database,
+                aggregate,
+                request.offset,
+                window.fetch_limit,
+                query_timeout,
+            ))
         }
     };
     let documents = timeout(query_timeout, future)
@@ -2535,7 +2727,7 @@ async fn execute_mongo_query(
         .map_err(|_| DataError::Timeout(query_timeout))??;
     Ok(shape_mongo_documents(
         documents,
-        limit,
+        window.page_capacity,
         request.offset,
         elapsed_ms(started),
     ))
@@ -2546,6 +2738,7 @@ async fn execute_mongo_find(
     database: &str,
     find: MongoFind,
     offset: usize,
+    fetch_limit: usize,
     query_timeout: std::time::Duration,
 ) -> Result<Vec<Document>> {
     let db = client.database(database);
@@ -2554,7 +2747,7 @@ async fn execute_mongo_find(
             "find": find.collection,
             "filter": find.filter,
             "skip": i64::try_from(offset).unwrap_or(i64::MAX),
-            "limit": i64::try_from(find.limit + 1).unwrap_or(i64::MAX),
+            "limit": i64::try_from(fetch_limit).unwrap_or(i64::MAX),
             "maxTimeMS": i64::try_from(query_timeout.as_millis()).unwrap_or(i64::MAX),
         };
         if let Some(projection) = find.projection {
@@ -2577,7 +2770,7 @@ async fn execute_mongo_find(
     let mut action = collection
         .find(find.filter)
         .skip(u64::try_from(offset).unwrap_or(u64::MAX))
-        .limit(i64::try_from(find.limit + 1).unwrap_or(i64::MAX))
+        .limit(i64::try_from(fetch_limit).unwrap_or(i64::MAX))
         .max_time(query_timeout);
     if let Some(projection) = find.projection {
         action = action.projection(projection);
@@ -2596,10 +2789,11 @@ async fn execute_mongo_aggregate(
     database: &str,
     aggregate: MongoAggregate,
     offset: usize,
+    fetch_limit: usize,
     query_timeout: std::time::Duration,
 ) -> Result<Vec<Document>> {
     let db = client.database(database);
-    let pipeline = paginated_mongo_pipeline(aggregate.pipeline, offset, aggregate.limit);
+    let pipeline = paginated_mongo_pipeline(aggregate.pipeline, offset, fetch_limit);
     if let Some(verbosity) = aggregate.explain {
         return db
             .run_command(doc! {
@@ -2633,7 +2827,7 @@ fn paginated_mongo_pipeline(
     if offset > 0 {
         pipeline.push(doc! { "$skip": i64::try_from(offset).unwrap_or(i64::MAX) });
     }
-    pipeline.push(doc! { "$limit": i64::try_from(limit + 1).unwrap_or(i64::MAX) });
+    pipeline.push(doc! { "$limit": i64::try_from(limit).unwrap_or(i64::MAX) });
     pipeline
 }
 
@@ -2704,7 +2898,7 @@ fn shape_mongo_documents(
             rows_affected: 0,
             truncated,
         },
-        next_offset: truncated.then_some(offset + rows.len()),
+        next_offset: truncated.then(|| offset.saturating_add(rows.len())),
         rows,
     }
 }
@@ -2812,6 +3006,7 @@ mod tests {
     struct MemoryFaultProfileRepository {
         state: StdMutex<MemoryProfileState>,
         crash_after: StdMutex<Option<PersistencePhase>>,
+        fail_next_remove_journal: AtomicBool,
     }
 
     #[derive(Default)]
@@ -2827,6 +3022,10 @@ mod tests {
 
         fn disarm(&self) {
             *self.crash_after.lock().unwrap() = None;
+        }
+
+        fn fail_next_remove_journal(&self) {
+            self.fail_next_remove_journal.store(true, Ordering::SeqCst);
         }
 
         fn journal(&self) -> Option<ProfileJournal> {
@@ -2865,6 +3064,9 @@ mod tests {
         }
 
         fn remove_journal(&self) -> Result<()> {
+            if self.fail_next_remove_journal.swap(false, Ordering::SeqCst) {
+                return Err(DataError::PersistenceConsistency);
+            }
             self.state.lock().unwrap().journal = None;
             Ok(())
         }
@@ -3159,10 +3361,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires REDROB_TEST_POSTGRES_URL and an external PostgreSQL server"]
     async fn live_postgres_native_scalars_when_configured() {
-        let Ok(url) = std::env::var("REDROB_TEST_POSTGRES_URL") else {
-            return;
-        };
+        let url = std::env::var("REDROB_TEST_POSTGRES_URL").expect(
+            "REDROB_TEST_POSTGRES_URL must be set when the ignored PostgreSQL live test is run",
+        );
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)
@@ -3306,10 +3509,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
     async fn live_mysql_native_scalars_when_configured() {
-        let Ok(url) = std::env::var("REDROB_TEST_MYSQL_URL") else {
-            return;
-        };
+        let url = std::env::var("REDROB_TEST_MYSQL_URL")
+            .expect("REDROB_TEST_MYSQL_URL must be set when the ignored MySQL live test is run");
         let pool = MySqlPoolOptions::new()
             .max_connections(1)
             .after_connect(|connection, _metadata| {
@@ -3647,6 +3850,147 @@ mod tests {
         }
     }
 
+    fn server_profile(id: Uuid, name: &str) -> ConnectionProfile {
+        ConnectionProfile {
+            id,
+            name: name.to_owned(),
+            kind: DatabaseKind::PostgreSql,
+            config: ConnectionConfig {
+                host: Some("localhost".to_owned()),
+                port: Some(5432),
+                database: Some("analytics".to_owned()),
+                username: Some("reader".to_owned()),
+                tls: true,
+                ..ConnectionConfig::default()
+            },
+            read_only: true,
+            built_in: false,
+            capabilities: DatabaseKind::PostgreSql.capabilities(),
+        }
+    }
+
+    #[test]
+    fn sqlite_relational_url_keeps_user_files_read_only() {
+        let mut profile = sqlite_profile(Uuid::new_v4(), "SQLite file");
+        profile.config.file_path = Some("/tmp/redrob-test.sqlite".to_owned());
+
+        assert_eq!(
+            relational_url(&profile, None).unwrap(),
+            "sqlite:///tmp/redrob-test.sqlite?mode=ro"
+        );
+        profile.read_only = true;
+        assert_eq!(
+            relational_url(&profile, None).unwrap(),
+            "sqlite:///tmp/redrob-test.sqlite?mode=ro"
+        );
+
+        profile.config.file_path = Some(":memory:".to_owned());
+        assert_eq!(relational_url(&profile, None).unwrap(), "sqlite::memory:");
+    }
+
+    #[tokio::test]
+    async fn saved_sqlite_file_profiles_are_normalized_read_only() {
+        let service = service();
+        let mut profile = sqlite_profile(Uuid::new_v4(), "SQLite file");
+        profile.config.file_path = Some("/tmp/redrob-test.sqlite".to_owned());
+
+        let saved = service.save_profile(profile).await.unwrap();
+
+        assert!(saved.read_only);
+        assert!(service.profile(saved.id).await.unwrap().read_only);
+    }
+
+    #[tokio::test]
+    async fn sql_server_profiles_are_rejected_before_storage() {
+        let service = service();
+        let id = Uuid::new_v4();
+        let profile = ConnectionProfile {
+            id,
+            name: "SQL Server".to_owned(),
+            kind: DatabaseKind::SqlServer,
+            config: ConnectionConfig {
+                host: Some("localhost".to_owned()),
+                database: Some("analytics".to_owned()),
+                ..ConnectionConfig::default()
+            },
+            read_only: true,
+            built_in: false,
+            capabilities: DatabaseKind::SqlServer.capabilities(),
+        };
+
+        assert!(matches!(
+            service.save_profile(profile).await,
+            Err(DataError::Unsupported(message))
+                if message == "SQL Server connection profiles are unsupported in this release"
+        ));
+        assert!(service.profile(id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn committed_save_returns_a_bounded_cleanup_warning_and_recovers_forward() {
+        let repository = Arc::new(MemoryFaultProfileRepository::default());
+        let secrets = Arc::new(MemorySecretStore::default());
+        let id = Uuid::new_v4();
+        let service = DataService::persistent_with_repository(repository.clone(), secrets.clone());
+        repository.fail_next_remove_journal();
+
+        let outcome = service
+            .save_profile_with_secret_outcome(
+                server_profile(id, "Committed profile"),
+                Some("must-not-appear"),
+            )
+            .await
+            .unwrap();
+
+        let warning = outcome.warning.unwrap();
+        assert_eq!(outcome.profile.id, id);
+        assert_eq!(service.profile(id).await.unwrap().name, "Committed profile");
+        assert_eq!(repository.journal().unwrap().phase, JournalPhase::Applied);
+        assert!(!warning.contains("must-not-appear"));
+        assert!(!warning.contains("Committed profile"));
+        assert_eq!(
+            secrets.get(id).unwrap().unwrap().expose_secret(),
+            "must-not-appear"
+        );
+
+        drop(service);
+        let recovered = DataService::persistent_with_repository(repository.clone(), secrets);
+        assert_eq!(
+            recovered.profile(id).await.unwrap().name,
+            "Committed profile"
+        );
+        assert!(recovered.profile_load_warnings().is_empty());
+        assert!(repository.journal().is_none());
+    }
+
+    #[tokio::test]
+    async fn committed_remove_returns_a_bounded_cleanup_warning_and_recovers_forward() {
+        let repository = Arc::new(MemoryFaultProfileRepository::default());
+        let secrets = Arc::new(MemorySecretStore::default());
+        let id = Uuid::new_v4();
+        let service = DataService::persistent_with_repository(repository.clone(), secrets.clone());
+        service
+            .save_profile_with_secret(server_profile(id, "Remove me"), Some("must-not-appear"))
+            .await
+            .unwrap();
+        repository.fail_next_remove_journal();
+
+        let outcome = service.remove_profile_outcome(id).await.unwrap();
+
+        let warning = outcome.warning.unwrap();
+        assert!(service.profile(id).await.is_err());
+        assert!(secrets.get(id).unwrap().is_none());
+        assert!(repository.journal().is_some());
+        assert!(!warning.contains("must-not-appear"));
+        assert!(!warning.contains("Remove me"));
+
+        drop(service);
+        let recovered = DataService::persistent_with_repository(repository.clone(), secrets);
+        assert!(recovered.profile(id).await.is_err());
+        assert!(recovered.profile_load_warnings().is_empty());
+        assert!(repository.journal().is_none());
+    }
+
     async fn crash_save_and_recover(phase: PersistencePhase) {
         let repository = Arc::new(MemoryFaultProfileRepository::default());
         let secrets = Arc::new(MemorySecretStore::default());
@@ -3656,7 +4000,7 @@ mod tests {
             secrets.clone(),
         ));
         service
-            .save_profile_with_secret(sqlite_profile(id, "Original"), Some("old-secret"))
+            .save_profile_with_secret(server_profile(id, "Original"), Some("old-secret"))
             .await
             .unwrap();
 
@@ -3664,7 +4008,7 @@ mod tests {
         let interrupted_service = Arc::clone(&service);
         let interrupted = tokio::spawn(async move {
             interrupted_service
-                .save_profile_with_secret(sqlite_profile(id, "Target"), Some("new-secret"))
+                .save_profile_with_secret(server_profile(id, "Target"), Some("new-secret"))
                 .await
         })
         .await;
@@ -3734,12 +4078,12 @@ mod tests {
             secrets.clone(),
         ));
         service
-            .save_profile_with_secret(sqlite_profile(id, "Original"), Some("old-secret"))
+            .save_profile_with_secret(server_profile(id, "Original"), Some("old-secret"))
             .await
             .unwrap();
         let original_profiles = service.profiles.read().await.clone();
         let mut target_map = original_profiles.clone();
-        target_map.insert(id, sqlite_profile(id, "Target"));
+        target_map.insert(id, server_profile(id, "Target"));
         let target_profiles = profiles_from_map(&target_map);
         let staging_id = Uuid::new_v4();
         let mut journal = ProfileJournal::save(id, Some(staging_id), target_profiles.clone());
@@ -3811,7 +4155,7 @@ mod tests {
             secrets.clone(),
         ));
         service
-            .save_profile_with_secret(sqlite_profile(id, "Delete target"), Some("real-secret"))
+            .save_profile_with_secret(server_profile(id, "Delete target"), Some("real-secret"))
             .await
             .unwrap();
 
@@ -3901,7 +4245,7 @@ mod tests {
         let id = Uuid::new_v4();
         let initial = DataService::persistent_with_repository(repository.clone(), secrets.clone());
         initial
-            .save_profile_with_secret(sqlite_profile(id, "Original"), Some("old-secret"))
+            .save_profile_with_secret(server_profile(id, "Original"), Some("old-secret"))
             .await
             .unwrap();
         drop(initial);
@@ -3940,7 +4284,7 @@ mod tests {
         let service = DataService::persistent_with_secret_store(&path, secrets.clone());
 
         let error = service
-            .save_profile_with_secret(sqlite_profile(id, "  Atomic  "), Some("must-not-leak"))
+            .save_profile_with_secret(server_profile(id, "  Atomic  "), Some("must-not-leak"))
             .await
             .unwrap_err();
 
@@ -3959,14 +4303,14 @@ mod tests {
         let secrets = Arc::new(FaultInjectingSecretStore::default());
         let service = DataService::persistent_with_secret_store(&path, secrets.clone());
         let saved = service
-            .save_profile_with_secret(sqlite_profile(id, "Original"), Some("old-secret"))
+            .save_profile_with_secret(server_profile(id, "Original"), Some("old-secret"))
             .await
             .unwrap();
         assert_eq!(saved.name, "Original");
 
         secrets.fail_next_set_after_write();
         let error = service
-            .save_profile_with_secret(sqlite_profile(id, "  Replacement  "), Some("new-secret"))
+            .save_profile_with_secret(server_profile(id, "  Replacement  "), Some("new-secret"))
             .await
             .unwrap_err();
 
@@ -3991,7 +4335,7 @@ mod tests {
         let service = DataService::persistent_with_secret_store(&path, secrets.clone());
 
         let error = service
-            .save_profile_with_secret(sqlite_profile(id, "Not persisted"), Some("temporary"))
+            .save_profile_with_secret(server_profile(id, "Not persisted"), Some("temporary"))
             .await
             .unwrap_err();
 
@@ -4009,7 +4353,7 @@ mod tests {
         let secrets = Arc::new(MemorySecretStore::default());
         let service = DataService::persistent_with_secret_store(&path, secrets.clone());
         service
-            .save_profile_with_secret(sqlite_profile(id, "Keep me"), Some("still-present"))
+            .save_profile_with_secret(server_profile(id, "Keep me"), Some("still-present"))
             .await
             .unwrap();
         fs::remove_file(&path).unwrap();
@@ -4032,7 +4376,7 @@ mod tests {
         let secrets = Arc::new(secret_store);
         let service = Arc::new(DataService::with_secret_store(secrets.clone()));
         service
-            .save_profile_with_secret(sqlite_profile(id, "Remove me"), Some("original"))
+            .save_profile_with_secret(server_profile(id, "Remove me"), Some("original"))
             .await
             .unwrap();
 
@@ -4059,6 +4403,97 @@ mod tests {
             Err(DataError::ProfileNotFound)
         ));
         assert!(secrets.get(id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn connection_test_secret_uses_only_an_unchanged_profiles_saved_credential() {
+        let secrets = Arc::new(MemorySecretStore::default());
+        let service = DataService::with_secret_store(secrets);
+        let id = Uuid::new_v4();
+        let saved = service
+            .save_profile_with_secret(server_profile(id, "Original"), Some("saved-secret"))
+            .await
+            .unwrap();
+
+        let renamed = ConnectionProfile {
+            name: "Renamed".to_owned(),
+            ..saved.clone()
+        };
+        let resolved = service
+            .connection_test_secret(&renamed, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exposed(&resolved), "saved-secret");
+
+        let changed_profiles = [
+            {
+                let mut changed = renamed.clone();
+                changed.config.host = Some("different.example.com".to_owned());
+                changed
+            },
+            {
+                let mut changed = renamed.clone();
+                changed.config.database = Some("different-database".to_owned());
+                changed
+            },
+            {
+                let mut changed = renamed.clone();
+                changed.config.tls = !changed.config.tls;
+                changed
+            },
+        ];
+        for changed in &changed_profiles {
+            assert!(matches!(
+                service.connection_test_secret(changed, None).await,
+                Err(DataError::InvalidProfile(message)) if message.contains("password is required")
+            ));
+        }
+        let replacement = service
+            .connection_test_secret(&changed_profiles[0], Some("replacement-secret"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exposed(&replacement), "replacement-secret");
+    }
+
+    #[tokio::test]
+    async fn blank_secret_save_rejects_database_and_tls_scope_changes() {
+        let service = DataService::with_secret_store(Arc::new(MemorySecretStore::default()));
+        let id = Uuid::new_v4();
+        let saved = service
+            .save_profile_with_secret(server_profile(id, "Original"), Some("saved-secret"))
+            .await
+            .unwrap();
+
+        let mut changed_database = saved.clone();
+        changed_database.config.database = Some("different-database".to_owned());
+        assert!(matches!(
+            service.save_profile_with_secret(changed_database, None).await,
+            Err(DataError::InvalidProfile(message)) if message.contains("password is required")
+        ));
+
+        let mut changed_tls = saved.clone();
+        changed_tls.config.tls = !changed_tls.config.tls;
+        assert!(matches!(
+            service.save_profile_with_secret(changed_tls, None).await,
+            Err(DataError::InvalidProfile(message)) if message.contains("password is required")
+        ));
+        assert_eq!(service.profile(id).await.unwrap(), saved);
+    }
+
+    #[tokio::test]
+    async fn sqlite_connection_test_does_not_read_the_secret_store() {
+        let service = DataService::with_secret_store(Arc::new(UnavailableReadSecretStore));
+        let profile = sqlite_profile(Uuid::new_v4(), "SQLite test");
+
+        assert!(
+            service
+                .connection_test_secret(&profile, None)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -4130,7 +4565,7 @@ mod tests {
         let first_secrets = Arc::new(MemorySecretStore::default());
         let first = DataService::persistent_with_secret_store(&path, first_secrets.clone());
         first
-            .save_profile_with_secret(sqlite_profile(id, "First owner"), Some("first-secret"))
+            .save_profile_with_secret(server_profile(id, "First owner"), Some("first-secret"))
             .await
             .unwrap();
 
@@ -4146,7 +4581,7 @@ mod tests {
         assert!(matches!(
             second
                 .save_profile_with_secret(
-                    sqlite_profile(Uuid::new_v4(), "Blocked"),
+                    server_profile(Uuid::new_v4(), "Blocked"),
                     Some("must-not-write"),
                 )
                 .await,
@@ -4172,7 +4607,7 @@ mod tests {
         assert!(second_secrets.get(AI_SECRET_ID).unwrap().is_none());
 
         first
-            .save_profile(sqlite_profile(id, "Consistent after release"))
+            .save_profile(server_profile(id, "Consistent after release"))
             .await
             .unwrap();
         drop(first);
@@ -4383,7 +4818,7 @@ mod tests {
         assert_eq!(legacy.filter, doc! { "active": true });
         assert_eq!(legacy.projection, Some(doc! { "name": 1 }));
         assert_eq!(legacy.sort, Some(doc! { "name": 1 }));
-        assert_eq!(legacy.limit, 25);
+        assert_eq!(legacy.total_limit, None);
         assert_eq!(legacy.explain, None);
 
         let explicit = parse_mongo_read_query(
@@ -4395,7 +4830,7 @@ mod tests {
             panic!("explicit find should parse as find");
         };
         assert!(explicit.filter.is_empty());
-        assert_eq!(explicit.limit, 4);
+        assert_eq!(explicit.total_limit, Some(4));
         assert_eq!(
             explicit.explain,
             Some(MongoExplainVerbosity::ExecutionStats)
@@ -4408,9 +4843,20 @@ mod tests {
             invalid_mongo_query(r#"{"collection":"events","limit":0}"#, 10)
                 .contains("positive integer")
         );
+        let parsed = parse_mongo_read_query(r#"{"collection":"events","limit":250}"#, 50).unwrap();
+        let MongoReadQuery::Find(parsed) = parsed else {
+            panic!("query should parse as find");
+        };
+        assert_eq!(parsed.total_limit, Some(250));
         assert!(
-            invalid_mongo_query(r#"{"collection":"events","limit":11}"#, 10)
-                .contains("request limit")
+            invalid_mongo_query(
+                &format!(
+                    r#"{{"collection":"events","limit":{}}}"#,
+                    MAX_MONGO_TOTAL_LIMIT + 1
+                ),
+                50,
+            )
+            .contains("must not exceed")
         );
 
         let oversized = format!(
@@ -4418,6 +4864,40 @@ mod tests {
             "x".repeat(MAX_MONGO_QUERY_BYTES)
         );
         assert!(invalid_mongo_query(&oversized, 10).contains("exceeds"));
+    }
+
+    #[test]
+    fn mongo_page_window_separates_total_cap_from_page_size() {
+        assert_eq!(
+            mongo_page_window(50, 0, None),
+            Some(MongoPageWindow {
+                page_capacity: 50,
+                fetch_limit: 51
+            })
+        );
+        assert_eq!(
+            mongo_page_window(50, 0, Some(30)),
+            Some(MongoPageWindow {
+                page_capacity: 30,
+                fetch_limit: 30
+            })
+        );
+        assert_eq!(
+            mongo_page_window(50, 0, Some(250)),
+            Some(MongoPageWindow {
+                page_capacity: 50,
+                fetch_limit: 51
+            })
+        );
+        assert_eq!(
+            mongo_page_window(50, 200, Some(250)),
+            Some(MongoPageWindow {
+                page_capacity: 50,
+                fetch_limit: 50
+            })
+        );
+        assert_eq!(mongo_page_window(50, 250, Some(250)), None);
+        assert_eq!(mongo_page_window(50, usize::MAX, Some(250)), None);
     }
 
     #[test]
@@ -4466,7 +4946,7 @@ mod tests {
         assert_eq!(aggregate.collection, "events");
         assert_eq!(aggregate.pipeline.len(), 2);
         assert_eq!(aggregate.pipeline[0], doc! { "$match": { "active": true } });
-        assert_eq!(aggregate.limit, 7);
+        assert_eq!(aggregate.total_limit, Some(7));
     }
 
     #[test]
@@ -4544,6 +5024,56 @@ mod tests {
     }
 
     #[test]
+    fn mongo_metadata_summary_is_deterministic_bounded_and_top_level_only() {
+        assert_eq!(MAX_MONGO_METADATA_SAMPLES, 25);
+        let samples = vec![
+            doc! {
+                "stable": "one",
+                "mixed": 1_i32,
+                "sometimes": true,
+                "nullable": Bson::Null,
+                "nested": { "child": 1_i32 },
+            },
+            doc! {
+                "stable": "two",
+                "mixed": "two",
+                "nullable": "value",
+            },
+            doc! {
+                "stable": "three",
+                "mixed": 3_i64,
+            },
+        ];
+
+        let fields = summarize_mongo_metadata("events", &samples);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["mixed", "nested", "nullable", "sometimes", "stable"]
+        );
+        assert_eq!(
+            fields[0].data_type.as_deref(),
+            Some("int32 | int64 | string")
+        );
+        assert_eq!(fields[0].nullable, Some(false));
+        assert_eq!(fields[1].data_type.as_deref(), Some("document"));
+        assert_eq!(fields[1].nullable, Some(true));
+        assert_eq!(fields[2].data_type.as_deref(), Some("null | string"));
+        assert_eq!(fields[2].nullable, Some(true));
+        assert_eq!(fields[3].data_type.as_deref(), Some("boolean"));
+        assert_eq!(fields[3].nullable, Some(true));
+        assert_eq!(fields[4].data_type.as_deref(), Some("string"));
+        assert_eq!(fields[4].nullable, Some(false));
+        assert!(fields.iter().all(|field| !field.has_children));
+        assert!(fields.iter().all(|field| field.name != "child"));
+        assert_eq!(fields[2].attributes["presentInSamples"], "2");
+        assert_eq!(fields[2].attributes["sampledDocuments"], "3");
+        assert!(summarize_mongo_metadata("empty", &[]).is_empty());
+    }
+
+    #[test]
     fn mongo_document_shaping_preserves_bson_and_pagination() {
         use mongodb::bson::{Binary, oid::ObjectId, spec::BinarySubtype};
 
@@ -4608,6 +5138,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires REDROB_TEST_MONGO_URL and an external MongoDB server"]
     #[allow(
         clippy::too_many_lines,
         reason = "the live gate keeps setup, cleanup, and the full Mongo execution matrix together"
@@ -4615,9 +5146,8 @@ mod tests {
     async fn live_mongo_read_execution_when_configured() {
         use mongodb::bson::{Binary, DateTime as BsonDateTime, oid::ObjectId, spec::BinarySubtype};
 
-        let Ok(url) = std::env::var("REDROB_TEST_MONGO_URL") else {
-            return;
-        };
+        let url = std::env::var("REDROB_TEST_MONGO_URL")
+            .expect("REDROB_TEST_MONGO_URL must be set when the ignored MongoDB live test is run");
         let database = std::env::var("REDROB_TEST_MONGO_DATABASE")
             .unwrap_or_else(|_| "redrob_test".to_owned());
         let client = MongoClient::with_uri_str(&url).await.unwrap();
