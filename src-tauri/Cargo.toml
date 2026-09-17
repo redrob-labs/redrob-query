@@ -21,6 +21,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 redrob-core = { path = "../crates/redrob-core" }
 serde = { version = "1", features = ["derive"] }
+# tauri::generate_context! expands to code that names ::serde_json, so the macro needs it
+# as a direct dependency of this crate even though no source file here mentions it.
+serde_json = "1"
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["sync"] }
 uuid = { version = "1", features = ["serde"] }
