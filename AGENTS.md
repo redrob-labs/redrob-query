@@ -96,18 +96,21 @@ Both `develop` and `main` are protected the same way, read from the branch-prote
 - force pushes blocked, deletion blocked;
 - `required_approving_review_count` is 0, so a pull request can merge with no review;
 - `enforce_admins` is off, so an admin is not bound by any of the above;
-- `required_status_checks.contexts` and `.checks` are both EMPTY.
+- required checks are `Format, clippy, tests` and `Release metadata, types, tests, build`.
 
-That last line is the one to internalize. CI does run: `.github/workflows/ci.yml` fires on
-`pull_request` and on pushes to `main` and `develop`, and pull request #17 shows all three jobs
-passing (Release metadata/types/tests/build, Format/clippy/tests, Rust security advisories). But
-because protection requires zero checks, a red run blocks nothing. Merge is a human decision every
-time, and with 0 required reviews and admin enforcement off, a broken pull request can reach
-`develop` with nothing standing in the way. Read the checks yourself before merging; do not wait
-for GitHub to stop you.
+`Rust security advisories` is deliberately NOT required. An advisory check goes red when someone
+else publishes a CVE, which has nothing to do with the change under review, and a required check
+that a third party can turn red blocks every unrelated merge. Read it, do not gate on it.
 
-`CONTRIBUTING.md` says both CI jobs "are required before a merge". That is not what protection
-says, and the workflow now has three jobs, not two. Trust the API over the prose.
+CI runs from `.github/workflows/ci.yml`, on `pull_request` and on pushes to `main` and `develop`.
+Note what protection still does NOT give you: `required_approving_review_count` is 0 and
+`enforce_admins` is off, so a pull request whose required checks pass can merge with no review, and
+an admin is not bound by any of it. Read the checks yourself rather than waiting for GitHub to stop
+you.
+
+`CONTRIBUTING.md` says both CI jobs "are required before a merge". The workflow now has three jobs,
+not two, and only two of them are required, so correct that sentence when you next touch it. Trust
+the branch-protection API over the prose either way.
 
 The CI workflow is deliberately `pull_request`, never `pull_request_target`, and consumes no
 secrets, so a fork's pull request gets an identical run with no credential. Do not "fix" that by
