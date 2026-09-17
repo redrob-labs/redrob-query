@@ -53,7 +53,9 @@ kbd { padding: 2px 5px; border: 1px solid #343743; border-bottom-color: #242730;
 .workspace-body { min-height: 0; display: flex; }
 
 .activity-rail { flex: 0 0 48px; z-index: 4; display: flex; flex-direction: column; align-items: center; padding: 8px 0 7px; background: #0b0d12; border-right: 1px solid var(--line); }
-.brand-mark { width: 28px; height: 28px; margin-bottom: 17px; border-radius: 7px; box-shadow: 0 0 20px rgba(255, 48, 78, .15); }
+/* The halo is the mark's own glow, so it follows the mark: the Redrob glyph carries a blue-to-purple
+   light inside it, and the red this was set to belonged to the letter R that used to sit here. */
+.brand-mark { width: 28px; height: 28px; margin-bottom: 17px; border-radius: 7px; box-shadow: 0 0 20px rgba(0, 102, 255, .18); }
 .rail-group { display: grid; gap: 4px; }
 .rail-spacer { flex: 1; }
 .icon-button { position: relative; width: 29px; height: 29px; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: 6px; color: #747986; background: transparent; transition: .15s ease; }

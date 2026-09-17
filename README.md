@@ -1,6 +1,6 @@
 # Redrob Data
 
-![Redrob Data mark](src/assets/redrob-data-mark.svg)
+![Redrob mark](src/assets/redrob-mark-512.png)
 
 Redrob Data is a JVM-free, AI-assisted database workspace built with Rust 1.94, Tauri 2, React 19, and TypeScript. Version 0.1 provides a guarded read-only desktop workspace for PostgreSQL, MySQL, SQLite, and MongoDB, plus an interactive browser demo backed only by deterministic in-memory sample data.
 

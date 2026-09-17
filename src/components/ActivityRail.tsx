@@ -1,5 +1,5 @@
 import { Bot, Database, FileCode2, GitCompareArrows, Plus, Search, Settings2 } from 'lucide-react';
-import logo from '../assets/redrob-data-mark.svg';
+import logo from '../assets/redrob-mark-512.png';
 import { useWorkspace } from '../store/WorkspaceProvider';
 import { IconButton } from './IconButton';
 
