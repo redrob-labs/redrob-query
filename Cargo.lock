@@ -3395,6 +3395,7 @@ version = "0.1.0"
 dependencies = [
  "redrob-core",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tokio",

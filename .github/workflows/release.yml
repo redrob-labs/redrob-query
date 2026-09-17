@@ -230,7 +230,28 @@ jobs:
             ($_.EnhancedKeyUsageList.ObjectId.Value -contains $codeSigningOid)
           } | Sort-Object NotAfter -Descending | Select-Object -First 1
           if (-not $certificate -or -not $certificate.Thumbprint) {
-            throw "Imported PFX has no currently valid certificate with a private key and Code Signing EKU"
+            # One message for four independent conditions is not diagnosable: an expired
+            # certificate, a certificate with no private key, and one issued for the wrong
+            # purpose all read the same. Report what each imported certificate actually is
+            # so the operator knows whether to renew it or replace it. Only public metadata
+            # is printed -- never the key, the password, or the PFX bytes.
+            Write-Host "Imported $($imported.Count) certificate(s); none usable for code signing:"
+            foreach ($candidate in $imported) {
+              $ekus = @($candidate.EnhancedKeyUsageList | ForEach-Object {
+                if ($_.FriendlyName) { "$($_.FriendlyName) ($($_.ObjectId.Value))" } else { $_.ObjectId.Value }
+              })
+              $reasons = @()
+              if (-not $candidate.HasPrivateKey) { $reasons += "no private key" }
+              if ($candidate.NotBefore.ToUniversalTime() -gt [DateTime]::UtcNow) { $reasons += "not valid until $($candidate.NotBefore.ToUniversalTime().ToString('u'))" }
+              if ($candidate.NotAfter.ToUniversalTime() -le [DateTime]::UtcNow) { $reasons += "EXPIRED $($candidate.NotAfter.ToUniversalTime().ToString('u'))" }
+              if ($ekus.Count -eq 0) { $reasons += "no Enhanced Key Usage at all" }
+              elseif ($ekus -notmatch [regex]::Escape($codeSigningOid)) { $reasons += "EKU is not Code Signing" }
+              Write-Host "  subject=$($candidate.Subject)"
+              Write-Host "    validity=$($candidate.NotBefore.ToUniversalTime().ToString('u')) .. $($candidate.NotAfter.ToUniversalTime().ToString('u'))"
+              Write-Host "    hasPrivateKey=$($candidate.HasPrivateKey)  eku=$(if ($ekus.Count) { $ekus -join ', ' } else { '(none)' })"
+              Write-Host "    unusable because: $($reasons -join '; ')"
+            }
+            throw "WIN_CSC_LINK holds no certificate usable for Authenticode signing. See the per-certificate reasons above; the secret needs a PFX with a private key, an unexpired validity window, and the Code Signing EKU ($codeSigningOid)."
           }
           $chain = [Security.Cryptography.X509Certificates.X509Chain]::new()
           $chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::Online
