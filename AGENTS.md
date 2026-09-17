@@ -59,8 +59,9 @@ they passed without exporting the URLs is not.
 
 ## Branch model and gitflow
 
-`develop` is the default branch and the base of every pull request. The one pull request open right
-now, #17, targets `develop`, so the practice matches the setting. `main` is released state and moves
+`develop` is the default branch and the base of every pull request. Of the two open right now, this
+one targets `develop` and #18 (`release/v0.1.0`) targets `main`, which is what a release promotion
+should do. `main` is released state and moves
 only by merging `develop` (through a `release/*` or `hotfix/*` branch) into it. Release tags are cut
 from `main`.
 
