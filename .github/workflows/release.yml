@@ -1,0 +1,375 @@
+name: Signed desktop release
+
+# Only a tag builds. There used to be a `release: [published]` trigger here for the CDN
+# promotion job; with GitHub Releases as the channel itself, publishing the draft IS the
+# promotion, so a second workflow run on that event would have nothing to do.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release tag
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Require release tag commit on main
+        shell: bash
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Release tag commit must be reachable from origin/main"
+            exit 1
+          fi
+      - name: Install Linux desktop dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev librsvg2-dev
+          patchelf libssl-dev
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run complete verification
+        run: npm run check
+
+  rust-advisories:
+    name: Rust security advisories
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Rust for security audit
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - name: Install pinned cargo-audit
+        run: cargo +stable install cargo-audit --version 0.22.2 --locked
+      # This repository's Cargo workspace is at the root, not under src-tauri.
+      - name: Audit locked Rust dependencies
+        run: cargo +stable audit --file Cargo.lock
+
+  build:
+    name: Build ${{ matrix.label }}
+    if: github.event_name == 'push'
+    needs: [validate, rust-advisories]
+    permissions:
+      contents: write
+    environment: production-release
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - label: Linux x64
+            platform: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+          - label: macOS Apple Silicon
+            platform: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - label: macOS Intel
+            platform: macos-14
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - label: Windows x64
+            platform: windows-2025
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev librsvg2-dev
+          patchelf libssl-dev
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: 1.94.0
+          targets: ${{ matrix.target }}
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+
+      - name: Require release signing material
+        shell: bash
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          test -n "$TAURI_UPDATER_PUBLIC_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+
+      - name: Require Apple signing and notarization credentials
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CODESIGN_CERT_P12_BASE64: ${{ secrets.APPLE_CODESIGN_CERT_P12_BASE64 }}
+          APPLE_CODESIGN_CERT_PASSWORD: ${{ secrets.APPLE_CODESIGN_CERT_PASSWORD }}
+          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          for name in \
+            APPLE_CODESIGN_CERT_P12_BASE64 \
+            APPLE_CODESIGN_CERT_PASSWORD \
+            APPLE_NOTARY_API_KEY_P8_BASE64 \
+            APPLE_NOTARY_API_KEY_ID \
+            APPLE_NOTARY_API_ISSUER_ID; do
+            test -n "${!name:-}"
+          done
+          printf '%s' "$APPLE_NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+          printf 'APPLE_API_KEY_PATH=%s\n' "$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - name: Import Apple Developer ID certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CODESIGN_CERT_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CODESIGN_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/redrob-certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/redrob-build.keychain"
+          security default-keychain -s "$RUNNER_TEMP/redrob-build.keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/redrob-build.keychain"
+          security set-keychain-settings -t 3600 -u "$RUNNER_TEMP/redrob-build.keychain"
+          security import "$RUNNER_TEMP/redrob-certificate.p12" -k "$RUNNER_TEMP/redrob-build.keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/redrob-build.keychain"
+          CERT_ID="$(security find-identity -v -p codesigning "$RUNNER_TEMP/redrob-build.keychain" | awk -F'"' 'NR==1 {print $2}')"
+          test -n "$CERT_ID"
+          printf 'APPLE_SIGNING_IDENTITY=%s\n' "$CERT_ID" >> "$GITHUB_ENV"
+
+      - name: Import Windows code-signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:WIN_CSC_LINK -or -not $env:WIN_CSC_KEY_PASSWORD) {
+            throw "Windows signing secrets are required"
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP "redrob-certificate.pfx"
+          $link = $env:WIN_CSC_LINK.Trim()
+          if ($link -match '^https://') {
+            try {
+              Invoke-WebRequest -Uri $link -OutFile $certificatePath -UseBasicParsing
+            } catch {
+              throw "Failed to download the Windows signing certificate over HTTPS"
+            }
+          } else {
+            if ($link -match '^data:[^,]*;base64,') {
+              $payload = $link.Substring($link.IndexOf(',') + 1)
+            } else {
+              $payload = $link
+            }
+            $payload = $payload -replace '\s', ''
+            if ($payload -notmatch '^[A-Za-z0-9+/]+={0,2}$') {
+              throw "WIN_CSC_LINK must be raw Base64 PFX data, a data:*;base64 URI, or an HTTPS URL"
+            }
+            try {
+              [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($payload))
+            } catch {
+              throw "WIN_CSC_LINK contains invalid Base64 certificate data"
+            }
+          }
+
+          $password = ConvertTo-SecureString $env:WIN_CSC_KEY_PASSWORD -AsPlainText -Force
+          $imported = @(Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+          $codeSigningOid = "1.3.6.1.5.5.7.3.3"
+          $certificate = $imported | Where-Object {
+            $_.HasPrivateKey -and
+            $_.NotBefore.ToUniversalTime() -le [DateTime]::UtcNow -and
+            $_.NotAfter.ToUniversalTime() -gt [DateTime]::UtcNow -and
+            ($_.EnhancedKeyUsageList.ObjectId.Value -contains $codeSigningOid)
+          } | Sort-Object NotAfter -Descending | Select-Object -First 1
+          if (-not $certificate -or -not $certificate.Thumbprint) {
+            throw "Imported PFX has no currently valid certificate with a private key and Code Signing EKU"
+          }
+          $chain = [Security.Cryptography.X509Certificates.X509Chain]::new()
+          $chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+          $chain.ChainPolicy.RevocationFlag = [Security.Cryptography.X509Certificates.X509RevocationFlag]::ExcludeRoot
+          if (-not $chain.Build($certificate)) {
+            $chainErrors = ($chain.ChainStatus | ForEach-Object { $_.StatusInformation.Trim() }) -join "; "
+            throw "Windows code-signing certificate chain validation failed: $chainErrors"
+          }
+          "WIN_CSC_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Remove-Item -LiteralPath $certificatePath -Force
+
+      - name: Prepare signed updater configuration
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
+          WIN_CSC_CERTIFICATE_THUMBPRINT: ${{ env.WIN_CSC_CERTIFICATE_THUMBPRINT }}
+        run: npm run release:prepare
+
+      - name: Build, sign, and upload installers
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Redrob Query v__VERSION__
+          releaseBody: See CHANGELOG.md for release notes. Installers and updater bundles are signed; the release remains a draft until platform smoke tests are approved.
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json
+
+      - name: Verify Windows installer signatures and timestamps
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+          WIN_CSC_CERTIFICATE_THUMBPRINT: ${{ env.WIN_CSC_CERTIFICATE_THUMBPRINT }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundlePath = Join-Path $PWD "src-tauri/target/$env:RELEASE_TARGET/release/bundle"
+          $installers = @(Get-ChildItem -LiteralPath $bundlePath -Recurse -File | Where-Object { $_.Extension -in '.exe', '.msi' })
+          if (-not ($installers.Extension -contains '.exe') -or -not ($installers.Extension -contains '.msi')) {
+            throw "Expected both signed NSIS and MSI installers"
+          }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+                -not $signature.SignerCertificate -or
+                $signature.SignerCertificate.Thumbprint -ne $env:WIN_CSC_CERTIFICATE_THUMBPRINT -or
+                -not $signature.TimeStamperCertificate) {
+              throw "Installer signature, signer, or timestamp verification failed: $($installer.Name)"
+            }
+          }
+
+
+  # The CDN promotion job that used to live here is gone: GitHub Releases is now the
+  # update channel itself, so there is nothing to copy anywhere. What that job also
+  # did, though, was VERIFY the published channel -- so its checks are re-pointed
+  # here rather than dropped. Without them the classic failure is silent: the app
+  # installs fine and never updates again, because `latest.json` is missing or its
+  # platform URLs point somewhere a client cannot reach.
+  verify-release-assets:
+    name: Updater contract on the draft release
+    if: github.event_name == 'push'
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Assert the draft release carries a usable updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The release is still a draft at this point, which is deliberate: draft
+          # assets are invisible to `releases/latest/download/...`, so QA happens
+          # before any installed client can see the version.
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          draft="$(printf '%s' "$release_json" | jq -r '.draft')"
+          if [ "$draft" != "true" ]; then
+            echo "::error::Release ${RELEASE_TAG} must still be a draft when the build finishes"
+            exit 1
+          fi
+
+          names="$(printf '%s' "$release_json" | jq -r '.assets[].name')"
+          echo "Assets on ${RELEASE_TAG}:"
+          printf '  %s\n' $names
+
+          # latest.json IS the feed on GitHub Releases. Missing it does not fail an
+          # install, it silently freezes every existing client on its current version.
+          if ! printf '%s\n' $names | grep -qx 'latest.json'; then
+            echo "::error::latest.json is not attached; published clients would never see this release"
+            exit 1
+          fi
+
+          for pattern in '\.AppImage$' '\.deb$' '\.dmg$' '\.exe$' '\.msi$'; do
+            if ! printf '%s\n' $names | grep -qE "$pattern"; then
+              echo "::error::no asset matching ${pattern} -- expected Linux, macOS and Windows bundles"
+              exit 1
+            fi
+          done
+
+          manifest_id="$(printf '%s' "$release_json" | jq -r '.assets[] | select(.name == "latest.json") | .id')"
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${manifest_id}" > latest.json
+
+          version="$(jq -r '.version' latest.json)"
+          if [ "v${version}" != "${RELEASE_TAG}" ]; then
+            echo "::error::latest.json version ${version} does not match tag ${RELEASE_TAG}"
+            exit 1
+          fi
+
+          # Every architecture a build leg produced must be present, and every URL must
+          # point at this repository's own release assets. A URL left pointing at a
+          # decommissioned host is exactly the shape of failure this job exists to catch.
+          for platform in linux-x86_64 darwin-aarch64 darwin-x86_64 windows-x86_64; do
+            url="$(jq -r --arg p "$platform" '.platforms[$p].url // empty' latest.json)"
+            sig="$(jq -r --arg p "$platform" '.platforms[$p].signature // empty' latest.json)"
+            if [ -z "$url" ] || [ -z "$sig" ]; then
+              echo "::error::latest.json is missing a signed entry for ${platform}"
+              exit 1
+            fi
+            case "$url" in
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/"*) ;;
+              *)
+                echo "::error::${platform} url is not a release asset of this repository: ${url}"
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "latest.json covers all four platforms, is signed, and points only at this repository's release assets."

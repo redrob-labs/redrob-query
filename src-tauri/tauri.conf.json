@@ -34,7 +34,7 @@
     "category": "DeveloperTool",
     "shortDescription": "A fast, AI-native database workspace",
     "longDescription": "Connect, inspect metadata, and run bounded read-only queries against PostgreSQL, MySQL, SQLite, and MongoDB with optional Redrob AI assistance. Identity-verifying TLS uses publicly trusted certificate authorities; custom and self-signed certificate authorities are not supported in this release.",
-    "copyright": "Copyright © 2026 Redrob",
+    "copyright": "Copyright © 2026 Janghoon Lee (Redrob) and contributors",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -53,6 +53,22 @@ requireValue(
     .join(', ')}`,
 );
 
+// The updater feed is a GitHub Releases asset URL, and this workflow was adapted from a
+// sibling product. A feed left pointing at the wrong repository does not fail a build or
+// an install -- it silently freezes every client of THIS product on its current version,
+// or worse, offers it another product's installer. So assert the URL names this repo.
+const releaseConfigSource = await read('scripts/prepare-release-config.mjs');
+const expectedFeed =
+  'https://github.com/redrob-labs/redrob-query/releases/latest/download/latest.json';
+requireValue(
+  releaseConfigSource.includes(expectedFeed),
+  `scripts/prepare-release-config.mjs must set the updater endpoint to ${expectedFeed}`,
+);
+requireValue(
+  !/cdn\.redrob\.ai/.test(releaseConfigSource),
+  'scripts/prepare-release-config.mjs must not reference the decommissioned CDN',
+);
+
 if (failures.length) {
   console.error(`Release metadata validation failed:\n- ${failures.join('\n- ')}`);
   process.exitCode = 1;

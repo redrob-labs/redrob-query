@@ -76,6 +76,8 @@ Linux에서는 Tauri가 요구하는 WebKitGTK 4.1, JavaScriptCoreGTK 4.1, libso
 
 `src-tauri/icons/`에 표준 Tauri PNG·ICNS·ICO·iOS·Android 아이콘이 들어 있습니다. 모두 RGBA여야 합니다 — `tauri::generate_context!`가 RGBA가 아닌 아이콘에서 컴파일 타임에 패닉하므로, `npm run release:check`가 이를 단정합니다.
 
+서명된 인스톨러는 **Signed desktop release** 워크플로만 만듭니다. `vMAJOR.MINOR.PATCH` 태그를 푸시하면 Linux x64·macOS Intel·macOS Apple Silicon·Windows x64를 빌드하고, 업데이터 번들에 서명하고, macOS 빌드를 공증한 뒤 `latest.json`을 포함한 전부를 **초안** GitHub Release에 올립니다. 그 초안을 발행하는 것이 곧 릴리스입니다 — GitHub Releases가 업데이트 채널이라 `releases/latest/download/latest.json`은 사람이 발행한 버전만 서비스합니다. 자격 증명이 없으면 서명 없는 산출물을 발행하는 대신 릴리스를 중단합니다.
+
 ## 데스크톱 로컬 작업공간 데이터
 
 데스크톱 모드는 열린 쿼리 탭 최대 30개와 첫 페이지가 성공한 실행 이력 50개를 버전이 붙은 렌더러 로컬 스토리지에 저장합니다. 저장되는 것은 쿼리 텍스트와 탭·이력 메타데이터뿐이고, 결과 행·데이터베이스 자격 증명·AI 프롬프트는 절대 저장하지 않습니다. 빈 탭 초안도 유효하며 복원됩니다. 실행 이력은 첫 페이지에서 성공적으로 끝난, 비어 있지 않은 쿼리만 남깁니다. 쿼리 텍스트는 평문이고 그 안에 민감한 리터럴이 들어 있을 수 있으므로, 이력 메뉴에 **저장 중단 및 로컬 데이터 삭제**가 있습니다. 이 opt-out은 별도로 저장되어 재시작 후에도 사용자가 명시적으로 다시 켤 때까지 꺼진 상태로 유지됩니다. 잘못된·중복·엔진 불일치·과대·손상된 항목은 거부하며, 저장이 실패하면 성공했다고 말하지 않고 실패를 표시합니다.
