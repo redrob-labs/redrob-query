@@ -1,5 +1,7 @@
 # Redrob Query
 
+**English** · [한국어](./README.ko.md)
+
 Redrob Query is a JVM-free, AI-assisted database workspace built with Rust 1.94, Tauri 2, React 19, and TypeScript. Version 0.1 provides a guarded read-only desktop workspace for PostgreSQL, MySQL, SQLite, and MongoDB, plus an interactive browser demo backed only by deterministic in-memory sample data.
 
 The workflow is informed by DBeaver Community, but Redrob Query is a clean implementation. It includes no DBeaver source code or branding and no Eclipse RCP, OSGi, JDBC, Java, or JVM runtime.

@@ -29,6 +29,12 @@ pub async fn save_connection_with_secret(
         .map_err(message)
 }
 
+// `State<'_, T>` is what Tauri's command macro requires: it is a lightweight handle
+// the runtime constructs per invocation, and `&State<'_, T>` is not an accepted
+// command argument type, so clippy's suggestion here would not compile. This is the
+// only synchronous command in the file, which is why it is the only one that trips
+// the lint -- an async command's future captures the handle and satisfies it.
+#[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn profile_load_warnings(service: State<'_, DataService>) -> Vec<String> {
     service.profile_load_warnings()
