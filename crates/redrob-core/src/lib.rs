@@ -1,4 +1,4 @@
-//! Database and AI runtime for Redrob Data.
+//! Database and AI runtime for Redrob Query.
 
 pub mod ai;
 pub mod connection;

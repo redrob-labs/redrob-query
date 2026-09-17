@@ -13,7 +13,7 @@ export function ActivityRail() {
   const setUi = useWorkspace((state) => state.setUi);
   return (
     <nav className="activity-rail" aria-label="Workspace tools">
-      <img className="brand-mark" src={logo} alt="Redrob Data" />
+      <img className="brand-mark" src={logo} alt="Redrob Query" />
       <div className="rail-group">
         <IconButton label="Connections" active={navigatorOpen} aria-pressed={navigatorOpen} onClick={() => setUi({ navigatorOpen: !navigatorOpen })}><Database size={18} /></IconButton>
         <IconButton label="New connection" data-testid="open-connection-modal" onClick={() => openConnectionModal()}><Plus size={18} /></IconButton>

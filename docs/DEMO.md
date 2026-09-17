@@ -1,6 +1,6 @@
 # Demo guide
 
-Redrob Data has two distinct demo experiences.
+Redrob Query has two distinct demo experiences.
 
 ## Browser sample-data demo
 

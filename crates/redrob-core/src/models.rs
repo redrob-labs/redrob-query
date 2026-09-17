@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{DataError, Result};
 
-/// Database engines presented by Redrob Data.
+/// Database engines presented by Redrob Query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseKind {

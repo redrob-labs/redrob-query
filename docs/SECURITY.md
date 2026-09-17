@@ -1,6 +1,6 @@
 # Security model
 
-This document describes Redrob Data 0.1 behavior; it is not a guarantee that arbitrary database functions are side-effect free.
+This document describes Redrob Query 0.1 behavior; it is not a guarantee that arbitrary database functions are side-effect free.
 
 ## Trust boundaries
 
@@ -32,7 +32,7 @@ An empty adjacent lock file is held with an OS-level exclusive lock for the pers
 
 ## Local query workspace
 
-Desktop query convenience state is stored in renderer local storage under versioned key `redrob-data.workspace.v1`. It is plaintext and may contain sensitive literals embedded in query text. The snapshot contains only bounded tab/history metadata and query text—never result rows, profile credentials, passwords, or AI prompts.
+Desktop query convenience state is stored in renderer local storage under versioned key `redrob-query.workspace.v1`. It is plaintext and may contain sensitive literals embedded in query text. The snapshot contains only bounded tab/history metadata and query text—never result rows, profile credentials, passwords, or AI prompts.
 
 Restoration validates schema version, profile ownership, SQL/MQL compatibility with the current engine, unique IDs, per-query length, entry counts, and an aggregate storage budget. An empty tab draft is valid and survives restart; history entries must contain a nonempty query from a successful first-page execution. Corrupt, oversized, duplicate, or incompatible entries are rejected and surfaced through a generic startup warning. Storage failure changes the UI to **Local save unavailable** instead of reporting a false success. Users can stop saving and clear the snapshot; the opt-out is stored separately and survives restart until explicitly re-enabled. Browser-demo workspace state is never persisted.
 
@@ -108,5 +108,5 @@ Include:
 - impact and prerequisites; and
 - any suggested mitigation.
 
-Expect an acknowledgement within five business days. Redrob Data is pre-1.0:
+Expect an acknowledgement within five business days. Redrob Query is pre-1.0:
 fixes land on `main` and there is no backport branch for earlier tags.

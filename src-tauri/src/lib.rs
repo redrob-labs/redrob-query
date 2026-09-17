@@ -30,5 +30,5 @@ pub fn run() {
             commands::ai_chat,
         ])
         .run(tauri::generate_context!())
-        .expect("failed to start Redrob Data");
+        .expect("failed to start Redrob Query");
 }

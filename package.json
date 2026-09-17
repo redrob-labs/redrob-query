@@ -1,5 +1,5 @@
 {
-  "name": "redrob-data",
+  "name": "redrob-query",
   "version": "0.1.0",
   "private": true,
   "description": "A JVM-free, AI-native desktop database workspace for PostgreSQL, MySQL, SQLite, and MongoDB.",
@@ -7,11 +7,11 @@
   "author": "Redrob",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/redrob-labs/redrob-data.git"
+    "url": "git+https://github.com/redrob-labs/redrob-query.git"
   },
-  "homepage": "https://github.com/redrob-labs/redrob-data#readme",
+  "homepage": "https://github.com/redrob-labs/redrob-query#readme",
   "bugs": {
-    "url": "https://github.com/redrob-labs/redrob-data/issues"
+    "url": "https://github.com/redrob-labs/redrob-query/issues"
   },
   "engines": {
     "node": ">=22.12.0",

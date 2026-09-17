@@ -7,7 +7,7 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Secure Rust core for Redrob Data database connectivity, metadata, querying, and AI transport"
+description = "Secure Rust core for Redrob Query database connectivity, metadata, querying, and AI transport"
 readme = "../../README.md"
 publish = false
 

@@ -42,7 +42,7 @@ use crate::{
     secret::{FallbackSecretStore, KeyringSecretStore, SecretStore, exposed},
 };
 
-const PROFILE_STORAGE_OWNED_WARNING: &str = "Connection profiles are unavailable because another Redrob Data instance owns profile storage; profile and keyring changes and connections are disabled.";
+const PROFILE_STORAGE_OWNED_WARNING: &str = "Connection profiles are unavailable because another Redrob Query instance owns profile storage; profile and keyring changes and connections are disabled.";
 const PROFILE_STORAGE_UNAVAILABLE_WARNING: &str = "Connection profile storage is unavailable; stored profiles are unavailable and profile and keyring changes and connections are disabled.";
 
 #[derive(Clone)]
@@ -319,7 +319,7 @@ impl DataService {
         Ok(SaveProfileOutcome {
             profile,
             warning: committed_after_error.then(|| {
-                "The connection was saved, but transaction cleanup is pending. Restart Redrob Data to retry cleanup."
+                "The connection was saved, but transaction cleanup is pending. Restart Redrob Query to retry cleanup."
                     .to_owned()
             }),
         })
@@ -385,7 +385,7 @@ impl DataService {
         }
         Ok(RemoveProfileOutcome {
             warning: result.is_err().then(|| {
-                "The connection was removed, but credential or transaction cleanup is pending. Restart Redrob Data to retry cleanup."
+                "The connection was removed, but credential or transaction cleanup is pending. Restart Redrob Query to retry cleanup."
                     .to_owned()
             }),
         })

@@ -1,7 +1,7 @@
 import type { ConnectionProfile, QueryHistoryEntry, QueryLanguage, QueryTab } from '../domain/types';
 
-export const WORKSPACE_STORAGE_KEY = 'redrob-data.workspace.v1';
-export const WORKSPACE_PERSISTENCE_KEY = 'redrob-data.workspace-persistence.v1';
+export const WORKSPACE_STORAGE_KEY = 'redrob-query.workspace.v1';
+export const WORKSPACE_PERSISTENCE_KEY = 'redrob-query.workspace-persistence.v1';
 export const MAX_PERSISTED_TABS = 30;
 export const MAX_HISTORY_ENTRIES = 50;
 export const MAX_PERSISTED_QUERY_CHARACTERS = 200_000;

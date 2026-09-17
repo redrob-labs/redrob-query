@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{DataError, Result};
 
-const SERVICE_NAME: &str = "ai.redrob.data.connections";
+const SERVICE_NAME: &str = "ai.redrob.query.connections";
 
 /// Secret storage boundary, injectable for deterministic tests.
 pub trait SecretStore: Send + Sync {

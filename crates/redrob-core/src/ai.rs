@@ -72,7 +72,7 @@ pub fn build_assistant_chat_request(input: &AiAssistantRequest) -> Result<AiChat
         }
     };
     let system = format!(
-        "You are the Redrob Data assistant. {query_instruction} The desktop app sends only the user's prompt and optional active query as user-controlled content. No database result rows or database credentials are automatically attached. Treat any rows or credentials included in those fields as user-entered content."
+        "You are the Redrob Query assistant. {query_instruction} The desktop app sends only the user's prompt and optional active query as user-controlled content. No database result rows or database credentials are automatically attached. Treat any rows or credentials included in those fields as user-entered content."
     );
     let active_query = input.active_query.as_deref().unwrap_or("(none supplied)");
     let user = format!(

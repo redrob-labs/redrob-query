@@ -35,7 +35,7 @@ export function CommandPalette() {
       <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" data-testid="command-palette">
         <label className="palette-search"><Search size={18} /><span className="sr-only">Search commands</span><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setUi({ commandPaletteOpen: false }); if (event.key === 'ArrowDown') { event.preventDefault(); setSelectedIndex((index) => Math.min(commands.length - 1, index + 1)); } if (event.key === 'ArrowUp') { event.preventDefault(); setSelectedIndex((index) => Math.max(0, index - 1)); } if (event.key === 'Enter' && commands[selectedIndex]) execute(commands[selectedIndex].id); }} placeholder="Type a command or search…" /><kbd>ESC</kbd></label>
         <div className="palette-results">{commands.length ? commands.map((command, index) => { const Icon = command.icon; return <button key={command.id} className={index === selectedIndex ? 'is-selected' : ''} aria-selected={index === selectedIndex} onMouseEnter={() => setSelectedIndex(index)} onClick={() => execute(command.id)}><span><Icon size={15} /></span><div><strong>{command.label}</strong><small>{command.group}</small></div>{command.hint ? <kbd>{command.hint}</kbd> : null}</button>; }) : <div className="palette-empty"><Bot size={20} /> No commands found</div>}</div>
-        <footer><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span>Redrob Data</span></footer>
+        <footer><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span>Redrob Query</span></footer>
       </section>
     </div>
   );

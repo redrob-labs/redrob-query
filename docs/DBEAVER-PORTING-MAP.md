@@ -1,8 +1,8 @@
 # DBeaver workflow map
 
-Redrob Data is a clean Rust/React implementation informed by DBeaver Community workflows. It is not a source port, fork, plugin host, or compatibility layer, and it contains no DBeaver code or branding.
+Redrob Query is a clean Rust/React implementation informed by DBeaver Community workflows. It is not a source port, fork, plugin host, or compatibility layer, and it contains no DBeaver code or branding.
 
-| DBeaver Community workflow | Redrob Data 0.1 equivalent | Current boundary |
+| DBeaver Community workflow | Redrob Query 0.1 equivalent | Current boundary |
 |---|---|---|
 | Database Navigator | Profile picker plus lazy searchable database/schema/table/view/column tree; activity-rail search focuses the filter | Lightweight metadata; Mongo fields are merged from at most 25 sampled documents |
 | New Connection wizard | Compiled-in profile modal with create/test/edit, connect/disconnect/remove, TLS, Mongo SRV, and `authSource` | PostgreSQL/MySQL/SQLite/MongoDB only; no driver manager, SQL Server, SSH, private CA, or cloud-auth plugin |
@@ -18,7 +18,7 @@ Redrob Data is a clean Rust/React implementation informed by DBeaver Community w
 
 ## Architectural replacement
 
-| DBeaver-era concept | Redrob Data choice |
+| DBeaver-era concept | Redrob Query choice |
 |---|---|
 | Java/JVM | Rust 1.94 native core |
 | Eclipse RCP/SWT | Tauri 2 system webview + React 19 |

@@ -1,8 +1,8 @@
-# Redrob Data
+# Redrob Query
 
-Redrob Data is a JVM-free, AI-assisted database workspace built with Rust 1.94, Tauri 2, React 19, and TypeScript. Version 0.1 provides a guarded read-only desktop workspace for PostgreSQL, MySQL, SQLite, and MongoDB, plus an interactive browser demo backed only by deterministic in-memory sample data.
+Redrob Query is a JVM-free, AI-assisted database workspace built with Rust 1.94, Tauri 2, React 19, and TypeScript. Version 0.1 provides a guarded read-only desktop workspace for PostgreSQL, MySQL, SQLite, and MongoDB, plus an interactive browser demo backed only by deterministic in-memory sample data.
 
-The workflow is informed by DBeaver Community, but Redrob Data is a clean implementation. It includes no DBeaver source code or branding and no Eclipse RCP, OSGi, JDBC, Java, or JVM runtime.
+The workflow is informed by DBeaver Community, but Redrob Query is a clean implementation. It includes no DBeaver source code or branding and no Eclipse RCP, OSGi, JDBC, Java, or JVM runtime.
 
 ## Shipped scope
 
@@ -142,4 +142,4 @@ The provider request uses model `auto`. Browser-demo AI is local and determinist
 
 ## License and attribution
 
-Redrob Data is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for DBeaver Community workflow attribution. Third-party components remain subject to their own licenses.
+Redrob Query is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for DBeaver Community workflow attribution. Third-party components remain subject to their own licenses.

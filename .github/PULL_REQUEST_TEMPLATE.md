@@ -27,4 +27,4 @@ npm run rust:fmt && npm run rust:clippy && npm run rust:test
       registered, and saved desktop profiles stay read-only.
 - [ ] If local-storage behaviour changed, `docs/SECURITY.md` says what is now
       stored.
-- [ ] If user-visible strings changed, they name Redrob Data — not DBeaver.
+- [ ] If user-visible strings changed, they name Redrob Query — not DBeaver.

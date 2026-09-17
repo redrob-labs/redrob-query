@@ -32,7 +32,7 @@ const desktopBridge = (): DataBridge => ({
   askAi: vi.fn(),
 });
 
-describe('Redrob Data workspace', () => {
+describe('Redrob Query workspace', () => {
   it('waits for explicit desktop selection and connect before loading metadata', async () => {
     const user = userEvent.setup();
     const bridge = desktopBridge();

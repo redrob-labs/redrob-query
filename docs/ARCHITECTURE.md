@@ -1,6 +1,6 @@
 # Architecture
 
-Redrob Data 0.1 separates browser-demo behavior, renderer state, native IPC, and database/AI runtime responsibilities. Java and the JVM are not part of the product.
+Redrob Query 0.1 separates browser-demo behavior, renderer state, native IPC, and database/AI runtime responsibilities. Java and the JVM are not part of the product.
 
 ## Layers
 

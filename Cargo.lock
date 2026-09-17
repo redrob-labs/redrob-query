@@ -3390,7 +3390,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "redrob-data"
+name = "redrob-query"
 version = "0.1.0"
 dependencies = [
  "redrob-core",
