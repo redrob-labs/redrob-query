@@ -88,6 +88,19 @@ Working branches are `<type>/<slug>` off `develop`, types `feat`, `fix`, `chore`
 `refactor`, `perf`. Merges are squash-only and the branch is deleted, so the squash body is the
 pull request body.
 
+`.github/workflows/gitflow.yml` now checks both of those conventions instead of leaving them to
+reviewers. Its allowed prefixes are `feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `perf`,
+`release`, and `hotfix`: the first seven are the working types above, and `release` and `hotfix` are
+added because both documents give those branches a job (they are the only branches that may merge
+into `main`, and a back-merge pull request rides on one), so a check that rejected them would fail
+a legitimate pull request. A pull request from any other prefix, an agent or tool name for instance,
+fails the `branch name follows the convention` job, and `develop` and `main` are exempt because a
+promotion or back-merge branch is not named after a type. On every push to `main` the
+`main is contained in develop` job counts `origin/develop..origin/main` and fails when it is
+nonzero, which is the missing back-merge that cost the sibling repository a month of a broken
+default branch. Neither job name collides with a required check, so nothing new gates a merge until
+someone adds it to branch protection.
+
 ## Protection, and what is actually enforced
 
 Both `develop` and `main` are protected the same way, read from the branch-protection API:
