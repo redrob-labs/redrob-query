@@ -25,6 +25,7 @@ jobs:
       # the single list in scripts/release-matrix.mjs.
       matrix: ${{ steps.release-matrix.outputs.matrix }}
       platforms: ${{ steps.release-matrix.outputs.platforms }}
+      asset_suffixes: ${{ steps.release-matrix.outputs.asset_suffixes }}
       windows_signing_ready: ${{ steps.release-matrix.outputs.windows_signing_ready }}
     steps:
       - name: Check out source
@@ -370,6 +371,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
           REQUIRED_PLATFORMS: ${{ needs.validate.outputs.platforms }}
+          REQUIRED_ASSET_SUFFIXES: ${{ needs.validate.outputs.asset_suffixes }}
         shell: bash
         run: |
           set -euo pipefail
@@ -395,9 +397,18 @@ jobs:
             exit 1
           fi
 
-          for pattern in '\.AppImage$' '\.deb$' '\.dmg$' '\.exe$' '\.msi$'; do
-            if ! printf '%s\n' $names | grep -qE "$pattern"; then
-              echo "::error::no asset matching ${pattern} -- expected Linux, macOS and Windows bundles"
+          # Suffixes come from the same generator that built the matrix, so a bundle type no
+          # leg produces is not demanded. Glob matching rather than a regex keeps the list
+          # free of escaping, since it crosses a job output boundary.
+          for suffix in ${REQUIRED_ASSET_SUFFIXES}; do
+            found=0
+            for name in $names; do
+              case "$name" in
+                *"$suffix") found=1; break ;;
+              esac
+            done
+            if [ "$found" -ne 1 ]; then
+              echo "::error::no asset ending in ${suffix} -- a built platform produced no installer"
               exit 1
             fi
           done

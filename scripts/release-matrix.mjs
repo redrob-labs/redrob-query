@@ -45,6 +45,19 @@ const legs = [
   },
 ];
 
+// Which file each bundle type leaves on the release. The verify job asserted
+// `.AppImage .deb .dmg .exe .msi` literally, so skipping the Windows leg would have made a
+// correct gate fail for a reason that has nothing to do with the release being wrong.
+const bundleAssetSuffixes = {
+  appimage: ['.AppImage'],
+  deb: ['.deb'],
+  dmg: ['.dmg'],
+  // The .app bundle ships as the updater payload, which the signature check already covers.
+  app: [],
+  nsis: ['.exe'],
+  msi: ['.msi'],
+};
+
 const windowsSigningReady =
   (process.env.WINDOWS_SIGNING_READY ?? '').trim().toLowerCase() === 'true';
 
@@ -71,13 +84,29 @@ const matrix = included.map(({ label, platform, target, bundles }) => ({
   bundles,
 }));
 const platforms = included.flatMap((leg) => leg.updaterPlatforms);
+const assetSuffixes = [
+  ...new Set(
+    included.flatMap((leg) =>
+      leg.bundles.split(',').flatMap((bundle) => {
+        const suffixes = bundleAssetSuffixes[bundle.trim()];
+        if (suffixes === undefined) {
+          console.error(`Unknown bundle type "${bundle.trim()}" on ${leg.label}`);
+          process.exit(1);
+        }
+        return suffixes;
+      }),
+    ),
+  ),
+];
 
 console.log(`Building: ${included.map((leg) => leg.label).join(', ')}`);
 console.log(`Updater platforms required on the draft: ${platforms.join(' ')}`);
+console.log(`Asset suffixes required on the draft: ${assetSuffixes.join(' ')}`);
 
 const output = process.env.GITHUB_OUTPUT;
 if (output) {
   appendFileSync(output, `matrix=${JSON.stringify(matrix)}\n`);
   appendFileSync(output, `platforms=${platforms.join(' ')}\n`);
+  appendFileSync(output, `asset_suffixes=${assetSuffixes.join(' ')}\n`);
   appendFileSync(output, `windows_signing_ready=${windowsSigningReady}\n`);
 }
