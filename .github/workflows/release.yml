@@ -350,7 +350,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          # A DRAFT release is NOT on the tags endpoint: GET /releases/tags/<tag> answers 404
+          # until publication, because a draft has no published tag to resolve. Since this job
+          # exists to inspect the draft, it has to find it in the listing, which does include
+          # drafts for a caller with push access.
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          release_json="$(jq --arg tag "${RELEASE_TAG}" 'map(select(.tag_name == $tag)) | first // empty' "$RUNNER_TEMP/releases.json")"
+          if [ -z "$release_json" ]; then
+            echo "::error::No release found for ${RELEASE_TAG}. A draft is only listed to a caller with push access, so check this job's contents permission if the draft does exist."
+            exit 1
+          fi
           printf '%s' "$release_json" > release.json
           manifest_id="$(printf '%s' "$release_json" | jq -r '.assets[] | select(.name == "latest.json") | .id')"
           if [ -z "$manifest_id" ] || [ "$manifest_id" = "null" ]; then
@@ -379,7 +388,16 @@ jobs:
           # The release is still a draft at this point, which is deliberate: draft
           # assets are invisible to `releases/latest/download/...`, so QA happens
           # before any installed client can see the version.
-          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          # A DRAFT release is NOT on the tags endpoint: GET /releases/tags/<tag> answers 404
+          # until publication, because a draft has no published tag to resolve. Since this job
+          # exists to inspect the draft, it has to find it in the listing, which does include
+          # drafts for a caller with push access.
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          release_json="$(jq --arg tag "${RELEASE_TAG}" 'map(select(.tag_name == $tag)) | first // empty' "$RUNNER_TEMP/releases.json")"
+          if [ -z "$release_json" ]; then
+            echo "::error::No release found for ${RELEASE_TAG}. A draft is only listed to a caller with push access, so check this job's contents permission if the draft does exist."
+            exit 1
+          fi
           draft="$(printf '%s' "$release_json" | jq -r '.draft')"
           if [ "$draft" != "true" ]; then
             echo "::error::Release ${RELEASE_TAG} must still be a draft when the build finishes"
