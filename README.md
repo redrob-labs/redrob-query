@@ -1,7 +1,5 @@
 # Redrob Data
 
-![Redrob mark](src/assets/redrob-mark-512.png)
-
 Redrob Data is a JVM-free, AI-assisted database workspace built with Rust 1.94, Tauri 2, React 19, and TypeScript. Version 0.1 provides a guarded read-only desktop workspace for PostgreSQL, MySQL, SQLite, and MongoDB, plus an interactive browser demo backed only by deterministic in-memory sample data.
 
 The workflow is informed by DBeaver Community, but Redrob Data is a clean implementation. It includes no DBeaver source code or branding and no Eclipse RCP, OSGi, JDBC, Java, or JVM runtime.
@@ -72,7 +70,7 @@ Build a package for the current host platform with:
 npm run tauri build
 ```
 
-Linux requires the WebKitGTK 4.1, JavaScriptCoreGTK 4.1, libsoup 3, and librsvg development metadata expected by Tauri. Native build/package validation in the current Amazon Linux sandbox is blocked because those host packages are unavailable; frontend production builds and all `redrob-core` checks remain runnable.
+Linux requires the WebKitGTK 4.1, JavaScriptCoreGTK 4.1, libsoup 3, and librsvg development metadata expected by Tauri. Frontend production builds and all `redrob-core` checks run without those packages; only `npm run tauri build` needs them.
 
 The repository contains standard Tauri PNG, ICNS, ICO, iOS, and Android icons under `src-tauri/icons/`. It does not provide signing, notarization, an updater, or cross-platform release automation.
 

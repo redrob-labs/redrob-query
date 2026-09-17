@@ -7,11 +7,11 @@
   "author": "Redrob",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/savagemanage/openDB.git"
+    "url": "git+https://github.com/redrob-labs/redrob-data.git"
   },
-  "homepage": "https://github.com/savagemanage/openDB#readme",
+  "homepage": "https://github.com/redrob-labs/redrob-data#readme",
   "bugs": {
-    "url": "https://github.com/savagemanage/openDB/issues"
+    "url": "https://github.com/redrob-labs/redrob-data/issues"
   },
   "engines": {
     "node": ">=22.12.0",

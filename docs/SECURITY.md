@@ -90,3 +90,23 @@ Database and connection errors are sanitized and bounded before crossing IPC. UR
 - Treat profile metadata, local query text/history, and exported CSV files as sensitive.
 - Disable and clear local query saving when plaintext query retention is inappropriate.
 - Review prompt and active-query text before sending it to Redrob.
+
+## Reporting a vulnerability
+
+Do not open a public issue containing exploit details, credentials, connection
+strings, or database contents.
+
+Report privately through GitHub's **Report a vulnerability** button on the
+repository's Security tab (private vulnerability reporting is enabled), or email
+`security@redrob.ai`.
+
+Include:
+
+- the affected version and operating system;
+- reproduction steps using synthetic data and placeholder credentials;
+- the expected and observed behavior;
+- impact and prerequisites; and
+- any suggested mitigation.
+
+Expect an acknowledgement within five business days. Redrob Data is pre-1.0:
+fixes land on `main` and there is no backport branch for earlier tags.

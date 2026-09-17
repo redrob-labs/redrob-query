@@ -1,0 +1,80 @@
+name: CI
+
+# Plain pull_request (never pull_request_target) and no secrets are consumed,
+# so a pull request from a fork receives no credential of any kind.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Release metadata, types, tests, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+
+      # Asserts productName, identifier, licence and the version fan-out across
+      # package.json, Cargo.toml, tauri.conf.json and package-lock.json.
+      - name: Validate release metadata
+        run: npm run release:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  rust:
+    name: Format, clippy, tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The Tauri shell links WebKitGTK; the redrob-core crate deliberately does not.
+      - name: Install Linux desktop dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
+          libsoup-3.0-dev librsvg2-dev patchelf libssl-dev
+
+      # Channel and components must match rust-toolchain.toml, which
+      # scripts/validate-release.mjs pins against Cargo rust-version.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+
+      - name: Format
+        run: npm run rust:fmt
+
+      - name: Clippy
+        run: npm run rust:clippy
+
+      - name: Test
+        run: npm run rust:test
