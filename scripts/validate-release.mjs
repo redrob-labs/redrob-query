@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,6 +35,23 @@ requireValue(tauri.productName === 'Redrob Query', 'Tauri productName must be Re
 requireValue(tauri.identifier === 'ai.redrob.query', 'Tauri identifier must be ai.redrob.query');
 requireValue(tauri.app?.windows?.[0]?.label === 'main', 'The primary Tauri window label must be main');
 requireValue(tauri.build?.devUrl === 'http://127.0.0.1:1420', 'Tauri devUrl must use the loopback address and Vite port 1420');
+
+// tauri::generate_context! panics at COMPILE TIME on any icon that is not RGBA
+// ("icon <path> is not RGBA"), so one RGB icon means the desktop app cannot be
+// built at all -- which is exactly how this shipped before there was any CI.
+// PNG colour type is byte 25 of the file (IHDR): 6 is RGBA, 2 is RGB, 3 palette.
+const iconPngs = (dir) =>
+  readdirSync(resolve(root, dir), { withFileTypes: true, recursive: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.png'))
+    .map((entry) => resolve(entry.parentPath ?? entry.path, entry.name));
+
+const notRgba = iconPngs('src-tauri/icons').filter((file) => readFileSync(file)[25] !== 6);
+requireValue(
+  notRgba.length === 0,
+  `every src-tauri/icons PNG must be RGBA or tauri::generate_context! will not compile; not RGBA: ${notRgba
+    .map((file) => file.slice(root.length + 1))
+    .join(', ')}`,
+);
 
 if (failures.length) {
   console.error(`Release metadata validation failed:\n- ${failures.join('\n- ')}`);
