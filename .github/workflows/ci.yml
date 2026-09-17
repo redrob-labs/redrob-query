@@ -78,3 +78,28 @@ jobs:
 
       - name: Test
         run: npm run rust:test
+
+  # This job exists because its absence cost a failed release. The rustls advisory
+  # RUSTSEC-2026-0285 sat in Cargo.lock through every green pull request, because the
+  # only place cargo audit ran was the release workflow -- so the first thing that
+  # noticed was a tag. A dependency advisory should fail the pull request that could
+  # have fixed it, not the release that cannot.
+  rust-advisories:
+    name: Rust security advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust for security audit
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+
+      - name: Install pinned cargo-audit
+        run: cargo +stable install cargo-audit --version 0.22.2 --locked
+
+      # The Cargo workspace is at the repository root, not under src-tauri.
+      - name: Audit locked Rust dependencies
+        run: cargo +stable audit --file Cargo.lock
