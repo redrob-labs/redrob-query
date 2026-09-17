@@ -27,6 +27,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "release:check": "node scripts/validate-release.mjs",
+    "release:prepare": "node scripts/prepare-release-config.mjs",
     "tauri": "tauri",
     "rust:fmt": "cargo fmt --all -- --check",
     "rust:clippy": "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",

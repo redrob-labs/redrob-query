@@ -1,5 +1,7 @@
 # Redrob Query
 
+**English** · [한국어](./README.ko.md)
+
 Redrob Query is a JVM-free, AI-assisted database workspace built with Rust 1.94, Tauri 2, React 19, and TypeScript. Version 0.1 provides a guarded read-only desktop workspace for PostgreSQL, MySQL, SQLite, and MongoDB, plus an interactive browser demo backed only by deterministic in-memory sample data.
 
 The workflow is informed by DBeaver Community, but Redrob Query is a clean implementation. It includes no DBeaver source code or branding and no Eclipse RCP, OSGi, JDBC, Java, or JVM runtime.
@@ -72,7 +74,9 @@ npm run tauri build
 
 Linux requires the WebKitGTK 4.1, JavaScriptCoreGTK 4.1, libsoup 3, and librsvg development metadata expected by Tauri. Frontend production builds and all `redrob-core` checks run without those packages; only `npm run tauri build` needs them.
 
-The repository contains standard Tauri PNG, ICNS, ICO, iOS, and Android icons under `src-tauri/icons/`. It does not provide signing, notarization, an updater, or cross-platform release automation.
+`src-tauri/icons/` holds standard Tauri PNG, ICNS, ICO, iOS, and Android icons. Every PNG must be RGBA — `tauri::generate_context!` panics at compile time on anything else — and `npm run release:check` asserts it.
+
+Signed installers are produced only by the **Signed desktop release** workflow, which a pushed `vMAJOR.MINOR.PATCH` tag starts. It builds Linux x64, macOS Intel, macOS Apple Silicon, and Windows x64, signs the updater bundles, notarizes the macOS builds, and uploads everything plus `latest.json` to a **draft** GitHub Release. Publishing that draft is the release: GitHub Releases is the update channel, so `releases/latest/download/latest.json` only ever serves a version a human published. Missing credentials stop the release rather than publishing unsigned artifacts.
 
 ## Desktop local workspace data
 
@@ -126,7 +130,7 @@ Read the complete [security model and limitations](docs/SECURITY.md).
 
 - No desktop/native result mutation; browser-demo editing is sample-only and in-memory.
 - Paging is server/bridge bounded, while sorting and filtering apply only to the currently loaded page.
-- No custom CA/client-certificate UI, SSH tunnel, cloud-auth plugin, script runner, ER diagram, administration suite, data-transfer pipeline, compare/migration tooling, driver marketplace, SQL Server connector, signing, updater, or release automation.
+- No custom CA/client-certificate UI, SSH tunnel, cloud-auth plugin, script runner, ER diagram, administration suite, data-transfer pipeline, compare/migration tooling, driver marketplace, or SQL Server connector.
 - Mongo sampled metadata is a bounded hint, not authoritative collection schema inference.
 - External PostgreSQL/MySQL/Mongo and Redrob API integration require user-supplied services/credentials and are not exercised by the browser demo.
 

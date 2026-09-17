@@ -21,12 +21,24 @@ restart. Do not widen what is stored without saying what it now includes.
 
 ## Branch model
 
-One long-lived branch, `main`. Short-lived branches off it, merged by pull request.
+One long-lived branch, `main`. Short-lived branches off it, merged by pull request. That is the whole
+model — there is no `develop`, no release branch and no long-lived integration branch to keep in sync.
 
-- **`main`** is the trunk: no direct pushes, no force pushes, no deletion.
+- **`main`** is the trunk. A GitHub ruleset enforces it rather than trusting this document:
+  - no direct pushes — every change arrives as a pull request;
+  - no force pushes and no deletion of the branch;
+  - linear history, so `main` reads as a list of changes rather than a graph;
+  - required status checks must pass, and the branch must be up to date with `main` first;
+  - review threads must be resolved before merge.
 - **Working branches** are `<type>/<short-slug>`, e.g. `fix/history-restore`,
   `feat/mongo-explain`. Types: `feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `perf`.
+- **Merging is squash-only**, and the branch is deleted on merge. One pull request becomes one commit
+  on `main`, so `git log main` is the changelog. The squash commit's body is the pull request body,
+  not a concatenation of your work-in-progress messages.
 - Release tags are cut from `main`, formatted `v<major>.<minor>.<patch>`.
+
+Fork the repository, push your branch to your fork, and open the pull request from there. You do not
+need write access to contribute, and pull requests from forks run CI with no repository secrets.
 
 [redrob-code](https://github.com/redrob-labs/redrob-code) runs Git Flow with a `develop` branch.
 This one does not, so cut from `main`.
@@ -67,5 +79,20 @@ two logos.
 
 ## What CI checks
 
-There are no workflows in this repository yet, so the checks above are the ones that exist: run them
-locally before pushing. Adding the CI that runs them is welcome and is a good first contribution.
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`. It consumes no
+secrets, so a pull request from a fork gets exactly the same run as one from a branch here. Two jobs,
+and both are required before a merge:
+
+| Check | What it runs |
+| --- | --- |
+| **Release metadata, types, tests, build** | `npm run release:check`, `npm run typecheck`, `npm test`, `npm run build` |
+| **Format, clippy, tests** | `npm run rust:fmt`, `npm run rust:clippy` (`-D warnings`), `npm run rust:test` |
+
+`npm run release:check` is the one worth knowing about. It pins the things that fan out across
+several files and go wrong silently: the version in `package.json`, `Cargo.toml`, `tauri.conf.json`
+and `package-lock.json`; the Cargo `rust-version` against `rust-toolchain.toml`; the Tauri
+`productName` and `identifier`; and that every PNG under `src-tauri/icons/` is RGBA. The last one is
+not cosmetic — `tauri::generate_context!` panics at compile time on a non-RGBA icon, so a single RGB
+icon means the desktop app does not build.
+
+`npm run check` runs the whole set locally in one command.

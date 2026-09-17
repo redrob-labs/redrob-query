@@ -15,6 +15,9 @@ src-tauri/target/
 *.db-shm
 *.db-wal
 
+# Generated only inside a release runner by scripts/prepare-release-config.mjs
+src-tauri/tauri.release.conf.json
+
 # Editors and OS
 .DS_Store
 .idea/
