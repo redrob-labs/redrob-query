@@ -326,8 +326,44 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      contents: read
+      # write, not read: this job does not merely inspect the manifest, it corrects the
+      # placeholder URLs tauri-action necessarily wrote while the release was a draft.
+      contents: write
     steps:
+      - name: Check out the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # tauri-action uploads latest.json while the release is a DRAFT, and a draft asset has
+      # no public download URL yet -- GitHub only mints /releases/download/<tag>/<name> at
+      # publication -- so the manifest carries REST asset URLs
+      # (https://api.github.com/repos/.../releases/assets/<id>) instead. Those would break the
+      # updater: that endpoint serves the asset's JSON metadata unless the caller sends
+      # `Accept: application/octet-stream`, which a plain updater fetch does not. The published
+      # URL is fully determined by the tag and the asset name, so it is written now and is
+      # correct the moment the draft is published.
+      - name: Point the updater manifest at the published download URLs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          printf '%s' "$release_json" > release.json
+          manifest_id="$(printf '%s' "$release_json" | jq -r '.assets[] | select(.name == "latest.json") | .id')"
+          if [ -z "$manifest_id" ] || [ "$manifest_id" = "null" ]; then
+            echo "::error::latest.json is not attached to ${RELEASE_TAG}; nothing to rewrite"
+            exit 1
+          fi
+          gh api -H "Accept: application/octet-stream" \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${manifest_id}" > latest.json
+          node scripts/rewrite-updater-urls.mjs latest.json release.json \
+            "${GITHUB_REPOSITORY}" "${RELEASE_TAG}"
+          # Replace in place: an asset name is unique per release, so the old one must go
+          # before the corrected manifest can take its name.
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${manifest_id}"
+          gh release upload "${RELEASE_TAG}" latest.json --repo "${GITHUB_REPOSITORY}"
+
       - name: Assert the draft release carries a usable updater manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
