@@ -74,10 +74,19 @@ for (const [name, body] of sections) {
     problems.push(`${name}.repository is not https: ${JSON.stringify(body.repository)}`);
   }
 
-  if (!body.commit) {
-    problems.push(`${name}.commit is missing`);
-  } else if (!/^[0-9a-f]{40}$/.test(body.commit)) {
-    problems.push(`${name}.commit is not a full 40-character sha: ${JSON.stringify(body.commit)}`);
+  // A pin is either an exact commit or a version floor. `code` and `algorithm` need the commit:
+  // copying from a moving target is unreproducible, and so is comparing behaviour against "1.12 or
+  // later". A `library` is legitimately pinned by `minimum_version` -- we link whatever the system or
+  // registry provides at or above that floor, and no single commit describes it.
+  const exact = body.kind === "code" || body.kind === "algorithm";
+  if (body.commit) {
+    if (!/^[0-9a-f]{40}$/.test(body.commit)) {
+      problems.push(`${name}.commit is not a full 40-character sha: ${JSON.stringify(body.commit)}`);
+    }
+  } else if (exact) {
+    problems.push(`${name}.kind is ${JSON.stringify(body.kind)} so it must pin an exact commit`);
+  } else if (!body.minimum_version) {
+    problems.push(`${name} pins neither a commit nor a minimum_version`);
   }
 
   if (body.kind === undefined) {
