@@ -146,4 +146,4 @@ The provider request uses model `auto`. Browser-demo AI is local and determinist
 
 ## License and attribution
 
-Redrob Query is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for DBeaver Community workflow attribution. Third-party components remain subject to their own licenses.
+Redrob Query is licensed under the [GNU General Public License, version 3 or later](LICENSE). It was Apache-2.0 until it began incorporating Beekeeper Studio Community Edition source, which is GPL-3.0-or-later; the stronger copyleft travels with the code. See [NOTICE](NOTICE) for attribution and for the trademark reservation. Third-party components remain subject to their own licenses.

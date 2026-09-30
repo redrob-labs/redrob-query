@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "A JVM-free, AI-native desktop database workspace for PostgreSQL, MySQL, SQLite, and MongoDB.",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later",
   "author": "Redrob",
   "repository": {
     "type": "git",

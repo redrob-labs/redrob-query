@@ -1,15 +1,36 @@
 Redrob Query
 Copyright 2026 Janghoon Lee (Redrob) and contributors
 
-This JVM-free Rust/React product is informed by the architecture and user
-workflows of DBeaver Community, Copyright (c) 2010-2026 DBeaver Corp and
-contributors, licensed under the Apache License 2.0. Redrob Query is a clean
-implementation and does not distribute DBeaver source code, binaries, plugins,
-branding, Eclipse RCP/OSGi components, JDBC drivers, Java, or a JVM.
+Licensed under the GNU General Public License, version 3 or later. See LICENSE.
+
+## Why GPL and not Apache
+
+This product was Apache-2.0 until it began incorporating Beekeeper Studio
+Community Edition source code. Beekeeper Studio's LICENSE.md grants the GNU
+General Public License "either version 3 of the License, or (at your option) any
+later version", so the stronger copyleft travels with the code and this product
+carries it too.
+
+Files under any `src-commercial` directory in the Beekeeper Studio repository are
+NOT GPL and are not incorporated here. Their commercial licence forbids it.
+
+## Attribution
+
+Beekeeper Studio Community Edition, Copyright (c) 2020-present Beekeeper Studio,
+Inc, licensed under GPL-3.0-or-later. Source code is incorporated into this
+product; see docs/UPSTREAM.md for which subsystems and which upstream revision.
+
+DBeaver Community, Copyright (c) 2010-2026 DBeaver Corp and contributors, licensed
+under the Apache License 2.0. Its architecture and user workflows informed this
+product's design. No DBeaver source code, binaries, plugins, branding, Eclipse
+RCP/OSGi components, JDBC drivers, Java, or JVM is distributed here.
 
 Third-party components remain subject to their respective licenses.
 
-"Redrob" and the Redrob logo, including the mark shipped at
-src/assets/redrob-mark-512.png and the application icons under src-tauri/icons/,
-are trademarks of Redrob. The Apache License grants no rights to use them; see
-LICENSE section 6.
+## Trademarks
+
+"Redrob" and the Redrob logo, including the symbol artwork under
+src/assets/brand/ and the application icons under src-tauri/icons/, are
+trademarks of Redrob. A copyright licence is not a trademark licence: the GPL
+grants no permission to use them, and its section 7(e) expressly allows this
+reservation.
