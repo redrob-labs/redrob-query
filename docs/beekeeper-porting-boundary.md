@@ -140,6 +140,39 @@ ERD를 직접 만들면 ERD 하나만 생기고, 그것도 소스가 없어서 �
 **참조**로 읽고 대응하는 `@redrob-labs/ui` 컴포넌트로 다시 조립하는 것이 맞다. 그 판정은 실제로
 착수할 때 파일 단위로 한다.
 
+## 측정 6 — 계획서의 다섯 역할 중 셋이 제품 결정과 충돌한다
+
+2026-09-30에 확인했다. **query 0.1은 문서화된 읽기 전용 제품이다.** README:
+
+> Desktop query results are intentionally read-only. **Mutation commands are not registered with
+> Tauri**, and persistent desktop profiles are read-only.
+
+> Desktop relational reads accept **one** conservatively classified read-only statement.
+
+`TauriBridge.applyMutations`는 `'Desktop preview is read-only. Staged editing is available only in the
+browser demo.'`를 던진다. 실수가 아니라 설계다.
+
+그래서 계획서가 Beekeeper에서 가져오라고 적은 다섯 역할은 이렇게 갈린다:
+
+| 역할 | 판정 | 이유 |
+|---|---|---|
+| data editor / 쓰기 경로 | **범위 밖** | 쓰기가 없다. Tauri에 mutation 명령이 등록되지 않았다 |
+| 트랜잭션 툴바 | **범위 밖** | 시작할 트랜잭션이 없다. Vuex 26파일을 번역하면 **아무것도 못 하는 UI**가 생기고, 더 나쁘게는 제품이 쓰기를 한다고 암시한다 |
+| 다중문 실행기 | **범위 밖** | 데스크톱이 **한 문장**만 받는다. 보수적으로 읽기 전용으로 분류된 것 하나 |
+| ER 다이어그램 | **완료** | 플러그인 + 방언별 키 읽기(사이클 23~27) |
+| DDL·제약·인덱스 패널 | **범위 안, 유일하게** | 읽기다. 그리고 사이클 25~27에 이식한 키·인덱스 읽기가 **바로 이것을 먹인다** |
+
+계획서는 이 제품 결정을 확인하기 전에 쓰였다. **번역 대상 173 Vue 파일의 상당 부분이 쓰기 UI다** —
+셀 편집기, 커밋/롤백 툴바, DDL 생성 폼. 그것을 React로 옮기는 것은 노동이 아니라 **잘못된 제품을
+만드는 것**이다.
+
+남는 Vue 번역 대상은 읽기 표면뿐이다: 스키마 탐색(사이드바 27), 결과 표시, 그리고 구조 보기 —
+마지막 것은 이제 `src/components/StructurePanel.tsx`로 존재한다.
+
+**되돌릴 수 없는 일은 아니다.** query가 나중에 쓰기를 열면 그때 이 세 역할이 범위로 들어온다. 지금
+번역해 두는 것이 이득이 아닌 이유는, 쓰기 경로의 모양이 그때 결정되기 때문이다 — Beekeeper의 Vuex
+스토어 모양이 아니라 query의 Rust 계층이 정한다.
+
 ## 정리 — 계획서가 틀린 곳
 
 | 계획서 | 측정 결과 |
@@ -148,3 +181,4 @@ ERD를 직접 만들면 ERD 하나만 생기고, 그것도 소스가 없어서 �
 | 트랜잭션 툴바는 TS이므로 이식 | 36파일 중 26이 Vuex. **번역이다** |
 | ER 다이어그램을 이식 | 이식할 소스가 없다. GPL-3.0 **플러그인 패키지**이고, 플러그인 호스트를 구현하면 얻는다 |
 | Vue 1.3 MB를 React로 번역 | ERD 행에는 적용되지 않는다(iframe이므로 0줄). 나머지는 173파일 1,117 KB이고, 공통 UI 49개는 디자인 시스템 때문에 번역이 아니라 재조립이다 |
+| 다섯 역할을 모두 가져온다 | **셋이 제품 결정과 충돌한다.** query 0.1은 문서화된 읽기 전용이고 Tauri에 mutation 명령이 없다 — 쓰기 경로·트랜잭션 툴바·다중문 실행기는 제어할 대상이 없다. 측정 6 |

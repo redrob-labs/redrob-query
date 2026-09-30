@@ -14,7 +14,7 @@ import {
   type ReadContext,
   resolveIdentifier,
   type RunSql,
-} from './schemaKeys';
+} from '../schema/schemaKeys';
 import {
   KNOWN_UNIMPLEMENTED_METHODS,
   type PluginColumn,

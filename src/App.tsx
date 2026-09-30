@@ -15,6 +15,7 @@ import { Navigator } from './components/Navigator';
 import { QueryEditor } from './components/QueryEditor';
 import { ResultGrid } from './components/ResultGrid';
 import { StatusBar } from './components/StatusBar';
+import { StructurePanel } from './components/StructurePanel';
 import { PluginWorkspace } from './plugins/PluginWorkspace';
 import { WorkspaceProvider, useWorkspace } from './store/WorkspaceProvider';
 import './styles/app.css';
@@ -77,6 +78,7 @@ function Workspace() {
             </>
           )}
         </main>
+        <StructurePanel />
         {changesOpen ? <ChangesPanel /> : null}
         {aiOpen ? <AiPanel /> : null}
       </div>

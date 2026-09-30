@@ -20,14 +20,14 @@ import {
   mysqlIndexesSql,
   mysqlOutgoingKeysSql,
   mysqlPrimaryKeysSql,
-} from '../src/plugins/mysqlKeys.ts';
+} from '../src/schema/mysqlKeys.ts';
 import {
   postgresIncomingKeysSql,
   postgresIndexesSql,
   postgresOutgoingKeysSql,
   postgresPrimaryKeysSql,
-} from '../src/plugins/postgresKeys.ts';
-import { groupForeignKeyRows, groupIndexRows, groupPrimaryKeyRows } from '../src/plugins/schemaKeys.ts';
+} from '../src/schema/postgresKeys.ts';
+import { groupForeignKeyRows, groupIndexRows, groupPrimaryKeyRows } from '../src/schema/schemaKeys.ts';
 
 const psql = process.env.REDROB_PG_PSQL;
 if (!psql) {

@@ -21,7 +21,7 @@ import {
   postgresOutgoingKeysSql,
   postgresPrimaryKeysSql,
 } from './postgresKeys';
-import type { PrimaryKey, TableKey } from './protocol';
+import type { PrimaryKey, TableKey } from '../plugins/protocol';
 import { quoteIdentifier, sqlStringLiteral } from './sqlIdentifiers';
 
 /** Runs one statement and returns its rows. Supplied by the host, which owns the connection. */
