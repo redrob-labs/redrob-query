@@ -27,10 +27,16 @@ kind = "code"
 role = [
   "data editor and write path",
   "DDL, constraint and index panels",
-  "ER diagrams",
   "multi-statement runner",
   "transaction toolbar",
+  "plugin host protocol",
 ]
+# "ER diagrams" was removed from this list on 2026-09-30, and the replacement of it by "plugin host
+# protocol" is the finding rather than a rewording. Searching the whole tree at the pinned commit for
+# entity/relation/erd/diagram returns ZERO source files, and no graph-layout library is imported: the
+# feature is a separate GPL-3.0 npm PLUGIN, registered below, loaded as prebuilt HTML in an iframe.
+# Leaving the row here would have sent a future cycle looking for source that does not exist.
+# Measurement: docs/beekeeper-porting-boundary.md.
 license = "GPL-3.0-or-later for everything outside src-commercial; see boundary"
 # THE REPOSITORY IS MIXED LICENCE, and the boundary is mechanical rather than a judgement call.
 # LICENSE-COMMERCIAL.md: files in any `src-commercial` directory are under a commercial licence that
@@ -71,3 +77,33 @@ kind = "protocol"
 role = ["Redrob API protocol", "device authorization", "streaming tool calls", "model discovery"]
 # A tag and the commit it points at. A bare commit reachable only from a deleted ref does not
 # survive, and this engine deleted every tag in its repository once when it reset its version line.
+
+[beekeeper_plugin_sdk]
+repository = "https://github.com/beekeeper-studio/plugin"
+registry = "https://www.npmjs.com/package/@beekeeperstudio/plugin"
+minimum_version = "1.7.1"
+kind = "library"
+role = ["plugin-side SDK for the postMessage request/response protocol"]
+license = "MIT"
+# MIT into a GPL-3.0-or-later project is the permitted direction, and only linking is involved: this
+# is the SDK a PLUGIN uses to talk to its host, so it is pinned by minimum_version like any library
+# rather than by a commit. The host side of the same protocol is specified by 1,272 lines of public
+# reference documentation (docs/plugin_development/api-reference.md at beekeeper's pinned commit), so
+# implementing it requires no guessing and no copying.
+boundary = "Linked as a dependency. No source is copied from it."
+
+[beekeeper_er_diagram]
+repository = "https://github.com/beekeeper-studio/bks-er-diagram"
+registry = "https://www.npmjs.com/package/@beekeeperstudio/bks-er-diagram"
+minimum_version = "1.1.2"
+kind = "library"
+role = ["entity relationship diagram viewer"]
+license = "GPL-3.0"
+# GPL-3.0 into GPL-3.0-or-later is one-directional and allowed, the same direction canvas takes with
+# Graphite. This is where the ER diagram actually lives -- it is NOT in the beekeeper repository.
+#
+# The package ships manifest.json + dist/index.html, not a JS module: it is a plugin that the host
+# loads into an iframe. Its own internals are Vue plus @dagrejs/dagre, and that is invisible to us,
+# because we load the prebuilt HTML rather than its source. So the porting plan's "translate Vue to
+# React" does not apply to this feature at all -- there are zero lines to translate.
+boundary = "Loaded as a prebuilt plugin. No source is copied and its Vue internals are never touched."

@@ -141,3 +141,9 @@ const byKind = (k) =>
 console.log(`upstream pins well-formed: ${sections.size} sources`);
 console.log(`  copied source (licence binds us): ${byKind("code")}`);
 console.log(`  behaviour only (nothing copied):  ${byKind("algorithm")}`);
+// Every kind the schema accepts is reported, including the two that were previously validated and
+// then left out of the summary. That silence had a victim: registering the plugin SDK and the ER
+// diagram package made the count say "5 sources" while naming only two, which reads exactly like
+// entries that failed to register. A kind checked but not shown is a kind the next reader mistrusts.
+console.log(`  linked, not copied:               ${byKind("library")}`);
+console.log(`  spoken, not copied:               ${byKind("protocol")}`);
