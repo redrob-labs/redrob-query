@@ -83,6 +83,8 @@ interface WorkspaceState {
   navigatorOpen: boolean;
   navigatorSearchRequest: number;
   changesOpen: boolean;
+  /** Which plugin view is mounted in the main workspace, or null for the query workspace. */
+  pluginViewId: string | null;
   connectionModalOpen: boolean;
   connectionModalProfileId: string | null;
   commandPaletteOpen: boolean;
@@ -118,7 +120,7 @@ interface WorkspaceState {
   useGeneratedQuery(query: string): void;
   addConnection(profile: ConnectionProfile): Promise<void>;
   notify(tone: ToastMessage['tone'], title: string, detail?: string): void;
-  setUi(values: Partial<Pick<WorkspaceState, 'aiOpen' | 'aiSettingsOpen' | 'aiWidth' | 'navigatorOpen' | 'changesOpen' | 'connectionModalOpen' | 'connectionModalProfileId' | 'commandPaletteOpen'>>): void;
+  setUi(values: Partial<Pick<WorkspaceState, 'aiOpen' | 'aiSettingsOpen' | 'aiWidth' | 'navigatorOpen' | 'changesOpen' | 'pluginViewId' | 'connectionModalOpen' | 'connectionModalProfileId' | 'commandPaletteOpen'>>): void;
   dismissToast(id: string): void;
 }
 
@@ -180,7 +182,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
       result: null, resultRevision: 0,
       pageSize: 50, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle',
       aiMessages: [welcomeMessage(bridge.mode)], aiStatus: 'idle', aiOpen: true, aiSettingsOpen: false, aiWidth: 330,
-      navigatorOpen: true, navigatorSearchRequest: 0, changesOpen: false, connectionModalOpen: false, connectionModalProfileId: null,
+      navigatorOpen: true, navigatorSearchRequest: 0, changesOpen: false, pluginViewId: null, connectionModalOpen: false, connectionModalProfileId: null,
       commandPaletteOpen: false, toasts: [],
 
       async initialize() {
