@@ -35,9 +35,15 @@
     "check": "npm run release:check && npm run check:upstream && npm run check:upstream-paths && npm run check:design && npm test && npm run build && npm run rust:fmt && npm run rust:clippy && npm run rust:test",
     "check:design": "node scripts/check-design-system.mjs",
     "check:upstream": "node scripts/verify-upstream.mjs",
-    "check:upstream-paths": "node scripts/check-upstream-paths.mjs"
+    "check:upstream-paths": "node scripts/check-upstream-paths.mjs",
+    "plugins:install": "node scripts/install-plugin-assets.mjs",
+    "predev": "npm run plugins:install",
+    "prebuild": "npm run plugins:install",
+    "prepreview": "npm run plugins:install",
+    "pretest": "npm run plugins:install"
   },
   "dependencies": {
+    "@beekeeperstudio/bks-er-diagram": "1.1.2",
     "@monaco-editor/react": "^4.7.0",
     "@redrob-labs/ui": "^1.0.2",
     "@tanstack/react-table": "^8.21.3",

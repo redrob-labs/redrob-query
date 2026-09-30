@@ -58,15 +58,16 @@ const erDiagramManifest = {
 };
 
 /**
- * `installed` is false until the plugin's published files are placed under public/plugins/.
+ * `installed` records that the plugin's files are placed under public/plugins/ by
+ * scripts/install-plugin-assets.mjs, which runs before dev, build, preview and test.
  *
- * The package is registered and licence-cleared in docs/upstream-sources.toml; what is missing is
- * only its prebuilt dist, which is a build asset step. Flipping this flag is the whole of what makes
- * the ER diagram appear, and keeping it here rather than probing at runtime means the app never
- * shows a frame it cannot fill.
+ * A build-time fact, not a runtime probe, and that is the point: this app answers an unmatched path
+ * with its own index.html, so probing the entry URL cannot tell a present plugin from the SPA
+ * fallback. The flag and the copy script are edited together -- one names the file, the other puts it
+ * there -- so a plugin is only ever offered when something actually installed it.
  */
 const REGISTERED = [
-  { raw: erDiagramManifest, baseUrl: '/plugins/bks-er-diagram/', installed: false },
+  { raw: erDiagramManifest, baseUrl: '/plugins/bks-er-diagram/', installed: true },
 ];
 
 /**

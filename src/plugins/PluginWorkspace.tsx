@@ -7,7 +7,12 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useWorkspace } from '../store/WorkspaceProvider';
 import type { PluginHostContext } from './host';
 import { PluginView } from './PluginView';
-import { findPluginView, loadRegisteredPlugins, resolvePluginEntry } from './registry';
+import {
+  findPluginView,
+  loadRegisteredPlugins,
+  type RegisteredPlugin,
+  resolvePluginEntry,
+} from './registry';
 
 /** Per-view plugin state, kept for the session. */
 const VIEW_STATE_PREFIX = 'redrob-query.plugin-view-state.';
@@ -34,9 +39,18 @@ export interface PluginWorkspaceProps {
   /** `<pluginId>/<viewId>`, as the store holds it. */
   viewKey: string;
   onClose(): void;
+  /**
+   * Overrides the registry, for tests.
+   *
+   * The same seam `App` uses for its data bridge, and it exists for a specific reason: the
+   * not-installed path must stay tested after the ER diagram's files were actually installed.
+   * Asserting it through the real registry meant the guarantee evaporated the moment the flag
+   * flipped, which is exactly when a regression would stop being caught.
+   */
+  plugins?: RegisteredPlugin[];
 }
 
-export function PluginWorkspace({ viewKey, onClose }: PluginWorkspaceProps) {
+export function PluginWorkspace({ viewKey, onClose, plugins: injected }: PluginWorkspaceProps) {
   const bridge = useWorkspace((state) => state.bridge);
   const activeConnectionId = useWorkspace((state) => state.activeConnectionId);
   const notify = useWorkspace((state) => state.notify);
@@ -48,10 +62,11 @@ export function PluginWorkspace({ viewKey, onClose }: PluginWorkspaceProps) {
 
   const plugins = useMemo(
     () =>
+      injected ??
       loadRegisteredPlugins((plugin, reason) =>
         notify('error', 'A plugin could not be loaded', `${plugin}: ${reason}`),
       ),
-    [notify],
+    [injected, notify],
   );
   const found = useMemo(() => findPluginView(plugins, viewKey), [plugins, viewKey]);
   const resolveEntry = useMemo(() => resolvePluginEntry(plugins), [plugins]);

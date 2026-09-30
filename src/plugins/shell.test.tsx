@@ -33,23 +33,17 @@ describe('plugin view in the application shell', () => {
 
     // A plain-tab view owns the main area, so the editor and grid must be gone rather than merely
     // covered: leaving them mounted would keep a hidden result grid live behind the diagram.
-    await screen.findByTestId('plugin-workspace');
+    const view = await screen.findByTestId('plugin-workspace');
+    expect(view.dataset.state).toBe('mounted');
     expect(screen.queryByTestId('query-editor')).toBeNull();
   });
 
-  it('shows an honest empty state rather than a frame, while the plugin is not installed', async () => {
-    // Found by checking the served build rather than assuming: this app answers an unmatched path
-    // with its own index.html, so an iframe pointing at an uninstalled plugin loads a nested copy of
-    // Redrob Query and presents it AS the ER diagram. Confidently wrong beats plainly empty is the
-    // wrong way round, so no frame is mounted until the files are there.
+  it('loads the installed ER diagram from the plugin base URL, sandboxed', async () => {
     const user = await openWorkspace();
     await user.click(screen.getByTestId('toggle-plugin-view'));
-
-    const state = await screen.findByTestId('plugin-workspace');
-    expect(state.dataset.state).toBe('not-installed');
-    expect(state.textContent).toContain('ER Diagram');
-    expect(state.textContent).toContain('not installed');
-    expect(document.querySelector('iframe')).toBeNull();
+    const frame = (await screen.findByTitle(/ER Diagram/)) as HTMLIFrameElement;
+    expect(frame.getAttribute('src')).toBe('/plugins/bks-er-diagram/dist/index.html');
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
   });
 
   it('closes from the rail and brings the query workspace back', async () => {
@@ -62,13 +56,45 @@ describe('plugin view in the application shell', () => {
     expect(screen.getByTestId('query-editor')).toBeTruthy();
   });
 
-  it('offers a way back from the empty state', async () => {
+  it('closes from the view header too', async () => {
     const user = await openWorkspace();
     await user.click(screen.getByTestId('toggle-plugin-view'));
     await screen.findByTestId('plugin-workspace');
 
-    await user.click(screen.getByText('Back to the query workspace'));
+    await user.click(screen.getByLabelText('Close plugin view'));
     await waitFor(() => expect(screen.queryByTestId('plugin-workspace')).toBeNull());
-    expect(screen.getByTestId('query-editor')).toBeTruthy();
+  });
+
+  it('answers a request from the mounted frame with real schema data', async () => {
+    // The whole point of mounting: the host inside the shell reaches the application's own data.
+    const user = await openWorkspace();
+    await user.click(screen.getByTestId('toggle-plugin-view'));
+    const frame = (await screen.findByTitle(/ER Diagram/)) as HTMLIFrameElement;
+
+    const replies: unknown[] = [];
+    const target = frame.contentWindow as Window & typeof globalThis;
+    const original = target.postMessage.bind(target);
+    target.postMessage = ((message: unknown, ...rest: unknown[]) => {
+      replies.push(message);
+      return original(message as never, ...(rest as []));
+    }) as typeof target.postMessage;
+
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { id: 'shell-1', name: 'getTables', args: { schema: 'public' } },
+        source: frame.contentWindow as MessageEventSource,
+      }),
+    );
+
+    await waitFor(
+      () => {
+        const reply = replies.find((message) => (message as { id?: string }).id === 'shell-1');
+        expect(reply).toBeDefined();
+        expect((reply as { result?: unknown[] }).result).toEqual(
+          expect.arrayContaining([{ name: 'customers', schema: 'public', entityType: 'table' }]),
+        );
+      },
+      { timeout: 5000 },
+    );
   });
 });

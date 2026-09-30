@@ -30,7 +30,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pinsPath = join(root, "docs/upstream-sources.toml");
 const noticesPath = join(root, "UPSTREAM_NOTICES.md");
 
-const KINDS = ["code", "algorithm", "library", "protocol"];
+const KINDS = ["code", "algorithm", "library", "protocol", "redistributed"];
 // Inbound direction only. This product is GPL-3.0-or-later: it can absorb these, and cannot be
 // redistributed under them. A copyleft that is not GPL-compatible would make the repository
 // undistributable, which is worth failing a check over rather than discovering at release.
@@ -79,14 +79,34 @@ for (const [name, body] of sections) {
   // later". A `library` is legitimately pinned by `minimum_version` -- we link whatever the system or
   // registry provides at or above that floor, and no single commit describes it.
   const exact = body.kind === "code" || body.kind === "algorithm";
+  // A `redistributed` artefact owes a source offer, and an offer has to name ONE build. A floor like
+  // ">= 1.1.2" would leave the offer pointing at a version range, so the pin must be exact.
+  if (body.kind === "redistributed") {
+    if (!body.version) {
+      problems.push(`${name}.kind is "redistributed" so it must pin an exact version`);
+    } else if (/^[<>^~]|\s-\s|\|\|/.test(String(body.version))) {
+      problems.push(
+        `${name}.version must be one exact version, not a range: ${JSON.stringify(body.version)}`,
+      );
+    }
+    // The source offer lives in NOTICE, which is what a recipient actually receives.
+    if (!existsSync(join(root, "NOTICE"))) {
+      problems.push(`${name} is redistributed but NOTICE is missing, so no source offer is shipped`);
+    } else if (!readFileSync(join(root, "NOTICE"), "utf8").includes("Redistributed binaries")) {
+      problems.push(
+        `${name} is redistributed but NOTICE has no "Redistributed binaries" section stating the source offer`,
+      );
+    }
+  }
   if (body.commit) {
     if (!/^[0-9a-f]{40}$/.test(body.commit)) {
       problems.push(`${name}.commit is not a full 40-character sha: ${JSON.stringify(body.commit)}`);
     }
   } else if (exact) {
     problems.push(`${name}.kind is ${JSON.stringify(body.kind)} so it must pin an exact commit`);
-  } else if (!body.minimum_version) {
-    problems.push(`${name} pins neither a commit nor a minimum_version`);
+  } else if (!body.minimum_version && !body.version) {
+    // `version` is the redistributed kind's pin, `minimum_version` the library kind's floor.
+    problems.push(`${name} pins neither a commit, a version, nor a minimum_version`);
   }
 
   if (body.kind === undefined) {
@@ -146,4 +166,5 @@ console.log(`  behaviour only (nothing copied):  ${byKind("algorithm")}`);
 // diagram package made the count say "5 sources" while naming only two, which reads exactly like
 // entries that failed to register. A kind checked but not shown is a kind the next reader mistrusts.
 console.log(`  linked, not copied:               ${byKind("library")}`);
+console.log(`  BUILT FILES we ship (source offer owed): ${byKind("redistributed")}`);
 console.log(`  spoken, not copied:               ${byKind("protocol")}`);

@@ -18,7 +18,38 @@ NOT GPL and are not incorporated here. Their commercial licence forbids it.
 
 Beekeeper Studio Community Edition, Copyright (c) 2020-present Beekeeper Studio,
 Inc, licensed under GPL-3.0-or-later. Source code is incorporated into this
-product; see docs/UPSTREAM.md for which subsystems and which upstream revision.
+product; see UPSTREAM_NOTICES.md for which subsystems and which upstream revision.
+
+## Redistributed binaries
+
+Distinct from the attribution above, and the distinction is the obligation. The
+entries above concern source we read or incorporate. These are PREBUILT FILES this
+product copies into its own build output and ships, so GPL section 6 applies to
+them and a source offer is owed for each.
+
+Beekeeper Studio ER Diagram (`@beekeeperstudio/bks-er-diagram`) version 1.1.2,
+Copyright (c) Beekeeper Studio, Inc, licensed under GPL-3.0. Its prebuilt files
+are placed under `public/plugins/bks-er-diagram/` by
+`scripts/install-plugin-assets.mjs` and served in a sandboxed frame. Its own
+LICENSE travels with them. Corresponding source is the published npm package and
+its public repository at https://github.com/beekeeper-studio/bks-er-diagram, at
+exactly the version pinned in `package.json` and `docs/upstream-sources.toml`;
+`npm pack @beekeeperstudio/bks-er-diagram@1.1.2` reproduces what is shipped,
+including the source map this build excludes.
+
+Two edits are made to that package's `dist/index.html` during installation, both
+reported by the install script when it runs: an absolute `/vite.svg` reference is
+made relative so it resolves against the plugin rather than this application, and
+a small storage shim is prepended because the sandbox gives the frame an opaque
+origin where reading `localStorage` throws. No other shipped file is altered.
+
+Material Symbols Outlined, Copyright Google, licensed under the Apache License
+2.0, redistributed as the `.woff2` bundled inside that plugin's assets. It is the
+plugin's own typeface choice rather than this product's: the Redrob design system
+specifies its own icon set, and glyphs inside a third-party plugin frame are not
+this application's chrome.
+
+## Attribution, continued
 
 DBeaver Community, Copyright (c) 2010-2026 DBeaver Corp and contributors, licensed
 under the Apache License 2.0. Its architecture and user workflows informed this

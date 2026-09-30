@@ -13,6 +13,11 @@
 #              compare. No copyright obligation follows from reading, so these entries are a
 #              reproducibility record, not a licence claim.
 #   library    Linked as a dependency, not copied. Licence binds linking only.
+#   redistributed  PREBUILT FILES we copy into our own build output and ship. Stronger than `library`:
+#              GPL section 6 makes a source offer owed for each, so the pin must be an exact `version`
+#              and NOTICE must carry a "Redistributed binaries" section. verify-upstream.mjs checks
+#              both. Calling one of these a `library` is the mistake this kind exists to prevent --
+#              linking and shipping look identical in a package.json and are not the same obligation.
 #   protocol   A wire format or API we speak. Nothing is copied and nothing is linked.
 #
 # Confusing `code` with `algorithm` is the one mistake here that cannot be walked back after
@@ -95,8 +100,8 @@ boundary = "Linked as a dependency. No source is copied from it."
 [beekeeper_er_diagram]
 repository = "https://github.com/beekeeper-studio/bks-er-diagram"
 registry = "https://www.npmjs.com/package/@beekeeperstudio/bks-er-diagram"
-minimum_version = "1.1.2"
-kind = "library"
+version = "1.1.2"
+kind = "redistributed"
 role = ["entity relationship diagram viewer"]
 license = "GPL-3.0"
 # GPL-3.0 into GPL-3.0-or-later is one-directional and allowed, the same direction canvas takes with
@@ -106,4 +111,11 @@ license = "GPL-3.0"
 # loads into an iframe. Its own internals are Vue plus @dagrejs/dagre, and that is invisible to us,
 # because we load the prebuilt HTML rather than its source. So the porting plan's "translate Vue to
 # React" does not apply to this feature at all -- there are zero lines to translate.
-boundary = "Loaded as a prebuilt plugin. No source is copied and its Vue internals are never touched."
+boundary = """
+Loaded as a prebuilt plugin in a sandboxed frame. No source is copied and its Vue internals are never
+touched -- but its BUILT FILES are redistributed, which is a stronger obligation than linking and is
+recorded in NOTICE under "Redistributed binaries" with the source offer GPL section 6 requires.
+scripts/install-plugin-assets.mjs places them and makes exactly two reported edits to its index.html:
+an absolute favicon path made relative, and a storage shim the sandbox's opaque origin requires. The
+3.9 MB source map is excluded from our build; `npm pack` at the pinned version reproduces it.
+"""

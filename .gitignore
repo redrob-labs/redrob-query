@@ -4,6 +4,10 @@ target/
 
 # Build outputs
 dist/
+# Third-party plugin files, placed by scripts/install-plugin-assets.mjs from the pinned npm
+# packages. Generated, not authored -- committing 1.8 MB of build output would put a megabyte-scale
+# binary diff in history on every plugin version bump.
+public/plugins/
 src-tauri/target/
 *.log
 
