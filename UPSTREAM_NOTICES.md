@@ -71,7 +71,26 @@ than what was planned.
 
 | Subsystem | Upstream path | Our path | Landed |
 |---|---|---|---|
-| _(no copied source yet)_ | | | |
+| SQLite key and index reading | `apps/studio/src/lib/db/clients/sqlite.ts` | `src/plugins/schemaKeys.ts` | 2026-09-30 |
+| composite foreign key grouping | `apps/studio/src/lib/db/clients/postgresql.ts` | `src/plugins/schemaKeys.ts` | 2026-09-30 |
+
+Both rows are one file, and the pairing is the point: the SQLite client supplies the pragma queries,
+and the grouping treatment comes from the POSTGRES client because the SQLite one hardcodes
+`isComposite: false` and so loses every multi-column foreign key. Three deliberate departures, each
+verified against a real database rather than reasoned about:
+
+1. Composite keys are grouped, as the postgres client does it. SQLite's pragma supplies the grouping
+   key (`id`, with `seq` for column order) -- measured: a table with one composite and one simple key
+   returns three rows with two distinct ids.
+2. A constraint id is prefixed with its owning table when scanning for incoming keys, because pragma
+   ids restart at 0 per table and two tables' first keys would otherwise group into one composite.
+3. A table name is resolved against metadata the database reported before it reaches SQL. Upstream
+   escapes and interpolates; query's `QueryRequest` has no bind-parameter channel at all, so an
+   allow-list is the equivalent guarantee -- and the name arrives from untrusted plugin content.
+
+Only SQLite is ported. Beekeeper's postgresql, mysql and sqlserver clients have the same four methods
+and porting their SQL is mechanical, but no server for any of them exists on the development machine,
+and SQL that has never executed is a guess that happens to compile.
 
 **Written here, not copied — so deliberately absent from the table above.** The plugin host in
 `src/plugins/` implements the same wire protocol Beekeeper's host speaks, and it contains none of

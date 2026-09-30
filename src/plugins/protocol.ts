@@ -37,18 +37,30 @@ export interface PluginNotification {
   args?: unknown;
 }
 
-/** Foreign key, shaped as the reference documents it. */
+/**
+ * Foreign key.
+ *
+ * `fromColumn` and `toColumn` are `string | string[]`, and the reference documentation is what is
+ * wrong here rather than this type. Its getTableKeys example shows only a single-column key with
+ * `toColumn: "id"`, but the upstream postgres client returns ARRAYS for a composite key and sets
+ * isComposite -- so the documented signature is incomplete, and following it would have silently
+ * truncated every multi-column relationship to its first column. A simple key stays a plain string
+ * rather than a one-element array, because a consumer reading a simple key should not have to handle
+ * both shapes.
+ */
 export interface TableKey {
   isComposite: boolean;
   fromTable: string;
   fromSchema?: string;
-  fromColumn: string;
+  fromColumn: string | string[];
   toTable: string;
   toSchema?: string;
-  toColumn: string;
+  toColumn: string | string[];
   constraintName?: string;
   onUpdate?: string;
   onDelete?: string;
+  /** Which way this was read. Not in the upstream shape; useful when both sets are merged. */
+  direction?: 'outgoing' | 'incoming';
 }
 
 export interface PrimaryKey {
@@ -85,6 +97,11 @@ export const SUPPORTED_METHODS = [
   'getSchemas',
   'getTables',
   'getColumns',
+  'getTableKeys',
+  'getOutgoingKeys',
+  'getIncomingKeys',
+  'getPrimaryKeys',
+  'getTableIndexes',
   'getViewState',
   'setViewState',
   'setTabTitle',
@@ -93,17 +110,12 @@ export const SUPPORTED_METHODS = [
 /**
  * Methods the protocol defines that this host knows about and cannot yet answer.
  *
- * The three key methods need foreign key and index metadata that query's `MetadataNode` does not
- * carry -- it has id, parentId, name, kind, dataType and childCount, and nothing about constraints.
- * That data lives in the driver layer, which is where Beekeeper keeps it too, so filling these is
- * the same work as porting the dialect clients rather than a gap in this file.
+ * The five key and index methods left this list once schemaKeys.ts ported their SQL. They are answered
+ * for SQLite only; the other dialects are refused BY DIALECT rather than by method, with a message
+ * naming what is implemented, because "this host cannot do keys" and "this host cannot do keys on
+ * MySQL" are different facts and a plugin should be told which it has hit.
  */
 export const KNOWN_UNIMPLEMENTED_METHODS = [
-  'getTableKeys',
-  'getIncomingKeys',
-  'getOutgoingKeys',
-  'getPrimaryKeys',
-  'getTableIndexes',
   'runQuery',
   'getConnectionInfo',
   'expandTableResult',

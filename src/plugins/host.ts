@@ -4,7 +4,16 @@
 // answers them from query's own data layer. See protocol.ts for where the wire format came from.
 
 import type { DataBridge } from '../api/bridge';
-import type { MetadataNode } from '../domain/types';
+import type { DatabaseKind, MetadataNode } from '../domain/types';
+import {
+  assertDialectSupported,
+  readIncomingKeys,
+  readIndexes,
+  readOutgoingKeys,
+  readPrimaryKeys,
+  resolveIdentifier,
+  type RunSql,
+} from './schemaKeys';
 import {
   KNOWN_UNIMPLEMENTED_METHODS,
   type PluginColumn,
@@ -21,6 +30,13 @@ export interface PluginHostContext {
   bridge: DataBridge;
   /** The connection a plugin's requests are answered against. */
   activeConnectionId(): string | null;
+  /**
+   * The active connection's dialect, which decides whether keys can be read at all.
+   *
+   * Asked for separately rather than derived from the connection id, because the host must not have
+   * to re-list connections to answer one request.
+   */
+  activeDialect(): DatabaseKind | null;
   appName: string;
   appVersion: string;
   /** Persisted per-view state, so a plugin can survive a reload. */
@@ -135,6 +151,38 @@ export class PluginHost {
         return this.columns(table, typeof args.schema === 'string' ? args.schema : undefined);
       }
 
+      case 'getTableKeys': {
+        // Both directions, which is what an ER diagram wants from one table. The protocol also exposes
+        // each direction separately, and those are answered below.
+        const { table, tables } = await this.resolveTable(args);
+        const run = this.runner();
+        const [outgoing, incoming] = await Promise.all([
+          readOutgoingKeys(run, table),
+          readIncomingKeys(run, table, tables),
+        ]);
+        return [...outgoing, ...incoming];
+      }
+
+      case 'getOutgoingKeys': {
+        const { table } = await this.resolveTable(args);
+        return readOutgoingKeys(this.runner(), table);
+      }
+
+      case 'getIncomingKeys': {
+        const { table, tables } = await this.resolveTable(args);
+        return readIncomingKeys(this.runner(), table, tables);
+      }
+
+      case 'getPrimaryKeys': {
+        const { table } = await this.resolveTable(args);
+        return readPrimaryKeys(this.runner(), table);
+      }
+
+      case 'getTableIndexes': {
+        const { table } = await this.resolveTable(args);
+        return readIndexes(this.runner(), table);
+      }
+
       case 'getViewState':
         return this.context.readViewState(this.viewId);
 
@@ -162,6 +210,38 @@ export class PluginHost {
         }
         throw new Error(`unknown plugin request: ${request.name}`);
     }
+  }
+
+  /** Runs one statement on the active connection. */
+  private runner(): RunSql {
+    const connectionId = this.context.activeConnectionId();
+    if (!connectionId) throw new Error('no active connection');
+    return (sql: string) =>
+      this.context.bridge.executeQuery({ connectionId, query: sql, language: 'sql' });
+  }
+
+  /**
+   * Turn a plugin's requested table name into one the database actually reported.
+   *
+   * The security-relevant step, and the reason it lives here rather than in the SQL layer. query's
+   * `QueryRequest` carries no bind parameters -- only `query: string` -- so a table name coming from
+   * untrusted plugin content would otherwise be interpolated into SQL. Resolving it against the
+   * schema first means only a name the database itself produced can ever reach a statement.
+   */
+  private async resolveTable(
+    args: Record<string, unknown>,
+  ): Promise<{ table: string; tables: string[] }> {
+    const dialect = this.context.activeDialect();
+    if (!dialect) throw new Error('no active connection');
+    assertDialectSupported(dialect);
+
+    const requested = args.table;
+    if (typeof requested !== 'string' || requested.length === 0) {
+      throw new Error('a table name is required');
+    }
+    const schema = typeof args.schema === 'string' ? args.schema : undefined;
+    const known = (await this.tables(schema)).map((entry) => entry.name);
+    return { table: resolveIdentifier(requested, known), tables: known };
   }
 
   private async nodes(parentId?: string | null): Promise<MetadataNode[]> {

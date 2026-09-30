@@ -21,6 +21,7 @@ const manifest = readManifest({
 const context = (): PluginHostContext => ({
   bridge: new DemoBridge(),
   activeConnectionId: () => 'demo-postgres',
+  activeDialect: () => 'postgresql' as const,
   appName: 'Redrob Query',
   appVersion: '0.1.0',
   readViewState: () => null,

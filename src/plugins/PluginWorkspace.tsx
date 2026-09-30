@@ -4,6 +4,8 @@
 
 import { useCallback, useMemo, useRef } from 'react';
 
+import type { DatabaseKind } from '../domain/types';
+
 import { useWorkspace } from '../store/WorkspaceProvider';
 import type { PluginHostContext } from './host';
 import { PluginView } from './PluginView';
@@ -53,12 +55,15 @@ export interface PluginWorkspaceProps {
 export function PluginWorkspace({ viewKey, onClose, plugins: injected }: PluginWorkspaceProps) {
   const bridge = useWorkspace((state) => state.bridge);
   const activeConnectionId = useWorkspace((state) => state.activeConnectionId);
+  const connections = useWorkspace((state) => state.connections);
   const notify = useWorkspace((state) => state.notify);
 
   // The host reads the connection through a ref rather than closing over the value, so a connection
   // change does not need to remount the plugin and reload its whole page.
   const connectionRef = useRef(activeConnectionId);
   connectionRef.current = activeConnectionId;
+  const dialectRef = useRef<DatabaseKind | null>(null);
+  dialectRef.current = connections.find((profile) => profile.id === activeConnectionId)?.kind ?? null;
 
   const plugins = useMemo(
     () =>
@@ -75,6 +80,7 @@ export function PluginWorkspace({ viewKey, onClose, plugins: injected }: PluginW
     () => ({
       bridge,
       activeConnectionId: () => connectionRef.current,
+      activeDialect: () => dialectRef.current,
       appName: 'Redrob Query',
       appVersion: '0.1.0',
       readViewState,
