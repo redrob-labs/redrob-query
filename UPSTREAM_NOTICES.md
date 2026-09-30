@@ -73,6 +73,7 @@ than what was planned.
 |---|---|---|---|
 | SQLite key and index reading | `apps/studio/src/lib/db/clients/sqlite.ts` | `src/plugins/schemaKeys.ts` | 2026-09-30 |
 | composite foreign key grouping | `apps/studio/src/lib/db/clients/postgresql.ts` | `src/plugins/schemaKeys.ts` | 2026-09-30 |
+| PostgreSQL key and index reading | `apps/studio/src/lib/db/clients/postgresql.ts` | `src/plugins/postgresKeys.ts` | 2026-09-30 |
 
 Both rows are one file, and the pairing is the point: the SQLite client supplies the pragma queries,
 and the grouping treatment comes from the POSTGRES client because the SQLite one hardcodes
@@ -88,9 +89,19 @@ verified against a real database rather than reasoned about:
    escapes and interpolates; query's `QueryRequest` has no bind-parameter channel at all, so an
    allow-list is the equivalent guarantee -- and the name arrives from untrusted plugin content.
 
-Only SQLite is ported. Beekeeper's postgresql, mysql and sqlserver clients have the same four methods
-and porting their SQL is mechanical, but no server for any of them exists on the development machine,
-and SQL that has never executed is a guess that happens to compile.
+The PostgreSQL port departs once more, and it is another defect rather than a preference: upstream
+groups rows with `_.groupBy(rows, 'constraint_name')`, but PostgreSQL scopes a constraint name to its
+TABLE, so two tables may both have a foreign key called `fk_same`. getIncomingKeys scans every table
+referencing the target, so those two unrelated keys merge into one bogus composite. Measured on a live
+PostgreSQL 18.6: five rows referencing one table carried three distinct connames and FOUR distinct
+oids. The port groups by `c.oid`.
+
+SQLite and PostgreSQL are ported. MySQL and SQL Server are not: their SQL is upstream and porting it is
+mechanical, but there is no server for either on the development machine, and SQL that has never
+executed is a guess that happens to compile. PostgreSQL was in that sentence until it turned out the
+server runs fine from an extracted .deb as an unprivileged user -- so "no server here" was an
+assumption, and docs/dialect-verification.md records how to reproduce the verification and what it
+caught.
 
 **Written here, not copied — so deliberately absent from the table above.** The plugin host in
 `src/plugins/` implements the same wire protocol Beekeeper's host speaks, and it contains none of

@@ -9,7 +9,14 @@
 // are each a measured improvement rather than a preference.
 
 import type { CellValue, DatabaseKind, QueryResult } from '../domain/types';
+import {
+  postgresIncomingKeysSql,
+  postgresIndexesSql,
+  postgresOutgoingKeysSql,
+  postgresPrimaryKeysSql,
+} from './postgresKeys';
 import type { PrimaryKey, TableKey } from './protocol';
+import { quoteIdentifier, sqlStringLiteral } from './sqlIdentifiers';
 
 /** Runs one statement and returns its rows. Supplied by the host, which owns the connection. */
 export type RunSql = (sql: string) => Promise<QueryResult>;
@@ -17,16 +24,17 @@ export type RunSql = (sql: string) => Promise<QueryResult>;
 /**
  * Dialects this module can read keys for.
  *
- * SQLite alone, and the omission of the other three is discipline rather than laziness. Beekeeper has
- * working getOutgoingKeys/getIncomingKeys/listTableIndexes/getPrimaryKey for postgresql (1,901
- * lines), mysql (1,638) and sqlserver (1,793), and porting their SQL is mechanical -- but there is no
- * PostgreSQL, MySQL or SQL Server on this machine to run it against, and nine unexecuted SQL
- * statements are not a port, they are nine guesses that happen to compile.
+ * SQLite and PostgreSQL, and both are verified against a real running database rather than reasoned
+ * about. Beekeeper also has working key reading for mysql (1,638 lines) and sqlserver (1,793), and
+ * porting their SQL is mechanical -- but there is no MySQL or SQL Server on this machine, and SQL that
+ * has never executed is not ported code, it is a guess that happens to compile.
  *
- * SQLite's is verified against a real database, composite foreign keys and all, because node:sqlite
- * is built in. The others are added when there is something to check them with.
+ * PostgreSQL was briefly written off as unavailable for the same reason. It was not: the server
+ * extracts from its .deb into a private prefix and runs as an unprivileged user, needing only
+ * liburing2 alongside it. Worth recording, because "no server here" was an assumption rather than a
+ * finding.
  */
-export const KEY_READING_DIALECTS: readonly DatabaseKind[] = ['sqlite'];
+export const KEY_READING_DIALECTS: readonly DatabaseKind[] = ['sqlite', 'postgresql'];
 
 /** MongoDB has no foreign keys at all, which is a different answer from "not implemented". */
 export const DIALECTS_WITHOUT_KEYS: readonly DatabaseKind[] = ['mongodb'];
@@ -43,11 +51,10 @@ export class UnknownIdentifierError extends Error {}
  * arriving from a plugin would otherwise be interpolated into SQL. Beekeeper escapes and interpolates;
  * this refuses anything the database did not name, then quotes it as well.
  */
-export const quoteSqliteIdentifier = (identifier: string): string =>
-  `"${identifier.replace(/"/g, '""')}"`;
+export const quoteSqliteIdentifier = quoteIdentifier;
 
 /** A single-quoted SQLite string literal, for the pragma functions that take a table NAME as text. */
-export const sqliteStringLiteral = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+export const sqliteStringLiteral = sqlStringLiteral;
 
 /**
  * Accept `name` only if the database reported it.
@@ -99,10 +106,11 @@ export const groupForeignKeyRows = (
     const first = parts[0];
     const composite = parts.length > 1;
     keys.push({
-      // A SQLite foreign key has no name -- the pragma reports a numeric id -- so the id is reported
-      // as the constraint name rather than inventing one. A caller that needs a stable label should
-      // use the from/to columns, which are meaningful.
-      constraintName: constraintId,
+      // The real name when the dialect has one, the grouping id otherwise. PostgreSQL names every
+      // constraint; SQLite's pragma reports only a numeric id, so there is nothing better to use.
+      // Reporting the id unconditionally -- which an earlier version did, carried over from the SQLite
+      // path -- meant a PostgreSQL consumer looking for `fk_orders_user` found an oid instead.
+      constraintName: text(first.constraint_name) || constraintId,
       isComposite: composite,
       fromTable: text(first.from_table),
       fromSchema: text(first.from_schema),
@@ -237,20 +245,55 @@ export const assertDialectSupported = (kind: DatabaseKind): void => {
   }
 };
 
-/** Read outgoing foreign keys for one already-resolved table. */
-export const readOutgoingKeys = async (run: RunSql, table: string): Promise<TableKey[]> =>
-  groupForeignKeyRows(rowsOf(await run(sqliteOutgoingKeysSql(table))), 'outgoing');
+/** What a read needs to know about where it is reading from. */
+export interface ReadContext {
+  dialect: DatabaseKind;
+  /** Already resolved against metadata the database reported. */
+  table: string;
+  /** Required by PostgreSQL, ignored by SQLite, which has no schemas. */
+  schema?: string;
+  /**
+   * Sibling table names, used only by SQLite's incoming-key scan.
+   *
+   * PostgreSQL needs none: pg_constraint records both ends of a key, so asking about the referenced
+   * side is a single query. SQLite's pragma answers outward only, so incoming keys there mean asking
+   * every other table.
+   */
+  tables?: readonly string[];
+}
 
-/** Read incoming foreign keys by scanning the schema's other tables. */
-export const readIncomingKeys = async (
-  run: RunSql,
-  target: string,
-  tables: readonly string[],
-): Promise<TableKey[]> =>
-  groupForeignKeyRows(rowsOf(await run(sqliteIncomingKeysSql(target, tables))), 'incoming');
+const pgSchema = (context: ReadContext): string => context.schema ?? 'public';
 
-export const readPrimaryKeys = async (run: RunSql, table: string): Promise<PrimaryKey[]> =>
-  groupPrimaryKeyRows(rowsOf(await run(sqlitePrimaryKeysSql(table))));
+/** Read foreign keys declared BY the table. */
+export const readOutgoingKeys = async (run: RunSql, context: ReadContext): Promise<TableKey[]> => {
+  const sql =
+    context.dialect === 'postgresql'
+      ? postgresOutgoingKeysSql(context.table, pgSchema(context))
+      : sqliteOutgoingKeysSql(context.table);
+  return groupForeignKeyRows(rowsOf(await run(sql)), 'outgoing');
+};
 
-export const readIndexes = async (run: RunSql, table: string): Promise<TableIndex[]> =>
-  groupIndexRows(rowsOf(await run(sqliteIndexesSql(table))));
+/** Read foreign keys pointing AT the table. */
+export const readIncomingKeys = async (run: RunSql, context: ReadContext): Promise<TableKey[]> => {
+  const sql =
+    context.dialect === 'postgresql'
+      ? postgresIncomingKeysSql(context.table, pgSchema(context))
+      : sqliteIncomingKeysSql(context.table, context.tables ?? []);
+  return groupForeignKeyRows(rowsOf(await run(sql)), 'incoming');
+};
+
+export const readPrimaryKeys = async (run: RunSql, context: ReadContext): Promise<PrimaryKey[]> => {
+  const sql =
+    context.dialect === 'postgresql'
+      ? postgresPrimaryKeysSql(context.table, pgSchema(context))
+      : sqlitePrimaryKeysSql(context.table);
+  return groupPrimaryKeyRows(rowsOf(await run(sql)));
+};
+
+export const readIndexes = async (run: RunSql, context: ReadContext): Promise<TableIndex[]> => {
+  const sql =
+    context.dialect === 'postgresql'
+      ? postgresIndexesSql(context.table, pgSchema(context))
+      : sqliteIndexesSql(context.table);
+  return groupIndexRows(rowsOf(await run(sql)));
+};

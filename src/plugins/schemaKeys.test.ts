@@ -63,7 +63,7 @@ beforeEach(() => {
 
 describe('SQLite foreign keys, against a real database', () => {
   it('reads a simple outgoing key with its referential actions', async () => {
-    const keys = await readOutgoingKeys(run, 'line_items');
+    const keys = await readOutgoingKeys(run, { dialect: 'sqlite', table: 'line_items' });
     expect(keys).toHaveLength(1);
     expect(keys[0]).toMatchObject({
       isComposite: false,
@@ -80,7 +80,7 @@ describe('SQLite foreign keys, against a real database', () => {
     // keys -- an ER diagram would draw two edges where the schema has one. Its postgres client groups
     // by constraint name, which is the correct treatment, and SQLite's pragma supplies the same
     // grouping key: measured, three rows with two distinct ids.
-    const keys = await readOutgoingKeys(run, 'orders');
+    const keys = await readOutgoingKeys(run, { dialect: 'sqlite', table: 'orders' });
     expect(keys).toHaveLength(2);
 
     const composite = keys.find((key) => key.isComposite);
@@ -98,7 +98,7 @@ describe('SQLite foreign keys, against a real database', () => {
   it('reads incoming keys by scanning the other tables', async () => {
     // SQLite's pragma only answers outward, so incoming keys are a scan. users is referenced twice by
     // orders -- once simply, once compositely.
-    const keys = await readIncomingKeys(run, 'users', ['users', 'orders', 'line_items', 'ledger']);
+    const keys = await readIncomingKeys(run, { dialect: 'sqlite', table: 'users', tables: ['users', 'orders', 'line_items', 'ledger'] });
     expect(keys).toHaveLength(2);
     expect(keys.every((key) => key.toTable === 'users')).toBe(true);
     expect(keys.map((key) => key.fromTable)).toEqual(['orders', 'orders']);
@@ -108,34 +108,34 @@ describe('SQLite foreign keys, against a real database', () => {
   it('does not merge two tables first keys into one composite', async () => {
     // pragma ids restart at 0 per table, so without prefixing the constraint id by its owning table,
     // orders' key 0 and line_items' key 0 would group together as a single two-part composite.
-    const keys = await readIncomingKeys(run, 'orders', ['orders', 'line_items']);
+    const keys = await readIncomingKeys(run, { dialect: 'sqlite', table: 'orders', tables: ['orders', 'line_items'] });
     expect(keys).toHaveLength(1);
     expect(keys[0].isComposite).toBe(false);
     expect(keys[0].fromTable).toBe('line_items');
   });
 
   it('returns nothing for a table nobody references', async () => {
-    expect(await readIncomingKeys(run, 'ledger', ['users', 'orders', 'line_items', 'ledger'])).toEqual([]);
+    expect(await readIncomingKeys(run, { dialect: 'sqlite', table: 'ledger', tables: ['users', 'orders', 'line_items', 'ledger'] })).toEqual([]);
   });
 
   it('handles an empty table list without malformed SQL', async () => {
-    expect(await readIncomingKeys(run, 'users', [])).toEqual([]);
+    expect(await readIncomingKeys(run, { dialect: 'sqlite', table: 'users', tables: [] })).toEqual([]);
   });
 
   it('marks the direction it read', async () => {
-    expect((await readOutgoingKeys(run, 'line_items'))[0].direction).toBe('outgoing');
-    expect((await readIncomingKeys(run, 'orders', ['line_items']))[0].direction).toBe('incoming');
+    expect((await readOutgoingKeys(run, { dialect: 'sqlite', table: 'line_items' }))[0].direction).toBe('outgoing');
+    expect((await readIncomingKeys(run, { dialect: 'sqlite', table: 'orders', tables: ['line_items'] }))[0].direction).toBe('incoming');
   });
 });
 
 describe('SQLite primary keys', () => {
   it('reads a single-column key with its position', async () => {
-    expect(await readPrimaryKeys(run, 'users')).toEqual([{ columnName: 'id', position: 1 }]);
+    expect(await readPrimaryKeys(run, { dialect: 'sqlite', table: 'users' })).toEqual([{ columnName: 'id', position: 1 }]);
   });
 
   it('reads a compound key in declaration order', async () => {
     // pragma_table_info.pk is a 1-based position, not a boolean -- measured: a=1, b=2.
-    expect(await readPrimaryKeys(run, 'ledger')).toEqual([
+    expect(await readPrimaryKeys(run, { dialect: 'sqlite', table: 'ledger' })).toEqual([
       { columnName: 'entry_date', position: 1 },
       { columnName: 'sequence', position: 2 },
     ]);
@@ -144,7 +144,7 @@ describe('SQLite primary keys', () => {
 
 describe('SQLite indexes', () => {
   it('groups one index per name with its columns in order', async () => {
-    const indexes = await readIndexes(run, 'orders');
+    const indexes = await readIndexes(run, { dialect: 'sqlite', table: 'orders' });
     const byName = new Map(indexes.map((index) => [index.name, index]));
 
     expect(byName.get('idx_orders_user')).toMatchObject({ unique: false, columns: ['user_id'] });
@@ -156,7 +156,7 @@ describe('SQLite indexes', () => {
 
   it('reports the UNIQUE constraint index SQLite creates implicitly', async () => {
     // users has UNIQUE (tenant, id), which SQLite implements as an auto index with origin 'u'.
-    const origins = (await readIndexes(run, 'users')).map((index) => index.origin);
+    const origins = (await readIndexes(run, { dialect: 'sqlite', table: 'users' })).map((index) => index.origin);
     expect(origins).toContain('u');
   });
 });
@@ -187,19 +187,22 @@ describe('identifier safety', () => {
 });
 
 describe('dialect support', () => {
-  it('accepts the dialect it verified', () => {
-    expect(KEY_READING_DIALECTS).toEqual(['sqlite']);
+  it('accepts the dialects it verified against a real server', () => {
+    expect(KEY_READING_DIALECTS).toEqual(['sqlite', 'postgresql']);
     expect(() => assertDialectSupported('sqlite')).not.toThrow();
+    expect(() => assertDialectSupported('postgresql')).not.toThrow();
   });
 
   it('says MongoDB has no foreign keys, which is not the same as unimplemented', () => {
     expect(() => assertDialectSupported('mongodb')).toThrow(/has no foreign keys/);
   });
 
-  it('says the other SQL dialects are not implemented yet, and names what is', () => {
-    for (const kind of ['postgresql', 'mysql', 'sqlserver'] as const) {
+  it('says the dialects without a server here are not implemented, and names what is', () => {
+    // MySQL and SQL Server only. PostgreSQL left this list once a real server could be run from an
+    // extracted .deb -- the earlier "no server on this machine" was an assumption, not a finding.
+    for (const kind of ['mysql', 'sqlserver'] as const) {
       expect(() => assertDialectSupported(kind)).toThrow(/not implemented for/);
-      expect(() => assertDialectSupported(kind)).toThrow(/implemented: sqlite/);
+      expect(() => assertDialectSupported(kind)).toThrow(/implemented: sqlite, postgresql/);
     }
   });
 });
@@ -234,5 +237,42 @@ describe('row grouping, independent of any database', () => {
       'outgoing',
     );
     expect(keys[0].onUpdate).toBeUndefined();
+  });
+
+  it('reports the real constraint name when the dialect supplies one', () => {
+    // PostgreSQL names every constraint; SQLite's pragma reports only a number. An earlier version
+    // reported the grouping id unconditionally, carried over from the SQLite path, so a PostgreSQL
+    // consumer looking for `fk_orders_user` got an oid. Caught by running the SQL against a real
+    // server, not by this test -- which exists so it stays caught without one.
+    const named = groupForeignKeyRows(
+      [{ constraint_id: '16401', constraint_name: 'fk_orders_user', from_table: 'orders', from_column: 'user_id', to_table: 'users', to_column: 'id' }],
+      'outgoing',
+    );
+    expect(named[0].constraintName).toBe('fk_orders_user');
+  });
+
+  it('falls back to the grouping id when the dialect has no constraint name', () => {
+    const unnamed = groupForeignKeyRows(
+      [{ constraint_id: '0', from_table: 'orders', from_column: 'user_id', to_table: 'users', to_column: 'id' }],
+      'outgoing',
+    );
+    expect(unnamed[0].constraintName).toBe('0');
+  });
+
+  it('keeps two same-named constraints from different tables apart', () => {
+    // PostgreSQL scopes a constraint name to its TABLE, so two tables may both have `fk_same`. Upstream
+    // groups incoming keys by constraint_name and merges them into one bogus composite; measured on a
+    // live server, five rows referencing one table carried three names and four oids. Grouping is by
+    // the id, so these stay two simple keys.
+    const keys = groupForeignKeyRows(
+      [
+        { constraint_id: '100', constraint_name: 'fk_same', from_table: 'a', from_column: 'u', to_table: 'users', to_column: 'id' },
+        { constraint_id: '200', constraint_name: 'fk_same', from_table: 'b', from_column: 'u', to_table: 'users', to_column: 'id' },
+      ],
+      'incoming',
+    );
+    expect(keys).toHaveLength(2);
+    expect(keys.every((key) => !key.isComposite)).toBe(true);
+    expect(keys.map((key) => key.fromTable)).toEqual(['a', 'b']);
   });
 });

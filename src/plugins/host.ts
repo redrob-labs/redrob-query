@@ -11,6 +11,7 @@ import {
   readIndexes,
   readOutgoingKeys,
   readPrimaryKeys,
+  type ReadContext,
   resolveIdentifier,
   type RunSql,
 } from './schemaKeys';
@@ -154,34 +155,26 @@ export class PluginHost {
       case 'getTableKeys': {
         // Both directions, which is what an ER diagram wants from one table. The protocol also exposes
         // each direction separately, and those are answered below.
-        const { table, tables } = await this.resolveTable(args);
+        const context = await this.resolveTable(args);
         const run = this.runner();
         const [outgoing, incoming] = await Promise.all([
-          readOutgoingKeys(run, table),
-          readIncomingKeys(run, table, tables),
+          readOutgoingKeys(run, context),
+          readIncomingKeys(run, context),
         ]);
         return [...outgoing, ...incoming];
       }
 
-      case 'getOutgoingKeys': {
-        const { table } = await this.resolveTable(args);
-        return readOutgoingKeys(this.runner(), table);
-      }
+      case 'getOutgoingKeys':
+        return readOutgoingKeys(this.runner(), await this.resolveTable(args));
 
-      case 'getIncomingKeys': {
-        const { table, tables } = await this.resolveTable(args);
-        return readIncomingKeys(this.runner(), table, tables);
-      }
+      case 'getIncomingKeys':
+        return readIncomingKeys(this.runner(), await this.resolveTable(args));
 
-      case 'getPrimaryKeys': {
-        const { table } = await this.resolveTable(args);
-        return readPrimaryKeys(this.runner(), table);
-      }
+      case 'getPrimaryKeys':
+        return readPrimaryKeys(this.runner(), await this.resolveTable(args));
 
-      case 'getTableIndexes': {
-        const { table } = await this.resolveTable(args);
-        return readIndexes(this.runner(), table);
-      }
+      case 'getTableIndexes':
+        return readIndexes(this.runner(), await this.resolveTable(args));
 
       case 'getViewState':
         return this.context.readViewState(this.viewId);
@@ -228,9 +221,7 @@ export class PluginHost {
    * untrusted plugin content would otherwise be interpolated into SQL. Resolving it against the
    * schema first means only a name the database itself produced can ever reach a statement.
    */
-  private async resolveTable(
-    args: Record<string, unknown>,
-  ): Promise<{ table: string; tables: string[] }> {
+  private async resolveTable(args: Record<string, unknown>): Promise<ReadContext> {
     const dialect = this.context.activeDialect();
     if (!dialect) throw new Error('no active connection');
     assertDialectSupported(dialect);
@@ -241,7 +232,7 @@ export class PluginHost {
     }
     const schema = typeof args.schema === 'string' ? args.schema : undefined;
     const known = (await this.tables(schema)).map((entry) => entry.name);
-    return { table: resolveIdentifier(requested, known), tables: known };
+    return { dialect, table: resolveIdentifier(requested, known), schema, tables: known };
   }
 
   private async nodes(parentId?: string | null): Promise<MetadataNode[]> {
