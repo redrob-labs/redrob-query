@@ -38,6 +38,13 @@ jobs:
       - name: Validate release metadata
         run: npm run release:check
 
+      # This job runs the checks individually rather than `npm run check`, so a guard wired only into
+      # that script would never run where the change is reviewed. Fails on a raw colour literal, a
+      # lucide import in source or in the manifest, a brand file whose hash moved, and a font-family
+      # that is not a system token.
+      - name: Check the design system
+        run: npm run check:design
+
       - name: Typecheck
         run: npm run typecheck
 
