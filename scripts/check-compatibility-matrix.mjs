@@ -71,6 +71,7 @@ if (!rows.length) {
 
 const counts = { planned: 0, native: 0, adapter: 0, parity: 0 };
 const cited = new Set();
+const verifiedNotParity = [];
 
 for (const { line, cells } of rows) {
   const [domain, feature, authority, route, status, evidence] = cells;
@@ -84,10 +85,12 @@ for (const { line, cells } of rows) {
     );
   }
   if (status !== 'parity' && keys.length) {
-    problems.push(
-      `line ${line}: ${domain}/${feature.slice(0, 40)} is ${status} but cites ${keys.length} check(s). ` +
-        'Evidence belongs to a parity claim; promote the row or drop the citation',
-    );
+    // NOT an error, and this was a correction. The first version rejected evidence on a non-parity row,
+    // reasoning "promote it or drop the citation". redrob-recall produced the case that disproves it: its
+    // grammar harness verifies that its search grammar is bloop's REDUCED, with three constructs that are
+    // its own. That is a real, checkable relationship and it is not equivalence, so the row must stay
+    // `native` while carrying its evidence. Reported so nothing hides.
+    verifiedNotParity.push(`${domain}/${feature.slice(0, 40)}`);
   }
   for (const [prefix, key] of keys) {
     cited.add(`${prefix}:${key}`);
@@ -113,6 +116,10 @@ for (const [prefix, keys] of Object.entries(covered)) {
   const uncited = [...keys].filter((key) => !cited.has(`${prefix}:${key}`));
   console.log(`  ${prefix}: ${keys.size} checks, ${keys.size - uncited.length} cited`);
   if (uncited.length) console.log(`    no row cites: ${uncited.join(', ')}`);
+}
+
+if (verifiedNotParity.length) {
+  console.log(`  cited without claiming parity: ${verifiedNotParity.join(', ')}`);
 }
 
 if (problems.length) {
