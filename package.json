@@ -40,7 +40,8 @@
     "predev": "npm run plugins:install",
     "prebuild": "npm run plugins:install",
     "prepreview": "npm run plugins:install",
-    "pretest": "npm run plugins:install"
+    "pretest": "npm run plugins:install",
+    "check:matrix": "node scripts/check-compatibility-matrix.mjs"
   },
   "dependencies": {
     "@beekeeperstudio/bks-er-diagram": "1.1.2",

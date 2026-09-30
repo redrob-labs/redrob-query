@@ -29,6 +29,14 @@ import {
 } from '../src/schema/postgresKeys.ts';
 import { groupForeignKeyRows, groupIndexRows, groupPrimaryKeyRows } from '../src/schema/schemaKeys.ts';
 
+// The check keys docs/compatibility.md may cite, printed by `--list` for the matrix guard.
+const COVERS = ['sqlite-keys', 'postgres-keys', 'mysql-keys'];
+
+if (process.argv[2] === '--list') {
+  for (const key of COVERS) console.log(key);
+  process.exit(0);
+}
+
 const psql = process.env.REDROB_PG_PSQL;
 if (!psql) {
   console.log('REDROB_PG_PSQL is not set; nothing to verify against. See the header for usage.');

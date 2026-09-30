@@ -34,6 +34,23 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
+// The claim keys docs/compatibility.md may cite. Declared here rather than derived from the labels below,
+// because a citation must survive a reworded label -- and printed by `--list` so the matrix guard can check
+// each citation against a claim this harness actually makes, instead of trusting that it does.
+const COVERS = [
+  'sqlite-iscomposite',
+  'postgres-grouping',
+  'postgres-name-collision',
+  'mysql-on-clause',
+  'mysql-row-count',
+  'mysql-reference-actions',
+];
+
+if (process.argv[2] === '--list') {
+  for (const key of COVERS) console.log(key);
+  process.exit(0);
+}
+
 const checkout = process.env.REDROB_BEEKEEPER_CHECKOUT;
 const pinFile = 'docs/upstream-sources.toml';
 

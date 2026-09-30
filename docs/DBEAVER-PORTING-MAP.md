@@ -11,11 +11,11 @@ DBeaver is registered in `docs/upstream-sources.toml` with `kind = "algorithm"`,
 | SQL Editor | Monaco connection-owned SQL/MQL tabs, engine starters, execution, copy, formatting, shortcuts, and bounded local desktop restoration/history | No multi-statement script runner, plan UI, durable project files, or transaction toolbar |
 | Data Viewer | Typed virtualized rows, bridge/server-bounded pages, 25/50/100/250 sizes, current-page sort/filter, column visibility, messages, metrics, and visible CSV export | Desktop is read-only; sort/filter do not span unloaded pages |
 | Data Editor | Browser-demo relational cell staging, review, exact-previous-value checks, and atomic fixture apply | Sample memory only; no desktop/native editing |
-| Object properties | Expandable tables/views/columns and bounded Mongo sampled-field hints | No rich DDL, constraint/index/dependency panels, authoritative Mongo schema, or ER diagrams |
+| Object properties | Expandable tables/views/columns, bounded Mongo sampled-field hints, and a structure panel showing a table's primary key, foreign keys in both directions, and indexes | No rich DDL or dependency panel, and no authoritative Mongo schema. **An ER diagram now exists**, as a sandboxed GPL-3.0 plugin rather than a built-in view; see `docs/beekeeper-porting-boundary.md` |
 | Connection security | OS-keyring secrets, verified TLS modes, strict non-secret profiles, journaled updates, and exclusive store ownership | Public trust roots only; no custom CA/client-certificate UI |
 | Local workspace | Up to 30 query tabs (including empty drafts) and 50 nonempty successful first-page history entries in versioned desktop local storage | Plaintext query-only convenience state, user-clearable; not encrypted projects; browser demo is in-memory |
 | Tasks/data transfer | No equivalent | No scheduler, import/export pipeline beyond visible CSV, compare, sync, or migration tooling |
-| Extension ecosystem | No equivalent | Connectors are compiled Rust implementations, not Eclipse/OSGi/JDBC plugins |
+| Extension ecosystem | A plugin host for Beekeeper Studio's own plugin protocol, serving a sandboxed iframe over a measured request/response envelope | Connectors are still compiled Rust implementations, not Eclipse/OSGi/JDBC plugins. The host answers 12 methods and REFUSES the rest rather than returning an empty result |
 | AI assistance | Redrob-specific engine-aware SQL/MQL assistant | Sends prompt and optional active query to Redrob; not a DBeaver-derived feature |
 
 ## Architectural replacement
