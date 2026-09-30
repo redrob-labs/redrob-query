@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { findInkOnGroundCollisions } from "./ink-on-ground.mjs";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const failures = [];
@@ -101,6 +102,16 @@ for (const file of files.filter((f) => f.endsWith(".css"))) {
         `${rel(file)}:${i + 1} font-family ${m[1].trim()} -- use var(--font-sans) or another font token`,
       );
     });
+}
+
+// 5. Ink that cannot be read on its own ground, in either theme. See ink-on-ground.mjs for why this is
+//    a check rather than a review: a class that sits on both grounds is right in one screen and
+//    invisible in the other, and a screenshot only shows the screen you rendered.
+for (const problem of findInkOnGroundCollisions(
+  files.filter((f) => f.endsWith(".css")),
+  join(ROOT, "node_modules/@redrob-labs/ui/dist/styles/tokens.json"),
+)) {
+  failures.push(problem);
 }
 
 if (failures.length) {

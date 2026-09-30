@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Editor from '@monaco-editor/react';
+import { useGround } from '../ui/useGround';
 import { Loader } from '@redrob-labs/ui';
 import { Icon } from '../ui/Icon';
 import clsx from 'clsx';
@@ -9,7 +10,15 @@ import { IconButton } from './IconButton';
 const formatSql = (query: string) => query.replace(/\s+(FROM|WHERE|GROUP BY|ORDER BY|LIMIT|JOIN|LEFT JOIN|RIGHT JOIN)\s+/gi, '\n$1 ').replace(/,\s*/g, ',\n  ');
 const formatMql = (query: string) => { try { return JSON.stringify(JSON.parse(query), null, 2); } catch { return query; } };
 
+// Monaco takes a font STRING, not a CSS value, so it cannot be given `var(--font-mono)` directly.
+// Reading the token off the document keeps one definition: change 30-typography.md's stack and the
+// editor follows, where a stack retyped here would quietly diverge from every other monospaced surface.
+const monoFontStack = () =>
+  getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim() ||
+  'ui-monospace, monospace';
+
 export function QueryEditor() {
+  const ground = useGround();
   const tabs = useWorkspace((state) => state.tabs);
   const activeTabId = useWorkspace((state) => state.activeTabId);
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
@@ -51,7 +60,7 @@ export function QueryEditor() {
         <div className="history-menu"><IconButton label="Query history" onClick={() => setHistoryOpen((value) => !value)}><Icon name="clock" /></IconButton>{historyOpen ? <div className="history-popover" role="dialog" aria-label="Query history"><header><strong>Local query history</strong><button onClick={() => clearHistory(activeTab.connectionId)} disabled={!connectionHistory.length}><Icon name="trash" /> Clear history</button></header><p>{bridgeMode === 'demo' ? 'Successful first-page queries remain in memory for this browser session.' : 'Successful first-page queries and open query text are stored in plaintext on this device only; rows, credentials, and AI prompts are excluded.'}</p>{connectionHistory.length ? <div>{connectionHistory.map((entry) => <button key={entry.id} onClick={() => { restoreHistory(entry.id); setHistoryOpen(false); }}><strong>{entry.name}</strong><small>{new Date(entry.executedAt).toLocaleString()}</small><code>{entry.query}</code></button>)}</div> : <span className="history-empty">No successful queries yet.</span>}{bridgeMode === 'desktop' ? <footer>{localPersistenceEnabled ? <button onClick={() => clearLocalWorkspace()}><Icon name="trash" /> Stop saving & clear local data</button> : <button onClick={() => enableLocalWorkspace()}><Icon name="check" /> Enable local saving</button>}</footer> : null}</div> : null}</div>
         <div className="toolbar-spacer" /><button className="ask-ai-button" onClick={() => setUi({ aiOpen: true })}><Icon name="sparkle" /> Ask Redrob</button>
       </div>
-      <div className="editor-wrap" data-testid="query-editor"><Editor height="100%" language={activeTab.language === 'mql' ? 'javascript' : 'sql'} value={activeTab.query} theme="vs-dark" onChange={(value) => updateQuery(value ?? '')} onMount={(editor, monaco) => { editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => void runQuery()); }} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineHeight: 21, fontFamily: "'SFMono-Regular', 'Cascadia Code', Consolas, monospace", fontLigatures: true, padding: { top: 12, bottom: 12 }, scrollBeyondLastLine: false, smoothScrolling: true, renderLineHighlight: 'line', overviewRulerBorder: false, hideCursorInOverviewRuler: true, folding: true, glyphMargin: false, lineNumbersMinChars: 3, wordWrap: 'off', scrollbar: { verticalScrollbarSize: 9, horizontalScrollbarSize: 9 } }} loading={<div className="editor-loading"><Loader size="md" label="Loading the editor" /> Loading editor…</div>} /></div>
+      <div className="editor-wrap" data-testid="query-editor"><Editor height="100%" language={activeTab.language === 'mql' ? 'javascript' : 'sql'} value={activeTab.query} theme={ground === 'dark' ? 'vs-dark' : 'vs'} onChange={(value) => updateQuery(value ?? '')} onMount={(editor, monaco) => { editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => void runQuery()); }} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineHeight: 21, fontFamily: monoFontStack(), fontLigatures: true, padding: { top: 12, bottom: 12 }, scrollBeyondLastLine: false, smoothScrolling: true, renderLineHighlight: 'line', overviewRulerBorder: false, hideCursorInOverviewRuler: true, folding: true, glyphMargin: false, lineNumbersMinChars: 3, wordWrap: 'off', scrollbar: { verticalScrollbarSize: 9, horizontalScrollbarSize: 9 } }} loading={<div className="editor-loading"><Loader size="md" label="Loading the editor" /> Loading editor…</div>} /></div>
     </section>
   );
 }

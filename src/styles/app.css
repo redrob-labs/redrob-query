@@ -172,7 +172,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .result-empty p { max-width: 350px; margin: 2px 0 11px; color: var(--ink-muted); }
 .result-empty.error .empty-illustration { color: var(--status-danger); background: var(--surface-material); border-color: var(--border-strong); }
 .secondary-button, .ghost-button, .primary-button, .danger-button { min-height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--surface-base); color: var(--ink-secondary); }
-.secondary-button:hover, .ghost-button:hover { background: var(--surface-raised); color: var(--ink-on-brand); }
+.secondary-button:hover, .ghost-button:hover { background: var(--surface-raised); color: var(--ink-primary); }
 .primary-button { border-color: var(--action-primary); background: var(--action-primary); color: var(--ink-on-brand); font-weight: 650; }
 .primary-button:hover { background: var(--action-primary); }
 .danger-button { border-color: var(--status-danger); background: var(--status-danger); color: var(--ink-on-brand); font-weight: 650; }
