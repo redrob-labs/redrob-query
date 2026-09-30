@@ -1,0 +1,42 @@
+{
+  "_why": [
+    "@redrob-labs/ui deliberately ships no logo file: its Mark component takes src and darkSrc, so the",
+    "host supplies the artwork. There is no version to resolve, so these are pinned by sha256 and by",
+    "their path in the design system delivery.",
+    "",
+    "What the hash is FOR. 10-logo.md: the artwork is 'Never redrawn, restretched, recolored or",
+    "otherwise modified', and lists recoloring, substituting the gradient and adding an effect under",
+    "Incorrect usage. A brand file is the one asset here that a well-meaning edit ruins silently: nudge",
+    "the blue, flatten the gradient, re-export smaller, and every gate still passes because no build",
+    "reads a PNG's pixels. The hash is what fails.",
+    "",
+    "This repo shipped src/assets/redrob-mark-512.png, whose sha256 matched none of the five symbol",
+    "variants in the delivery and which carried no alpha channel -- a hand-made approximation. It is",
+    "deleted; both canonical grounds are vendored here instead."
+  ],
+  "package": "@redrob-labs/ui",
+  "version": "1.0.2",
+  "brand_assets": [
+    {
+      "file": "src/assets/brand/redrob-symbol.png",
+      "delivery_path": "assets/Symbol/redrob-symbol.png",
+      "ground": "white and light",
+      "sha256": "6069834a96076b2dee6d26f189f0e8b09513f15012cfad49498ac4e0a049e09e"
+    },
+    {
+      "file": "src/assets/brand/redrob-symbol-solid-white.png",
+      "delivery_path": "assets/Symbol/redrob-symbol-solid-white.png",
+      "ground": "redrob-black and dark",
+      "sha256": "78a8224f61f44a6bc91a2f3479b4082e63b30e1dc898d55a4c6118d15191daba"
+    }
+  ],
+  "product_band": {
+    "_why": [
+      "20-color.md closes the product spectrum at seven and states there is no eighth product colour.",
+      "10-logo.md's way out is that a new product ships as a feature of the product whose band it fits.",
+      "Query is a developer tool over a database, which is Code's band."
+    ],
+    "band": "code",
+    "tile": "#02A252"
+  }
+}

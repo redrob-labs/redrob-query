@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react';
-import { Check, KeyRound, ShieldCheck, X } from 'lucide-react';
+import { Loader } from '@redrob-labs/ui';
+import { Icon } from '../ui/Icon';
 import { useWorkspace } from '../store/WorkspaceProvider';
 
 type Feedback = { tone: 'success' | 'error'; message: string } | null;
@@ -98,11 +99,11 @@ export function AiSettingsModal() {
         }}
       >
         <div className="modal-heading">
-          <div><span className="modal-icon"><KeyRound size={18} /></span><div><h2 id="ai-settings-title">Redrob settings</h2><p>Connect Redrob AI securely</p></div></div>
-          <button type="button" aria-label="Close Redrob settings" data-testid="close-ai-settings" onClick={close} disabled={saving}><X size={18} /></button>
+          <div><span className="modal-icon"><Icon name="key" size={24} /></span><div><h2 id="ai-settings-title">Redrob settings</h2><p>Connect Redrob AI securely</p></div></div>
+          <button type="button" aria-label="Close Redrob settings" data-testid="close-ai-settings" onClick={close} disabled={saving}><Icon name="close" size={24} /></button>
         </div>
         <form id="ai-settings-form" className="ai-settings-form" onSubmit={save}>
-          <div className="ai-settings-security"><ShieldCheck size={20} /><div><strong>Secure by design</strong><p id="ai-settings-description">In the desktop app, your Redrob key is stored in the operating system keychain. It is never added to queries or AI messages.</p></div></div>
+          <div className="ai-settings-security"><Icon name="shieldCheck" size={24} /><div><strong>Secure by design</strong><p id="ai-settings-description">In the desktop app, your Redrob key is stored in the operating system keychain. It is never added to queries or AI messages.</p></div></div>
           <label htmlFor="redrob-api-key">Redrob API key</label>
           <input
             ref={inputRef}
@@ -121,9 +122,9 @@ export function AiSettingsModal() {
           />
           <small id="ai-key-hint">Paste a key beginning with <code>rrk_</code>. Saving replaces the key currently stored by the desktop app.</small>
           <div className="demo-credential-notice"><strong>{bridge.mode === 'demo' ? 'Browser demo' : 'AI request context'}</strong><span>{bridge.mode === 'demo' ? 'This demo does not send credentials or store your key. AI responses are generated locally.' : 'Desktop AI sends your prompt and optional active query to Redrob. Database result rows and credentials are not automatically attached. The desktop renderer trusts user-entered content in those fields, so anything you include there is sent.'}</span></div>
-          {feedback ? <div id="ai-key-feedback" className={`ai-settings-feedback ${feedback.tone}`} role={feedback.tone === 'error' ? 'alert' : 'status'} data-testid="ai-settings-feedback">{feedback.tone === 'success' ? <Check size={15} /> : <X size={15} />}{feedback.message}</div> : <span id="ai-key-feedback" />}
+          {feedback ? <div id="ai-key-feedback" className={`ai-settings-feedback ${feedback.tone}`} role={feedback.tone === 'error' ? 'alert' : 'status'} data-testid="ai-settings-feedback">{feedback.tone === 'success' ? <Icon name="check" /> : <Icon name="close" />}{feedback.message}</div> : <span id="ai-key-feedback" />}
         </form>
-        <div className="modal-footer ai-settings-footer"><span><i /> {bridge.mode === 'demo' ? 'Demo mode · no credential network request' : 'Desktop mode · OS keychain storage'}</span><div><button type="button" className="ghost-button" onClick={close} disabled={saving}>Cancel</button><button type="submit" form="ai-settings-form" className="primary-button" data-testid="save-ai-key" disabled={saving}>{saving ? <span className="spinner small" /> : null}{saving ? 'Saving…' : 'Save key'}</button></div></div>
+        <div className="modal-footer ai-settings-footer"><span><i /> {bridge.mode === 'demo' ? 'Demo mode · no credential network request' : 'Desktop mode · OS keychain storage'}</span><div><button type="button" className="ghost-button" onClick={close} disabled={saving}>Cancel</button><button type="submit" form="ai-settings-form" className="primary-button" data-testid="save-ai-key" disabled={saving}>{saving ? <Loader size="sm" label="Saving the key" /> : null}{saving ? 'Saving…' : 'Save key'}</button></div></div>
       </section>
     </div>
   );

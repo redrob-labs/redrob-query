@@ -1,0 +1,11 @@
+/* Stands in for @redrob-labs/ui/styles.css under vitest only. See the alias in vite.config.ts for why.
+ *
+ * Deliberately empty. It is NOT empty because the rules do not matter -- they do at runtime -- but
+ * because jsdom has to match every one of them on every getComputedStyle call userEvent makes, and the
+ * delivery's component sheet is 4,867 rules.
+ *
+ * The hazard this creates, stated so it is not discovered later: a test CANNOT assert anything that the
+ * delivery's own CSS decides. `Mark` is the example -- it puts both grounds in the DOM and system.css
+ * hides one -- so in a test both images are present. Assert on the app's own rules, and verify anything
+ * the delivery styles in a browser instead.
+ */
