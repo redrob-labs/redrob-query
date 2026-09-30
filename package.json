@@ -32,16 +32,17 @@
     "rust:fmt": "cargo fmt --all -- --check",
     "rust:clippy": "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
     "rust:test": "cargo test --locked --workspace --all-features",
-    "check": "npm run release:check && npm test && npm run build && npm run rust:fmt && npm run rust:clippy && npm run rust:test"
+    "check": "npm run release:check && npm run check:design && npm test && npm run build && npm run rust:fmt && npm run rust:clippy && npm run rust:test",
+    "check:design": "node scripts/check-design-system.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@redrob-labs/ui": "^1.0.2",
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.13.12",
     "@tauri-apps/api": "^2.8.0",
     "clsx": "^2.1.1",
     "framer-motion": "^12.23.12",
-    "lucide-react": "^0.544.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "zustand": "^5.0.8"
