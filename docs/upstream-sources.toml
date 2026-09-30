@@ -40,8 +40,12 @@ license = "GPL-3.0-or-later for everything outside src-commercial; see boundary"
 #   GPLv3        1,817 files  284.1 MB   portable
 #
 # 55 of 1,872 is small enough that no reviewer would reliably notice one slipping through, which is
-# exactly why it is a machine check and not a note. scripts/check-upstream-paths.mjs rejects a copied
-# path matching src-commercial; nothing may be taken from this upstream before that guard exists.
+# exactly why it is a machine check and not a note. scripts/check-upstream-paths.mjs IS IN PLACE and
+# runs in `npm run check`: it hashes every tracked file against the 54 commercial blob SHA-1 values
+# in docs/beekeeper-commercial-fingerprint.json, refuses a commercial path in the provenance table or
+# the git index, and asserts /upstream/ is ignored. Only hashes are recorded -- they come from the
+# upstream git TREE listing, which publishes a blob's hash without its bytes, so no commercial
+# content was fetched or stored. Reverse-verified six ways including a renamed paste.
 #
 # LICENSE.md grants "either version 3 of the License, or (at your option) any later version", so
 # `-or-later`. That is why this product relicensed from Apache-2.0 rather than to GPL-3.0-only.

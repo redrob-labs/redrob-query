@@ -36,3 +36,11 @@ semantic-review/
 coverage/
 test-results/
 playwright-report/
+
+# A Beekeeper Studio checkout to port from. 284 MB of GPLv3 source plus 544 KB
+# under a COMMERCIAL licence that forbids use here, so the whole tree stays out of
+# git and scripts/check-upstream-paths.mjs asserts that separately. Written with a
+# trailing slash to match a DIRECTORY, and the probe in that script uses the
+# trailing slash too -- `git check-ignore upstream` misses it when the directory
+# does not exist locally, which is exactly the state a fresh clone is in.
+/upstream/
