@@ -74,6 +74,7 @@ than what was planned.
 | SQLite key and index reading | `apps/studio/src/lib/db/clients/sqlite.ts` | `src/plugins/schemaKeys.ts` | 2026-09-30 |
 | composite foreign key grouping | `apps/studio/src/lib/db/clients/postgresql.ts` | `src/plugins/schemaKeys.ts` | 2026-09-30 |
 | PostgreSQL key and index reading | `apps/studio/src/lib/db/clients/postgresql.ts` | `src/plugins/postgresKeys.ts` | 2026-09-30 |
+| MySQL key and index reading | `apps/studio/src/lib/db/clients/mysql.ts` | `src/plugins/mysqlKeys.ts` | 2026-09-30 |
 
 Both rows are one file, and the pairing is the point: the SQLite client supplies the pragma queries,
 and the grouping treatment comes from the POSTGRES client because the SQLite one hardcodes
@@ -96,12 +97,28 @@ referencing the target, so those two unrelated keys merge into one bogus composi
 PostgreSQL 18.6: five rows referencing one table carried three distinct connames and FOUR distinct
 oids. The port groups by `c.oid`.
 
-SQLite and PostgreSQL are ported. MySQL and SQL Server are not: their SQL is upstream and porting it is
-mechanical, but there is no server for either on the development machine, and SQL that has never
-executed is a guess that happens to compile. PostgreSQL was in that sentence until it turned out the
-server runs fine from an extracted .deb as an unprivileged user -- so "no server here" was an
-assumption, and docs/dialect-verification.md records how to reproduce the verification and what it
-caught.
+The MySQL port fixes a third defect, and it is the least subtle of them: upstream's getIncomingKeys
+joins `information_schema.referential_constraints` with NO ON CLAUSE. Its getOutgoingKeys has one and
+the incoming copy lost it, which makes the query a cartesian product -- measured on a live MariaDB
+11.8.6, asking which keys reference one table returned SIXTEEN rows where FOUR are correct, each
+carrying referential actions pulled from an unrelated constraint. The port states the join condition
+once and both directions use it.
+
+Notably, MySQL does NOT share the constraint-name defect. PostgreSQL scopes a constraint name to its
+table, so grouping by name merges unrelated keys; InnoDB scopes it to the database and refuses a
+duplicate outright with errno 121, measured. The same upstream pattern is a bug in one dialect and
+sound in the other, which is why each was checked rather than assumed from the first.
+
+SQLite, PostgreSQL and MySQL are ported. SQL Server is not, and that one was verified rather than
+assumed: there is no mssql-server package in the distribution's index at all, only client bindings, and
+no container runtime. Both earlier "no server on this machine" claims turned out to be assumptions --
+each server runs from an extracted .deb as an unprivileged user -- so docs/dialect-verification.md
+records how to reproduce every verification and which bugs each one caught.
+
+MySQL was verified against MariaDB rather than MySQL proper. The queries touch only
+information_schema.key_column_usage, referential_constraints and statistics, which both implement to
+the same shape, and upstream's own client covers both under one name; the distinction is recorded
+rather than glossed.
 
 **Written here, not copied — so deliberately absent from the table above.** The plugin host in
 `src/plugins/` implements the same wire protocol Beekeeper's host speaks, and it contains none of

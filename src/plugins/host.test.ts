@@ -24,7 +24,7 @@ const mount = (overrides: Partial<PluginHostContext> = {}) => {
   const context: PluginHostContext = {
     bridge: new DemoBridge(),
     activeConnectionId: () => 'demo-postgres',
-    activeDialect: () => 'mysql' as const,
+    activeDialect: () => 'sqlserver' as const,
     appName: 'Redrob Query',
     appVersion: '0.1.0',
     readViewState: (viewId) => state.get(viewId) ?? null,
@@ -134,13 +134,13 @@ describe('PluginHost', () => {
     // keys draws every table unconnected and reports nothing wrong -- it looks like a schema with no
     // relationships. A rejection is visible; an empty array is a lie.
     //
-    // The refusal is BY DIALECT rather than by method: the SQL is ported and verified for SQLite and
-    // PostgreSQL, and this fixture's connection is MySQL. "Keys are unsupported" and "keys are
-    // unsupported on MySQL" are different facts, and the message says which one was hit.
+    // The refusal is BY DIALECT rather than by method: the SQL is ported and verified for SQLite,
+    // PostgreSQL and MySQL, and this fixture's connection is SQL Server. "Keys are unsupported" and
+    // "keys are unsupported on SQL Server" are different facts, and the message says which was hit.
     for (const method of ['getTableKeys', 'getIncomingKeys', 'getOutgoingKeys', 'getPrimaryKeys', 'getTableIndexes']) {
       const reply = await ask(fixture, method, { table: 'orders', schema: 'public' });
-      expect(reply?.error, method).toContain('not implemented for mysql');
-      expect(reply?.error, method).toContain('implemented: sqlite, postgresql');
+      expect(reply?.error, method).toContain('not implemented for sqlserver');
+      expect(reply?.error, method).toContain('implemented: sqlite, postgresql, mysql');
       expect(reply, method).not.toHaveProperty('result');
     }
   });

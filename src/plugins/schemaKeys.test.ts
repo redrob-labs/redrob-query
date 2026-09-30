@@ -188,22 +188,23 @@ describe('identifier safety', () => {
 
 describe('dialect support', () => {
   it('accepts the dialects it verified against a real server', () => {
-    expect(KEY_READING_DIALECTS).toEqual(['sqlite', 'postgresql']);
-    expect(() => assertDialectSupported('sqlite')).not.toThrow();
-    expect(() => assertDialectSupported('postgresql')).not.toThrow();
+    expect(KEY_READING_DIALECTS).toEqual(['sqlite', 'postgresql', 'mysql']);
+    for (const kind of ['sqlite', 'postgresql', 'mysql'] as const) {
+      expect(() => assertDialectSupported(kind)).not.toThrow();
+    }
   });
 
   it('says MongoDB has no foreign keys, which is not the same as unimplemented', () => {
     expect(() => assertDialectSupported('mongodb')).toThrow(/has no foreign keys/);
   });
 
-  it('says the dialects without a server here are not implemented, and names what is', () => {
-    // MySQL and SQL Server only. PostgreSQL left this list once a real server could be run from an
-    // extracted .deb -- the earlier "no server on this machine" was an assumption, not a finding.
-    for (const kind of ['mysql', 'sqlserver'] as const) {
-      expect(() => assertDialectSupported(kind)).toThrow(/not implemented for/);
-      expect(() => assertDialectSupported(kind)).toThrow(/implemented: sqlite, postgresql/);
-    }
+  it('says SQL Server is not implemented, and names what is', () => {
+    // SQL Server alone now. PostgreSQL and then MySQL each left this list once a real server turned out
+    // to run from an extracted .deb -- both "no server on this machine" claims were assumptions. This
+    // one was checked rather than assumed: there is no mssql-server package in the distribution's index
+    // at all, only client bindings, and no container runtime.
+    expect(() => assertDialectSupported('sqlserver')).toThrow(/not implemented for sqlserver/);
+    expect(() => assertDialectSupported('sqlserver')).toThrow(/implemented: sqlite, postgresql, mysql/);
   });
 });
 

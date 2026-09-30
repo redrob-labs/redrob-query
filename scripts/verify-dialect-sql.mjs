@@ -16,6 +16,12 @@
 import { execFileSync } from 'node:child_process';
 
 import {
+  mysqlIncomingKeysSql,
+  mysqlIndexesSql,
+  mysqlOutgoingKeysSql,
+  mysqlPrimaryKeysSql,
+} from '../src/plugins/mysqlKeys.ts';
+import {
   postgresIncomingKeysSql,
   postgresIndexesSql,
   postgresOutgoingKeysSql,
@@ -104,6 +110,77 @@ check('a two-column unique index, in order', byName.get('idx_orders_tenant_owner
 ]);
 check('and it is reported unique', byName.get('idx_orders_tenant_owner')?.unique, true);
 check('the primary key index is marked pk', byName.get('orders_pkey')?.origin, 'pk');
+
+console.log(failures === 0 ? '\nPostgreSQL checks passed' : `\n${failures} PostgreSQL check(s) failed`);
+
+// ---------------------------------------------------------------------------------------------------
+// MySQL / MariaDB
+// ---------------------------------------------------------------------------------------------------
+
+const mysqlCli = process.env.REDROB_MYSQL_CLI;
+if (!mysqlCli) {
+  console.log('\nREDROB_MYSQL_CLI is not set; skipping the MySQL checks.');
+  process.exit(failures === 0 ? 0 : 1);
+}
+const mysqlArgs = (process.env.REDROB_MYSQL_ARGS ?? '').split(/\s+/).filter(Boolean);
+
+/** Run one statement and return rows as objects, via the client's tab-separated batch output. */
+const runMysql = (sql) => {
+  const out = execFileSync(
+    mysqlCli,
+    [...mysqlArgs, '-B', '-e', `USE shop; ${sql.trim().replace(/;$/, '')}`],
+    { encoding: 'utf8', env: process.env },
+  );
+  const lines = out.trim().split('\n').filter(Boolean);
+  if (lines.length < 2) return [];
+  const header = lines[0].split('\t');
+  return lines.slice(1).map((line) => {
+    const cells = line.split('\t');
+    return Object.fromEntries(header.map((name, index) => [name, cells[index] === 'NULL' ? null : cells[index]]));
+  });
+};
+
+console.log('\n--- MySQL / MariaDB');
+
+const myOutgoing = groupForeignKeyRows(runMysql(mysqlOutgoingKeysSql('orders', 'shop')), 'outgoing');
+check('orders declares two foreign keys', myOutgoing.length, 2);
+const myComposite = myOutgoing.find((key) => key.isComposite);
+check('the two-column key survives as one composite', myComposite?.fromColumn, ['tenant', 'owner_id']);
+check('with its ON DELETE action', myComposite?.onDelete, 'RESTRICT');
+const mySimple = myOutgoing.find((key) => !key.isComposite);
+check('a single-column key stays a string', mySimple?.fromColumn, 'user_id');
+check('its ON DELETE is decoded', mySimple?.onDelete, 'CASCADE');
+check('its ON UPDATE is decoded', mySimple?.onUpdate, 'SET NULL');
+check('and it is named, not numbered', mySimple?.constraintName, 'fk_orders_user');
+
+// The defect this port fixes: upstream's getIncomingKeys joins referential_constraints with no ON
+// clause. Measured on this fixture, that returns 16 rows where 4 are correct.
+const myIncoming = groupForeignKeyRows(runMysql(mysqlIncomingKeysSql('users', 'shop')), 'incoming');
+check('three distinct keys reference users', myIncoming.length, 3);
+check('exactly one of them is composite', myIncoming.filter((key) => key.isComposite).length, 1);
+check(
+  'no row is duplicated by a missing join condition',
+  myIncoming.map((key) => key.constraintName).sort(),
+  ['fk_orders_tenant_owner', 'fk_orders_user', 'fk_same'],
+);
+
+check('a single-column primary key', groupPrimaryKeyRows(runMysql(mysqlPrimaryKeysSql('users', 'shop'))), [
+  { columnName: 'id', position: 1 },
+]);
+check('a compound primary key in order', groupPrimaryKeyRows(runMysql(mysqlPrimaryKeysSql('ledger', 'shop'))), [
+  { columnName: 'entry_date', position: 1 },
+  { columnName: 'sequence', position: 2 },
+]);
+
+const myIndexes = groupIndexRows(runMysql(mysqlIndexesSql('orders', 'shop')));
+const myByName = new Map(myIndexes.map((index) => [index.name, index]));
+check('a single-column index', myByName.get('idx_orders_user')?.columns, ['user_id']);
+check('a two-column unique index, in order', myByName.get('idx_orders_tenant_owner')?.columns, [
+  'tenant',
+  'owner_id',
+]);
+check('and it is reported unique', myByName.get('idx_orders_tenant_owner')?.unique, true);
+check('the primary key index is marked pk', myByName.get('PRIMARY')?.origin, 'pk');
 
 console.log(failures === 0 ? '\nall dialect SQL checks passed' : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

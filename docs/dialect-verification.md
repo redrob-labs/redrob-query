@@ -93,22 +93,61 @@ CREATE TABLE shop.b (id integer PRIMARY KEY,
   u integer CONSTRAINT fk_same REFERENCES shop.users (id));
 ```
 
+## MariaDB 서버를 root 없이 띄우기
+
+PostgreSQL과 같은 방법이고, 없는 라이브러리는 **하나도 없다**.
+
+```bash
+cd "$SCRATCH"
+apt-get download mariadb-server mariadb-server-core mariadb-client \
+                 mariadb-client-core mariadb-common
+for d in mariadb-common mariadb-client-core mariadb-client \
+         mariadb-server-core mariadb-server; do
+  dpkg-deb -x ${d}_*.deb dbprefix/
+done
+
+export LD_LIBRARY_PATH="$SCRATCH/dbprefix/usr/lib/x86_64-linux-gnu"
+export PATH="$SCRATCH/dbprefix/usr/bin:$SCRATCH/dbprefix/usr/sbin:$PATH"
+
+mariadb-install-db --basedir="$SCRATCH/dbprefix/usr" \
+  --datadir="$SCRATCH/mysqldata" --user="$(id -un)" \
+  --auth-root-authentication-method=normal
+
+nohup mariadbd --datadir="$SCRATCH/mysqldata" \
+  --basedir="$SCRATCH/dbprefix/usr" --socket="$SCRATCH/mysql.sock" \
+  --port=3309 --bind-address=127.0.0.1 --pid-file="$SCRATCH/mysql.pid" \
+  --skip-grant-tables > "$SCRATCH/mysql.log" 2>&1 &
+```
+
+### MySQL 검증이 잡은 것
+
+| 검사 | 무엇이 틀렸나 |
+|---|---|
+| 들어오는 키의 행 수 | 상류의 `getIncomingKeys`가 `information_schema.referential_constraints`를 **ON 절 없이** 조인한다. 같은 파일의 `getOutgoingKeys`에는 ON 절이 있고 들어오는 쪽 복사본이 그것을 잃었다 — **카테시안 곱**이다. 실측: 한 표를 참조하는 키를 물으면 **16행**이 오고 그중 4행이 옳으며, 나머지는 **무관한 제약의 `on_update`·`on_delete`를 달고 온다** |
+| 제약 이름으로 묶기 | **여기서는 상류가 맞다.** PostgreSQL은 제약 이름을 표 단위로 한정해서 이름으로 묶으면 병합되지만, InnoDB는 데이터베이스 단위로 한정하고 중복을 **errno 121로 거부한다**(실측: 두 번째 `fk_same` CREATE가 실패). 같은 패턴이 한 방언에서 버그이고 다른 방언에서 옳다 |
+
+**MySQL 본체가 아니라 MariaDB로 검증했다.** 쿼리가 쓰는 것은
+`information_schema.key_column_usage`·`referential_constraints`·`statistics`뿐이고 둘이 같은 형태로
+구현하며, 상류 클라이언트도 둘을 한 이름으로 다룬다. 그래도 **가리지 않고 적는다.**
+
+## 아직 검증하지 못한 방언
+
+SQL Server 하나. 그리고 이것은 **가정이 아니라 확인했다**: 배포판 패키지 색인에 `mssql-server`가
+**아예 없고**(클라이언트 바인딩만 있다) `docker`도 `podman`도 없다. 앞의 두 번(PostgreSQL, MySQL)은
+"서버가 없다"가 가정이었고 둘 다 `.deb`에서 돌았으므로, 이번에는 먼저 찾아보고 적었다.
+
+SQLite는 `node:sqlite`가 내장이므로 별도 서버가 필요 없고 `npm test` 안에서 실제 데이터베이스로
+검증된다.
+
 ## 실행
 
 ```bash
 export REDROB_PG_PSQL="$PGBIN/psql"
 export REDROB_PG_ARGS="-h 127.0.0.1 -p 5439 -U redrob -d postgres"
+export REDROB_MYSQL_CLI="$SCRATCH/dbprefix/usr/bin/mariadb"
+export REDROB_MYSQL_ARGS="--socket=$SCRATCH/mysql.sock"
 npx tsx scripts/verify-dialect-sql.mjs
 ```
 
-17개 검사가 모두 `ok`여야 한다. `REDROB_PG_PSQL`이 없으면 스크립트는 **검증할 대상이 없다고 말하고
-종료한다** — 조용히 통과하지 않는다.
-
-## 아직 검증하지 못한 방언
-
-MySQL과 SQL Server. 상류에 SQL이 있고 이식은 기계적이지만 **이 기계에 서버가 없다.** PostgreSQL이
-그랬듯 이것도 가정일 수 있으므로, MariaDB 패키지가 같은 방법으로 도는지 확인하는 것이 다음 단계다.
-그때까지 `KEY_READING_DIALECTS`에 넣지 않고, 호스트는 방언 단위로 거부한다.
-
-SQLite는 `node:sqlite`가 내장이므로 별도 서버가 필요 없고 `npm test` 안에서 실제 데이터베이스로
-검증된다.
+**33개 검사**가 모두 `ok`여야 한다(PostgreSQL 17 + MySQL 16). 환경변수가 없는 방언은 **건너뛴다고
+말하고** 조용히 통과하지 않는다.

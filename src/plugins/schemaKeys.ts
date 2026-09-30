@@ -10,6 +10,12 @@
 
 import type { CellValue, DatabaseKind, QueryResult } from '../domain/types';
 import {
+  mysqlIncomingKeysSql,
+  mysqlIndexesSql,
+  mysqlOutgoingKeysSql,
+  mysqlPrimaryKeysSql,
+} from './mysqlKeys';
+import {
   postgresIncomingKeysSql,
   postgresIndexesSql,
   postgresOutgoingKeysSql,
@@ -24,17 +30,16 @@ export type RunSql = (sql: string) => Promise<QueryResult>;
 /**
  * Dialects this module can read keys for.
  *
- * SQLite and PostgreSQL, and both are verified against a real running database rather than reasoned
- * about. Beekeeper also has working key reading for mysql (1,638 lines) and sqlserver (1,793), and
- * porting their SQL is mechanical -- but there is no MySQL or SQL Server on this machine, and SQL that
- * has never executed is not ported code, it is a guess that happens to compile.
+ * SQLite, PostgreSQL and MySQL/MariaDB, each verified against a real running server rather than
+ * reasoned about. SQL Server is not here: unlike the other three it is not in the distribution's
+ * package index at all, so there is nothing to extract, and SQL that has never executed is not ported
+ * code but a guess that happens to compile.
  *
- * PostgreSQL was briefly written off as unavailable for the same reason. It was not: the server
- * extracts from its .deb into a private prefix and runs as an unprivileged user, needing only
- * liburing2 alongside it. Worth recording, because "no server here" was an assumption rather than a
- * finding.
+ * Both PostgreSQL and MySQL were written off as unavailable in earlier cycles, and both were wrong:
+ * the servers extract from their .deb packages into a private prefix and run as an unprivileged user.
+ * That is worth recording twice, because "no server here" was an assumption each time.
  */
-export const KEY_READING_DIALECTS: readonly DatabaseKind[] = ['sqlite', 'postgresql'];
+export const KEY_READING_DIALECTS: readonly DatabaseKind[] = ['sqlite', 'postgresql', 'mysql'];
 
 /** MongoDB has no foreign keys at all, which is a different answer from "not implemented". */
 export const DIALECTS_WITHOUT_KEYS: readonly DatabaseKind[] = ['mongodb'];
@@ -269,7 +274,9 @@ export const readOutgoingKeys = async (run: RunSql, context: ReadContext): Promi
   const sql =
     context.dialect === 'postgresql'
       ? postgresOutgoingKeysSql(context.table, pgSchema(context))
-      : sqliteOutgoingKeysSql(context.table);
+      : context.dialect === 'mysql'
+        ? mysqlOutgoingKeysSql(context.table, context.schema)
+        : sqliteOutgoingKeysSql(context.table);
   return groupForeignKeyRows(rowsOf(await run(sql)), 'outgoing');
 };
 
@@ -278,7 +285,9 @@ export const readIncomingKeys = async (run: RunSql, context: ReadContext): Promi
   const sql =
     context.dialect === 'postgresql'
       ? postgresIncomingKeysSql(context.table, pgSchema(context))
-      : sqliteIncomingKeysSql(context.table, context.tables ?? []);
+      : context.dialect === 'mysql'
+        ? mysqlIncomingKeysSql(context.table, context.schema)
+        : sqliteIncomingKeysSql(context.table, context.tables ?? []);
   return groupForeignKeyRows(rowsOf(await run(sql)), 'incoming');
 };
 
@@ -286,7 +295,9 @@ export const readPrimaryKeys = async (run: RunSql, context: ReadContext): Promis
   const sql =
     context.dialect === 'postgresql'
       ? postgresPrimaryKeysSql(context.table, pgSchema(context))
-      : sqlitePrimaryKeysSql(context.table);
+      : context.dialect === 'mysql'
+        ? mysqlPrimaryKeysSql(context.table, context.schema)
+        : sqlitePrimaryKeysSql(context.table);
   return groupPrimaryKeyRows(rowsOf(await run(sql)));
 };
 
@@ -294,6 +305,8 @@ export const readIndexes = async (run: RunSql, context: ReadContext): Promise<Ta
   const sql =
     context.dialect === 'postgresql'
       ? postgresIndexesSql(context.table, pgSchema(context))
-      : sqliteIndexesSql(context.table);
+      : context.dialect === 'mysql'
+        ? mysqlIndexesSql(context.table, context.schema)
+        : sqliteIndexesSql(context.table);
   return groupIndexRows(rowsOf(await run(sql)));
 };

@@ -59,7 +59,7 @@ const sqliteBridge = (): DataBridge => {
   } as unknown as DataBridge;
 };
 
-const mount = (dialect: 'sqlite' | 'mysql' = 'sqlite') => {
+const mount = (dialect: 'sqlite' | 'sqlserver' = 'sqlite') => {
   const posted: Array<{ id?: string; result?: unknown; error?: string }> = [];
   const pluginWindow = { postMessage: (message: unknown) => posted.push(message as never) };
   const frame = { contentWindow: pluginWindow } as unknown as HTMLIFrameElement;
@@ -158,10 +158,10 @@ describe('plugin host reading keys from a real database', () => {
   });
 
   it('refuses the same request on a dialect whose SQL is not ported', async () => {
-    // MySQL, not PostgreSQL: postgres SQL is ported and verified now, so asserting it is refused
-    // would be asserting the previous cycle's state.
-    const reply = await ask(mount('mysql'), 'getOutgoingKeys', { table: 'orders' });
-    expect(reply?.error).toContain('not implemented for mysql');
+    // SQL Server: PostgreSQL and MySQL are both ported and verified now, so naming either here would
+    // be asserting an earlier cycle's state.
+    const reply = await ask(mount('sqlserver'), 'getOutgoingKeys', { table: 'orders' });
+    expect(reply?.error).toContain('not implemented for sqlserver');
     expect(reply).not.toHaveProperty('result');
   });
 });
