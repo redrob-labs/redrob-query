@@ -2,6 +2,8 @@
 
 Redrob Query is a clean Rust/React implementation informed by DBeaver Community workflows. It is not a source port, fork, plugin host, or compatibility layer, and it contains no DBeaver code or branding.
 
+DBeaver is registered in `docs/upstream-sources.toml` with `kind = "algorithm"`, which is what makes the paragraph above a checked claim rather than an assurance: `scripts/verify-upstream.mjs` refuses to let an `algorithm` source acquire an attribution entry, and only a `code` source may have one. Apache-2.0 would permit copying DBeaver; we do not, because it is Java and reusing it would mean bundling a JVM against this product's own identity line. The one `code` upstream is Beekeeper Studio, recorded in `UPSTREAM_NOTICES.md`.
+
 | DBeaver Community workflow | Redrob Query 0.1 equivalent | Current boundary |
 |---|---|---|
 | Database Navigator | Profile picker plus lazy searchable database/schema/table/view/column tree; activity-rail search focuses the filter | Lightweight metadata; Mongo fields are merged from at most 25 sampled documents |

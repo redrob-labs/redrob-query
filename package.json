@@ -32,8 +32,9 @@
     "rust:fmt": "cargo fmt --all -- --check",
     "rust:clippy": "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
     "rust:test": "cargo test --locked --workspace --all-features",
-    "check": "npm run release:check && npm run check:design && npm test && npm run build && npm run rust:fmt && npm run rust:clippy && npm run rust:test",
-    "check:design": "node scripts/check-design-system.mjs"
+    "check": "npm run release:check && npm run check:upstream && npm run check:design && npm test && npm run build && npm run rust:fmt && npm run rust:clippy && npm run rust:test",
+    "check:design": "node scripts/check-design-system.mjs",
+    "check:upstream": "node scripts/verify-upstream.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
