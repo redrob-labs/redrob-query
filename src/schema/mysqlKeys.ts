@@ -12,15 +12,28 @@
 import { sqlStringLiteral } from './sqlIdentifiers';
 
 /**
- * THE DEFECT THIS PORT FIXES, and it is not subtle.
+ * A CORRECTION. This file previously claimed a defect that does not exist.
  *
- * Upstream's getIncomingKeys joins `information_schema.referential_constraints` with NO ON CLAUSE --
- * its getOutgoingKeys has one and the incoming copy simply lost it. That is a cartesian product:
- * measured on a live server, asking which keys reference one table returned SIXTEEN rows where FOUR
- * are correct, each carrying on_update and on_delete values pulled from an unrelated constraint.
+ * It said upstream's getIncomingKeys joined `information_schema.referential_constraints` with NO ON
+ * CLAUSE, making it a cartesian product, and that a live server returned sixteen rows where four were
+ * correct. That was WRONG, and the error was mine, not the upstream's.
  *
- * So the join condition is stated once here and used by both directions, which is also why the two
- * queries share a body rather than being copied -- copying is how the original lost it.
+ * Re-checked at the pinned commit by `scripts/verify-upstream-sql.mjs`, which no longer retypes the
+ * upstream query but READS IT OUT OF THE PINNED FILE: the ON clause is present
+ * (`on cu.constraint_name = rc.constraint_name and cu.constraint_schema = rc.constraint_schema`), and
+ * run verbatim against MariaDB 11.8.6 it returns FOUR rows, all four correct, every referential action
+ * belonging to its own constraint. All four joins of that table in the non-commercial tree carry an ON
+ * clause. The missing clause was introduced while copying the query into a shell, and the result was
+ * then attributed to the upstream.
+ *
+ * The join condition is still stated once here and used by both directions. That remains worth doing --
+ * a shared fragment cannot drift between two call sites -- but it is a practice, not a defect fix, and
+ * the distinction matters because a false defect in an upstream's record is a claim about someone
+ * else's work.
+ *
+ * The MySQL findings that DO stand are below and in docs/dialect-verification.md: constraint ids
+ * restart per table, and InnoDB refuses a duplicate FK name with errno 121, which is why MySQL does not
+ * share the PostgreSQL grouping defect.
  */
 const KEY_JOIN = `
   FROM information_schema.key_column_usage cu

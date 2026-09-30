@@ -97,12 +97,20 @@ referencing the target, so those two unrelated keys merge into one bogus composi
 PostgreSQL 18.6: five rows referencing one table carried three distinct connames and FOUR distinct
 oids. The port groups by `c.oid`.
 
-The MySQL port fixes a third defect, and it is the least subtle of them: upstream's getIncomingKeys
-joins `information_schema.referential_constraints` with NO ON CLAUSE. Its getOutgoingKeys has one and
-the incoming copy lost it, which makes the query a cartesian product -- measured on a live MariaDB
-11.8.6, asking which keys reference one table returned SIXTEEN rows where FOUR are correct, each
-carrying referential actions pulled from an unrelated constraint. The port states the join condition
-once and both directions use it.
+A CORRECTION, recorded rather than quietly deleted. This file previously reported a third MySQL defect:
+that upstream's getIncomingKeys joined `information_schema.referential_constraints` with NO ON CLAUSE,
+making it a cartesian product, and that a live MariaDB returned sixteen rows where four were correct.
+**That claim was wrong, and the error was ours.** Re-checked at the pinned commit by
+`scripts/verify-upstream-sql.mjs`, which reads the query out of the pinned file instead of retyping it:
+the ON clause is present, the query returns FOUR rows, all four correct, and every referential action
+belongs to its own constraint. All four joins of that table in the non-commercial tree carry an ON
+clause. The missing clause was introduced while copying the query into a shell, and the result was then
+attributed to the upstream.
+
+The port still states the join condition once and uses it in both directions. That is a practice worth
+keeping -- a shared fragment cannot drift between call sites -- but it is not a defect fix, and a false
+defect in an upstream's record is a claim about someone else's work, so it is corrected here in the same
+place it was asserted.
 
 Notably, MySQL does NOT share the constraint-name defect. PostgreSQL scopes a constraint name to its
 table, so grouping by name merges unrelated keys; InnoDB scopes it to the database and refuses a
