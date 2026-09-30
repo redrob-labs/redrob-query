@@ -71,7 +71,17 @@ than what was planned.
 
 | Subsystem | Upstream path | Our path | Landed |
 |---|---|---|---|
-| _(none yet)_ | | | |
+| _(no copied source yet)_ | | | |
+
+**Written here, not copied — so deliberately absent from the table above.** The plugin host in
+`src/plugins/` implements the same wire protocol Beekeeper's host speaks, and it contains none of
+their source. The envelope was measured from `@beekeeperstudio/plugin` 1.7.1 (MIT), which is the
+plugin half of the conversation and is linked rather than copied, and the method semantics come from
+1,272 lines of public reference documentation. A protocol is a specification, not a copyrightable
+body of code, and the registry records it as such: `kind = "protocol"` for what we speak,
+`kind = "library"` for the two packages we link.
+
+When source is genuinely copied from Beekeeper it goes in the table above, with its pinned commit.
 
 ## Trademarks
 
