@@ -338,7 +338,22 @@ jobs:
           WIN_CSC_CERTIFICATE_THUMBPRINT: ${{ env.WIN_CSC_CERTIFICATE_THUMBPRINT }}
         run: |
           $ErrorActionPreference = "Stop"
-          $bundlePath = Join-Path $PWD "src-tauri/target/$env:RELEASE_TARGET/release/bundle"
+          # Ask cargo where its target directory is. This step used to hardcode
+          # "src-tauri/target/...", which is where a Tauri app's build output lives when src-tauri
+          # holds its own crate -- but this repository's Cargo WORKSPACE root is the repository
+          # root, with src-tauri as a member, so the bundles land in <root>/target. The step is
+          # Windows-only, so the wrong path was never exercised until the first Windows leg, which
+          # failed with "Cannot find path ... src-tauri\target\...\bundle because it does not
+          # exist" while the bundles sat in <root>\target\...\bundle\{msi,nsis}.
+          #
+          # Derived rather than corrected in place: moving src-tauri in or out of the workspace
+          # would silently break a second hardcoded path the same way.
+          $targetRoot = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).target_directory
+          if (-not $targetRoot) { throw "cargo metadata did not report a target_directory" }
+          $bundlePath = Join-Path $targetRoot "$env:RELEASE_TARGET/release/bundle"
+          if (-not (Test-Path -LiteralPath $bundlePath)) {
+            throw "No bundle directory at $bundlePath (cargo target_directory: $targetRoot)"
+          }
           $installers = @(Get-ChildItem -LiteralPath $bundlePath -Recurse -File | Where-Object { $_.Extension -in '.exe', '.msi' })
           if (-not ($installers.Extension -contains '.exe') -or -not ($installers.Extension -contains '.msi')) {
             throw "Expected both signed NSIS and MSI installers"
