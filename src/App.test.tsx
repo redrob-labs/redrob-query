@@ -200,7 +200,7 @@ describe('Redrob Query workspace', () => {
 
   it('opens the command palette with the keyboard shortcut', async () => {
     const user = await renderWorkspace();
-    await user.keyboard('{Meta>}k{/Meta}');
+    await user.keyboard('{Control>}k{/Control}');
     expect(screen.getByTestId('command-palette')).toBeInTheDocument();
     expect(screen.getByText('Run current query')).toBeInTheDocument();
   });

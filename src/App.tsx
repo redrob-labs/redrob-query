@@ -19,6 +19,7 @@ import { StructurePanel } from './components/StructurePanel';
 import { PluginWorkspace } from './plugins/PluginWorkspace';
 import { WorkspaceProvider, useWorkspace } from './store/WorkspaceProvider';
 import './styles/app.css';
+import { formatShortcut, matches } from './shortcuts';
 
 function Workspace() {
   const initialize = useWorkspace((state) => state.initialize);
@@ -39,10 +40,10 @@ function Workspace() {
   useEffect(() => { void initialize(); }, [initialize]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setUi({ commandPaletteOpen: true }); }
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); void runQuery(); }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); newTab(); }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'i') { event.preventDefault(); setUi({ aiOpen: true }); }
+      if (matches(event, 'palette')) { event.preventDefault(); setUi({ commandPaletteOpen: true }); }
+      if (matches(event, 'runQuery')) { event.preventDefault(); void runQuery(); }
+      if (matches(event, 'newQuery')) { event.preventDefault(); newTab(); }
+      if (matches(event, 'askAi')) { event.preventDefault(); setUi({ aiOpen: true }); }
       if (event.key === 'Escape') setUi({ connectionModalOpen: false, connectionModalProfileId: null, commandPaletteOpen: false, aiSettingsOpen: false });
     };
     window.addEventListener('keydown', onKeyDown);
@@ -61,7 +62,7 @@ function Workspace() {
       <div className="workspace-titlebar">
         <span className="window-dots"><i /><i /><i /></span>
         {bridgeMode === 'demo' ? <div className="demo-banner" data-testid="demo-banner"><span>DEMO</span> Interactive browser workspace · sample data only</div> : <div className="desktop-banner" data-testid="desktop-banner">Redrob Query · Read-only desktop workspace</div>}
-        <button className="command-trigger" onClick={() => setUi({ commandPaletteOpen: true })}>Search or run a command <kbd>⌘ K</kbd></button>
+        <button className="command-trigger" onClick={() => setUi({ commandPaletteOpen: true })}>Search or run a command <kbd>{formatShortcut('palette')}</kbd></button>
         <span className="titlebar-mode">{bridgeMode === 'demo' ? 'No server connection' : activeConnectionId ? 'Desktop workspace' : 'No connection selected'}</span>
       </div>
       {startupWarnings.length ? <div className="startup-warnings" role="alert" data-testid="startup-warnings"><Icon name="info" /><div><strong>Some local workspace items need attention</strong>{startupWarnings.map((warning, index) => <span key={`${index}-${warning}`}>{warning}</span>)}</div></div> : null}
