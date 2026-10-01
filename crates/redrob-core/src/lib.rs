@@ -1,6 +1,7 @@
 //! Database and AI runtime for Redrob Query.
 
 pub mod ai;
+pub mod cell_edits;
 pub mod connection;
 pub mod error;
 pub mod models;

@@ -1,5 +1,6 @@
 //! Profile registry, live connection lifecycle, and database operations.
 
+use crate::cell_edits::{CellEditSet, build_row_updates};
 use std::{collections::HashMap, net::IpAddr, path::PathBuf, sync::Arc, time::Instant};
 
 use base64::Engine as _;
@@ -976,6 +977,100 @@ impl DataService {
             }
         };
         let rows_affected = timeout(std::time::Duration::from_secs(30), mutation)
+            .await
+            .map_err(|_| DataError::Timeout(std::time::Duration::from_secs(30)))??;
+        Ok(MutationResult {
+            rows_affected,
+            elapsed_ms: elapsed_ms(started),
+            committed: true,
+        })
+    }
+
+    /// Apply a reviewed set of staged cell edits in one transaction. Each row's UPDATE must change
+    /// exactly one row; otherwise nothing is committed. See `cell_edits` for how the statements are built.
+    pub async fn apply_cell_edits(
+        &self,
+        connection_id: Uuid,
+        edits: CellEditSet,
+    ) -> Result<MutationResult> {
+        self.ensure_persistent_storage_available()?;
+        let profile = self.profile(connection_id).await?;
+        if profile.read_only {
+            return Err(DataError::ReadOnlyViolation(
+                "profile is read-only".to_owned(),
+            ));
+        }
+        let updates = build_row_updates(profile.kind, &edits)?;
+        let active = self.ensure_connected(connection_id).await?;
+        let started = Instant::now();
+        let work = async {
+            match active {
+                ActiveConnection::PostgreSql(pool) => {
+                    let mut tx = pool
+                        .begin()
+                        .await
+                        .map_err(|e| DataError::database("transaction start failed", &e))?;
+                    for update in &updates {
+                        let done = bind_postgres_query(
+                            sqlx::query(AssertSqlSafe(update.statement.as_str())),
+                            &update.parameters,
+                        )?
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| DataError::database("cell edit failed", &e))?;
+                        exactly_one_row(done.rows_affected())?;
+                    }
+                    tx.commit()
+                        .await
+                        .map_err(|e| DataError::database("transaction commit failed", &e))?;
+                }
+                ActiveConnection::MySql(pool) => {
+                    let mut tx = pool
+                        .begin()
+                        .await
+                        .map_err(|e| DataError::database("transaction start failed", &e))?;
+                    for update in &updates {
+                        let done = bind_mysql_query(
+                            sqlx::query(AssertSqlSafe(update.statement.as_str())),
+                            &update.parameters,
+                        )?
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| DataError::database("cell edit failed", &e))?;
+                        exactly_one_row(done.rows_affected())?;
+                    }
+                    tx.commit()
+                        .await
+                        .map_err(|e| DataError::database("transaction commit failed", &e))?;
+                }
+                ActiveConnection::SQLite(pool) => {
+                    let mut tx = pool
+                        .begin()
+                        .await
+                        .map_err(|e| DataError::database("transaction start failed", &e))?;
+                    for update in &updates {
+                        let done = bind_sqlite_query(
+                            sqlx::query(AssertSqlSafe(update.statement.as_str())),
+                            &update.parameters,
+                        )?
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| DataError::database("cell edit failed", &e))?;
+                        exactly_one_row(done.rows_affected())?;
+                    }
+                    tx.commit()
+                        .await
+                        .map_err(|e| DataError::database("transaction commit failed", &e))?;
+                }
+                ActiveConnection::Mongo { .. } => {
+                    return Err(DataError::Unsupported("cell edits are SQL-only".to_owned()));
+                }
+            }
+            Ok::<u64, DataError>(updates.len() as u64)
+        };
+        // Dropping an uncommitted sqlx transaction rolls it back, so every early return above undoes
+        // the rows already updated.
+        let rows_affected = timeout(std::time::Duration::from_secs(30), work)
             .await
             .map_err(|_| DataError::Timeout(std::time::Duration::from_secs(30)))??;
         Ok(MutationResult {
@@ -2398,6 +2493,18 @@ async fn apply_sqlite_mutation(pool: &SqlitePool, plan: &MutationPlan) -> Result
     Ok(result.rows_affected())
 }
 
+/// A cell edit is keyed by the primary key, so it must hit exactly one row: none means the row is
+/// gone, more means the key was not unique. Either way the reviewed change set does not hold.
+fn exactly_one_row(affected: u64) -> Result<()> {
+    if affected == 1 {
+        Ok(())
+    } else {
+        Err(DataError::InvalidQuery(format!(
+            "a staged change matched {affected} rows instead of one; nothing was saved"
+        )))
+    }
+}
+
 const MAX_MONGO_QUERY_BYTES: usize = 1024 * 1024;
 const MAX_MONGO_PIPELINE_STAGES: usize = 100;
 const MAX_MONGO_STAGE_BYTES: usize = 64 * 1024;
@@ -3607,6 +3714,82 @@ mod tests {
         assert_eq!(
             sqlite_text_value("UUID", id.to_string()).unwrap(),
             DataValue::Uuid(id)
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_cell_edits_commit_together_or_not_at_all() {
+        use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
+        let service = service();
+        for statement in [
+            "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT, plan TEXT)",
+            "INSERT INTO people VALUES (1, 'Ann', 'Free'), (2, 'Bo', 'Free')",
+        ] {
+            let plan = service
+                .prepare_mutation(DEMO_PROFILE_ID, statement.to_owned(), Vec::new())
+                .await
+                .unwrap();
+            service.apply_mutation(plan).await.unwrap();
+        }
+        let text = |v: &str| DataValue::Text(v.to_owned());
+        let edit = |key: &str, column: &str, value: &str| RowEdit {
+            key: DataValue::Integer(key.to_owned()),
+            changes: vec![CellChange {
+                column: column.to_owned(),
+                value: text(value),
+            }],
+        };
+        let set = |rows| CellEditSet {
+            schema: None,
+            table: "people".to_owned(),
+            primary_key: "id".to_owned(),
+            rows,
+        };
+        let names = || async {
+            service
+                .execute_query(query("SELECT name, plan FROM people ORDER BY id"))
+                .await
+                .unwrap()
+                .rows
+        };
+
+        let applied = service
+            .apply_cell_edits(
+                DEMO_PROFILE_ID,
+                set(vec![
+                    edit("1", "name", "Ann Lee"),
+                    edit("2", "plan", "Scale"),
+                ]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(applied.rows_affected, 2);
+        assert_eq!(
+            names().await,
+            vec![
+                vec![text("Ann Lee"), text("Free")],
+                vec![text("Bo"), text("Scale")]
+            ]
+        );
+
+        // Row 9 does not exist: the change to row 1 that ran first must be rolled back with it.
+        let error = service
+            .apply_cell_edits(
+                DEMO_PROFILE_ID,
+                set(vec![
+                    edit("1", "name", "Changed"),
+                    edit("9", "name", "Ghost"),
+                ]),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("matched 0 rows"), "{error}");
+        assert_eq!(
+            names().await,
+            vec![
+                vec![text("Ann Lee"), text("Free")],
+                vec![text("Bo"), text("Scale")]
+            ]
         );
     }
 
