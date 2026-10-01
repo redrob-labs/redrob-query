@@ -1,6 +1,6 @@
 //! Profile registry, live connection lifecycle, and database operations.
 
-use crate::cell_edits::{CellEditSet, build_row_updates};
+use crate::cell_edits::{CellEditSet, RowUpdate, build_row_updates};
 use std::{collections::HashMap, net::IpAddr, path::PathBuf, sync::Arc, time::Instant};
 
 use base64::Engine as _;
@@ -1006,62 +1006,10 @@ impl DataService {
         let work = async {
             match active {
                 ActiveConnection::PostgreSql(pool) => {
-                    let mut tx = pool
-                        .begin()
-                        .await
-                        .map_err(|e| DataError::database("transaction start failed", &e))?;
-                    for update in &updates {
-                        let done = bind_postgres_query(
-                            sqlx::query(AssertSqlSafe(update.statement.as_str())),
-                            &update.parameters,
-                        )?
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(|e| DataError::database("cell edit failed", &e))?;
-                        exactly_one_row(done.rows_affected())?;
-                    }
-                    tx.commit()
-                        .await
-                        .map_err(|e| DataError::database("transaction commit failed", &e))?;
+                    apply_postgres_row_updates(&pool, &updates).await?;
                 }
-                ActiveConnection::MySql(pool) => {
-                    let mut tx = pool
-                        .begin()
-                        .await
-                        .map_err(|e| DataError::database("transaction start failed", &e))?;
-                    for update in &updates {
-                        let done = bind_mysql_query(
-                            sqlx::query(AssertSqlSafe(update.statement.as_str())),
-                            &update.parameters,
-                        )?
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(|e| DataError::database("cell edit failed", &e))?;
-                        exactly_one_row(done.rows_affected())?;
-                    }
-                    tx.commit()
-                        .await
-                        .map_err(|e| DataError::database("transaction commit failed", &e))?;
-                }
-                ActiveConnection::SQLite(pool) => {
-                    let mut tx = pool
-                        .begin()
-                        .await
-                        .map_err(|e| DataError::database("transaction start failed", &e))?;
-                    for update in &updates {
-                        let done = bind_sqlite_query(
-                            sqlx::query(AssertSqlSafe(update.statement.as_str())),
-                            &update.parameters,
-                        )?
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(|e| DataError::database("cell edit failed", &e))?;
-                        exactly_one_row(done.rows_affected())?;
-                    }
-                    tx.commit()
-                        .await
-                        .map_err(|e| DataError::database("transaction commit failed", &e))?;
-                }
+                ActiveConnection::MySql(pool) => apply_mysql_row_updates(&pool, &updates).await?,
+                ActiveConnection::SQLite(pool) => apply_sqlite_row_updates(&pool, &updates).await?,
                 ActiveConnection::Mongo { .. } => {
                     return Err(DataError::Unsupported("cell edits are SQL-only".to_owned()));
                 }
@@ -2493,6 +2441,69 @@ async fn apply_sqlite_mutation(pool: &SqlitePool, plan: &MutationPlan) -> Result
     Ok(result.rows_affected())
 }
 
+/// Every row update in one transaction; returning early drops the transaction, which rolls it back.
+async fn apply_postgres_row_updates(pool: &PgPool, updates: &[RowUpdate]) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| DataError::database("transaction start failed", &e))?;
+    for update in updates {
+        let done = bind_postgres_query(
+            sqlx::query(AssertSqlSafe(update.statement.as_str())),
+            &update.parameters,
+        )?
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| DataError::database("cell edit failed", &e))?;
+        exactly_one_row(done.rows_affected())?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| DataError::database("transaction commit failed", &e))
+}
+
+/// Every row update in one transaction; returning early drops the transaction, which rolls it back.
+async fn apply_mysql_row_updates(pool: &MySqlPool, updates: &[RowUpdate]) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| DataError::database("transaction start failed", &e))?;
+    for update in updates {
+        let done = bind_mysql_query(
+            sqlx::query(AssertSqlSafe(update.statement.as_str())),
+            &update.parameters,
+        )?
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| DataError::database("cell edit failed", &e))?;
+        exactly_one_row(done.rows_affected())?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| DataError::database("transaction commit failed", &e))
+}
+
+/// Every row update in one transaction; returning early drops the transaction, which rolls it back.
+async fn apply_sqlite_row_updates(pool: &SqlitePool, updates: &[RowUpdate]) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| DataError::database("transaction start failed", &e))?;
+    for update in updates {
+        let done = bind_sqlite_query(
+            sqlx::query(AssertSqlSafe(update.statement.as_str())),
+            &update.parameters,
+        )?
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| DataError::database("cell edit failed", &e))?;
+        exactly_one_row(done.rows_affected())?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| DataError::database("transaction commit failed", &e))
+}
+
 /// A cell edit is keyed by the primary key, so it must hit exactly one row: none means the row is
 /// gone, more means the key was not unique. Either way the reviewed change set does not hold.
 fn exactly_one_row(affected: u64) -> Result<()> {
@@ -3613,6 +3624,158 @@ mod tests {
                 "query should be rejected before reaching MySQL: {sql}"
             );
         }
+    }
+
+    // The live cell-edit tests use a TEMPORARY table on a one-connection pool: it belongs to that
+    // session and disappears with it, so a run leaves nothing behind on the shared server.
+    #[tokio::test]
+    #[ignore = "requires REDROB_TEST_POSTGRES_URL and an external PostgreSQL server"]
+    async fn live_postgres_cell_edits_commit_together_or_not_at_all() {
+        use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
+        let url = std::env::var("REDROB_TEST_POSTGRES_URL")
+            .expect("REDROB_TEST_POSTGRES_URL must be set when this ignored live test is run");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        for statement in [
+            "CREATE TEMPORARY TABLE redrob_cell_edits (id INTEGER PRIMARY KEY, name VARCHAR(40), plan VARCHAR(40))",
+            "INSERT INTO redrob_cell_edits VALUES (1, 'Ann', 'Free'), (2, 'Bo', 'Free')",
+        ] {
+            sqlx::query(AssertSqlSafe(statement))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let text = |v: &str| DataValue::Text(v.to_owned());
+        let edit = |key: &str, column: &str, value: &str| RowEdit {
+            key: DataValue::Integer(key.to_owned()),
+            changes: vec![CellChange {
+                column: column.to_owned(),
+                value: text(value),
+            }],
+        };
+        let set = |rows| CellEditSet {
+            schema: None,
+            table: "redrob_cell_edits".to_owned(),
+            primary_key: "id".to_owned(),
+            rows,
+        };
+        let read = || async {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT name, plan FROM redrob_cell_edits ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let owned = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+
+        let updates = build_row_updates(
+            DatabaseKind::PostgreSql,
+            &set(vec![
+                edit("1", "name", "Ann Lee"),
+                edit("2", "plan", "Scale"),
+            ]),
+        )
+        .unwrap();
+        apply_postgres_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
+
+        let updates = build_row_updates(
+            DatabaseKind::PostgreSql,
+            &set(vec![
+                edit("1", "name", "Changed"),
+                edit("9", "name", "Ghost"),
+            ]),
+        )
+        .unwrap();
+        let error = apply_postgres_row_updates(&pool, &updates)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("matched 0 rows"), "{error}");
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
+    async fn live_mysql_cell_edits_commit_together_or_not_at_all() {
+        use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
+        let url = std::env::var("REDROB_TEST_MYSQL_URL")
+            .expect("REDROB_TEST_MYSQL_URL must be set when this ignored live test is run");
+        let pool = MySqlPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        for statement in [
+            "CREATE TEMPORARY TABLE redrob_cell_edits (id INTEGER PRIMARY KEY, name VARCHAR(40), plan VARCHAR(40)) ENGINE=InnoDB",
+            "INSERT INTO redrob_cell_edits VALUES (1, 'Ann', 'Free'), (2, 'Bo', 'Free')",
+        ] {
+            sqlx::query(AssertSqlSafe(statement))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let text = |v: &str| DataValue::Text(v.to_owned());
+        let edit = |key: &str, column: &str, value: &str| RowEdit {
+            key: DataValue::Integer(key.to_owned()),
+            changes: vec![CellChange {
+                column: column.to_owned(),
+                value: text(value),
+            }],
+        };
+        let set = |rows| CellEditSet {
+            schema: None,
+            table: "redrob_cell_edits".to_owned(),
+            primary_key: "id".to_owned(),
+            rows,
+        };
+        let read = || async {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT name, plan FROM redrob_cell_edits ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let owned = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+
+        let updates = build_row_updates(
+            DatabaseKind::MySql,
+            &set(vec![
+                edit("1", "name", "Ann Lee"),
+                edit("2", "plan", "Scale"),
+            ]),
+        )
+        .unwrap();
+        apply_mysql_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
+
+        let updates = build_row_updates(
+            DatabaseKind::MySql,
+            &set(vec![
+                edit("1", "name", "Changed"),
+                edit("9", "name", "Ghost"),
+            ]),
+        )
+        .unwrap();
+        let error = apply_mysql_row_updates(&pool, &updates).await.unwrap_err();
+        assert!(error.to_string().contains("matched 0 rows"), "{error}");
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
     }
 
     #[tokio::test]
