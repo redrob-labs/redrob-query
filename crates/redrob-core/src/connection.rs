@@ -3751,6 +3751,9 @@ mod tests {
     // session and disappears with it, so a run leaves nothing behind on the shared server.
     #[tokio::test]
     #[ignore = "requires REDROB_TEST_POSTGRES_URL and an external PostgreSQL server"]
+    // One scenario on one server session: edit, roll back, delete, insert. Split up, each part would
+    // need its own temporary table and pool, and the reading order is the point.
+    #[allow(clippy::too_many_lines)]
     async fn live_postgres_cell_edits_commit_together_or_not_at_all() {
         use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
         let url = std::env::var("REDROB_TEST_POSTGRES_URL")
@@ -3840,10 +3843,40 @@ mod tests {
         let updates = build_row_updates(DatabaseKind::PostgreSql, &deletes).unwrap();
         apply_postgres_row_updates(&pool, &updates).await.unwrap();
         assert_eq!(read().await, vec![owned("Ann Lee", "Free")]);
+
+        // An insert in the same change set; this table has no auto key, so the key is given.
+        let inserts = CellEditSet {
+            inserts: vec![crate::cell_edits::RowInsert {
+                values: vec![
+                    CellChange {
+                        column: "id".to_owned(),
+                        value: DataValue::Integer("3".to_owned()),
+                    },
+                    CellChange {
+                        column: "name".to_owned(),
+                        value: text("Cy"),
+                    },
+                    CellChange {
+                        column: "plan".to_owned(),
+                        value: text("Free"),
+                    },
+                ],
+            }],
+            ..set(vec![])
+        };
+        let updates = build_row_updates(DatabaseKind::PostgreSql, &inserts).unwrap();
+        apply_postgres_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Cy", "Free")]
+        );
     }
 
     #[tokio::test]
     #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
+    // One scenario on one server session: edit, roll back, delete, insert. Split up, each part would
+    // need its own temporary table and pool, and the reading order is the point.
+    #[allow(clippy::too_many_lines)]
     async fn live_mysql_cell_edits_commit_together_or_not_at_all() {
         use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
         let url = std::env::var("REDROB_TEST_MYSQL_URL")
@@ -3931,6 +3964,33 @@ mod tests {
         let updates = build_row_updates(DatabaseKind::MySql, &deletes).unwrap();
         apply_mysql_row_updates(&pool, &updates).await.unwrap();
         assert_eq!(read().await, vec![owned("Ann Lee", "Free")]);
+
+        // An insert in the same change set; this table has no auto key, so the key is given.
+        let inserts = CellEditSet {
+            inserts: vec![crate::cell_edits::RowInsert {
+                values: vec![
+                    CellChange {
+                        column: "id".to_owned(),
+                        value: DataValue::Integer("3".to_owned()),
+                    },
+                    CellChange {
+                        column: "name".to_owned(),
+                        value: text("Cy"),
+                    },
+                    CellChange {
+                        column: "plan".to_owned(),
+                        value: text("Free"),
+                    },
+                ],
+            }],
+            ..set(vec![])
+        };
+        let updates = build_row_updates(DatabaseKind::MySql, &inserts).unwrap();
+        apply_mysql_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Cy", "Free")]
+        );
     }
 
     #[tokio::test]
