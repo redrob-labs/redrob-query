@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { createPortal } from 'react-dom';
-import { Drawer, Loader, Menu } from '@redrob-labs/ui';
+import { Button, Drawer, Loader, Menu, Modal, Textarea } from '@redrob-labs/ui';
 import { rowAsJson, rowAsTsv } from './rowExport';
 import { Icon } from '../ui/Icon';
 import clsx from 'clsx';
@@ -37,6 +37,9 @@ export function ResultGrid() {
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
   const [columnsOpen, setColumnsOpen] = useState(false);
   // The row whose details are open, as shown: a staged edit counts, since that is what the row reads.
+  // Shift+Enter on an editable cell opens it in a larger editor (Beekeeper's "Edit in modal"). Saving
+  // stages the change exactly as an inline edit does; nothing is written until the change set is applied.
+  const [editing, setEditing] = useState<{ rowIndex: number; key: string; label: string; text: string; error?: string } | null>(null);
   const [detailRow, setDetailRow] = useState<{ number: number; values: Record<string, CellValue> } | null>(null);
   const [activeView, setActiveView] = useState<'results' | 'messages'>('results');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -108,14 +111,21 @@ export function ResultGrid() {
                 { id: 'json', label: 'Copy row as JSON', icon: <Icon name="copy" />, onSelect: () => copy(rowAsJson(result.columns, (key) => shown[key]), 'Row as JSON') },
                 { id: 'tsv', label: 'Copy row as TSV', icon: <Icon name="columns" />, onSelect: () => copy(rowAsTsv(result.columns, (key) => shown[key]), 'Row as TSV') },
               ]} />;
-          })()}</div>{visibleColumns.map((column) => { const editable = Boolean(result.editSource && column.key !== result.editSource.primaryKey); const mutation = mutations.find((item) => item.rowKey === rowIdentity && item.column === column.key); const value = mutation?.nextValue ?? row[column.key]; return <div role="cell" key={column.key} className={clsx('grid-cell', column.dataType === 'number' && 'numeric', column.dataType === 'boolean' && 'boolean', value === null && 'null', mutation && 'is-staged', !editable && 'read-only')} contentEditable={editable} suppressContentEditableWarning onBlur={(event) => { if (!editable) return; const raw = event.currentTarget.textContent ?? ''; if (raw === formatCell(value, column.dataType)) return; try { stageCell(originalIndex, column.key, parseCellInput(raw, column.dataType, column.nullable)); } catch (parseError) { event.currentTarget.textContent = formatCell(value, column.dataType); notify('error', 'Invalid cell value', parseError instanceof Error ? parseError.message : 'Check the value and try again.'); } }} aria-readonly={!editable} aria-label={`${column.label}, result row ${originalIndex + 1}`}>{formatCell(value, column.dataType)}</div>; })}</div>; })}</div></div>
-        <div className="grid-footer"><span>{filter ? `${visibleRows.length} matching rows on this page` : start ? `Showing ${start}–${end}` : 'No rows'} · {result.nextOffset !== null && result.nextOffset !== undefined ? 'more available' : 'end of results'}</span><span className="grid-hint">{result.editSource ? 'Double-click a cell to edit · changes are staged' : 'Editing unavailable · source identity unavailable'}</span><div className="pagination"><button aria-label="Previous page" disabled={pageOffset === 0} onClick={() => void previousPage()}><Icon name="chevronLeft" /></button><button className="active" aria-label={`Page ${pageNumber}`}>{pageNumber}</button><button aria-label="Next page" disabled={result.nextOffset === null || result.nextOffset === undefined} onClick={() => void nextPage()}><Icon name="chevronRight" /></button></div></div>
+          })()}</div>{visibleColumns.map((column) => { const editable = Boolean(result.editSource && column.key !== result.editSource.primaryKey); const mutation = mutations.find((item) => item.rowKey === rowIdentity && item.column === column.key); const value = mutation?.nextValue ?? row[column.key]; return <div role="cell" key={column.key} className={clsx('grid-cell', column.dataType === 'number' && 'numeric', column.dataType === 'boolean' && 'boolean', value === null && 'null', mutation && 'is-staged', !editable && 'read-only')} contentEditable={editable} suppressContentEditableWarning onKeyDown={(event) => { if (!editable || event.key !== 'Enter' || !event.shiftKey) return; event.preventDefault(); setEditing({ rowIndex: originalIndex, key: column.key, label: column.label, text: column.dataType === 'json' && value !== null && typeof value === 'object' ? JSON.stringify(value, null, 2) : formatCell(value, column.dataType) }); }} onBlur={(event) => { if (!editable) return; const raw = event.currentTarget.textContent ?? ''; if (raw === formatCell(value, column.dataType)) return; try { stageCell(originalIndex, column.key, parseCellInput(raw, column.dataType, column.nullable)); } catch (parseError) { event.currentTarget.textContent = formatCell(value, column.dataType); notify('error', 'Invalid cell value', parseError instanceof Error ? parseError.message : 'Check the value and try again.'); } }} aria-readonly={!editable} aria-label={`${column.label}, result row ${originalIndex + 1}`}>{formatCell(value, column.dataType)}</div>; })}</div>; })}</div></div>
+        <div className="grid-footer"><span>{filter ? `${visibleRows.length} matching rows on this page` : start ? `Showing ${start}–${end}` : 'No rows'} · {result.nextOffset !== null && result.nextOffset !== undefined ? 'more available' : 'end of results'}</span><span className="grid-hint">{result.editSource ? 'Double-click a cell to edit · Shift+Enter for a larger editor · changes are staged' : 'Editing unavailable · source identity unavailable'}</span><div className="pagination"><button aria-label="Previous page" disabled={pageOffset === 0} onClick={() => void previousPage()}><Icon name="chevronLeft" /></button><button className="active" aria-label={`Page ${pageNumber}`}>{pageNumber}</button><button aria-label="Next page" disabled={result.nextOffset === null || result.nextOffset === undefined} onClick={() => void nextPage()}><Icon name="chevronRight" /></button></div></div>
       </> : null}
       {/* Every column, hidden ones too, with the whole value: a cell shows one line and an ellipsis. Portalled
           to the body: inside the results pane it stacked under the AI panel beside it. */}
       {createPortal(<Drawer open={detailRow !== null} side="right" title={detailRow ? `Row ${detailRow.number}` : ''} description="Every column of this row, in full." closeLabel="Close row details" onClose={() => setDetailRow(null)}>
         {detailRow ? <dl className="row-details">{(result?.columns ?? []).map((column) => { const cell = detailRow.values[column.key]; return <div key={column.key}><dt>{column.label}</dt><dd className={clsx(cell === null && 'null')}>{cell === null ? 'NULL' : typeof cell === 'object' ? JSON.stringify(cell, null, 2) : String(cell)}</dd></div>; })}</dl> : null}
       </Drawer>, document.body)}
+      {createPortal(<Modal open={editing !== null} title={editing ? `Edit ${editing.label}` : ''} closeLabel="Cancel editing" onClose={() => setEditing(null)} footer={<><Button variant="ghost" onClick={() => setEditing(null)}><Icon name="close" /> Cancel</Button><Button onClick={() => {
+        if (!editing || !result) return; const column = result.columns.find((item) => item.key === editing.key); if (!column) return;
+        try { stageCell(editing.rowIndex, editing.key, parseCellInput(editing.text, column.dataType, column.nullable)); setEditing(null); }
+        catch (parseError) { setEditing({ ...editing, error: parseError instanceof Error ? parseError.message : 'Check the value and try again.' }); }
+      }}><Icon name="check" /> Stage change</Button></>}>
+        {editing ? <Textarea aria-label={`New value for ${editing.label}`} rows={10} value={editing.text} error={editing.error} autoFocus onChange={(event) => setEditing({ ...editing, text: event.target.value, error: undefined })} /> : null}
+      </Modal>, document.body)}
     </section>
   );
 }
