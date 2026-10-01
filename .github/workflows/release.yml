@@ -330,6 +330,37 @@ jobs:
           updaterJsonPreferNsis: true
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json
 
+      # The default bundler ships the build host's libwayland in the AppImage, and on Mesa 25+ that
+      # makes WebKitWebProcess abort with EGL_BAD_PARAMETER: the window opens and stays blank
+      # (tauri-apps/tauri#15665). Measured on v0.2.0 before this step existed -- strace on the web
+      # process, then the same AppImage with only those four libraries removed rendered with no
+      # environment overrides. Repacking changes the bytes, so the script also re-signs and patches
+      # latest.json; a stale signature still looks signed and breaks every future update.
+      - name: Repack the AppImage without bundled Wayland, and re-sign it
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_TARGET: ${{ matrix.target }}
+          # Pinned by digest: this binary rewrites a signed release artifact.
+          APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+          APPIMAGETOOL_SHA256: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1
+        run: |
+          set -euo pipefail
+          tool="$RUNNER_TEMP/appimagetool"
+          curl -fsSL -o "$tool" "$APPIMAGETOOL_URL"
+          echo "${APPIMAGETOOL_SHA256}  ${tool}" | sha256sum -c -
+          chmod +x "$tool"
+          # This is a Cargo workspace rooted at the repo, so the bundle is NOT under src-tauri/;
+          # ask cargo, the same way the Windows signature step does.
+          target_root="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)"
+          # Runners have no FUSE; both the tool and the AppImage run through their own extractor.
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          bash scripts/resign-linux-appimage.sh \
+            "${target_root}/${RELEASE_TARGET}/release/bundle" "${GITHUB_REF_NAME}" "$tool"
+
       - name: Verify Windows installer signatures and timestamps
         if: runner.os == 'Windows'
         shell: pwsh
@@ -533,3 +564,50 @@ jobs:
           done
 
           echo "latest.json covers every built platform (${REQUIRED_PLATFORMS}), is signed, and points only at this repository's release assets."
+
+      # "Has a signature" is not "has the right signature". A signature over different bytes passes
+      # the check above and fails on every user's machine at the first update check -- and the
+      # AppImage repack step rewrites bytes after tauri-action signed them, so this is a live risk,
+      # not a theoretical one. Measured before adding this: the published v0.2.0 signature is VALID
+      # for the published AppImage and INVALID for the same file repacked.
+      - name: Verify every updater signature against the bytes it covers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$TAURI_UPDATER_PUBLIC_KEY"
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          release_json="$(jq --arg tag "${RELEASE_TAG}" 'map(select(.tag_name == $tag)) | first // empty' "$RUNNER_TEMP/releases.json")"
+          manifest_id="$(printf '%s' "$release_json" | jq -r '.assets[] | select(.name == "latest.json") | .id')"
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${manifest_id}" > "$RUNNER_TEMP/latest.json"
+
+          dl="$RUNNER_TEMP/updater-assets"
+          mkdir -p "$dl"
+          checked=0
+          # One line per platform entry: "<key> <asset name> <signature>". Signatures are base64,
+          # so they never contain a space.
+          while read -r platform asset signature; do
+            asset_id="$(printf '%s' "$release_json" | jq -r --arg n "$asset" '.assets[] | select(.name == $n) | .id')"
+            if [ -z "$asset_id" ]; then
+              echo "::error::${platform} names ${asset}, which is not attached to ${RELEASE_TAG}"
+              exit 1
+            fi
+            [ -f "$dl/$asset" ] || gh api -H 'Accept: application/octet-stream' \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "$dl/$asset"
+            if ! result="$(node scripts/verify-updater-signature.mjs "$TAURI_UPDATER_PUBLIC_KEY" "$signature" "$dl/$asset")"; then
+              echo "::error::${platform}: ${result} (${asset})"
+              exit 1
+            fi
+            echo "${platform}: ${result} (${asset})"
+            checked=$((checked + 1))
+          done < <(jq -r '.platforms | to_entries[] | "\(.key) \(.value.url | split("/") | last) \(.value.signature)"' "$RUNNER_TEMP/latest.json")
+
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::latest.json has no platform entries; nothing was verified"
+            exit 1
+          fi
+          echo "Every one of ${checked} updater signatures verifies against the bytes it names."
