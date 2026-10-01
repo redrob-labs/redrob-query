@@ -104,6 +104,19 @@ pub async fn primary_key_columns(
         .map_err(message)
 }
 
+/// Create a table or add a column from the form. Types come from a fixed list (see `redrob_core::ddl`).
+#[tauri::command]
+pub async fn apply_table_change(
+    service: State<'_, DataService>,
+    connection_id: Uuid,
+    change: redrob_core::ddl::TableChange,
+) -> Result<(), String> {
+    service
+        .apply_table_change(connection_id, change)
+        .await
+        .map_err(message)
+}
+
 /// Apply a change set the person reviewed in the changes panel. The core checks the profile is
 /// writable, binds every value, and commits only if every row update hits exactly one row.
 #[tauri::command]

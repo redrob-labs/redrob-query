@@ -4033,6 +4033,129 @@ mod tests {
         );
     }
 
+    // The live DDL tests create a uniquely named table on the per-run CI service container, which is
+    // thrown away with the run; they use the same builder the desktop command uses.
+    #[tokio::test]
+    #[ignore = "requires REDROB_TEST_POSTGRES_URL and an external PostgreSQL server"]
+    async fn live_postgres_table_changes_create_and_extend_a_table() {
+        use crate::ddl::{ColumnSpec, ColumnType, TableChange};
+        let url = std::env::var("REDROB_TEST_POSTGRES_URL")
+            .expect("REDROB_TEST_POSTGRES_URL must be set when this ignored live test is run");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let table = format!("redrob_ddl_{}", Uuid::new_v4().simple());
+        let column = |name: &str, column_type, nullable, primary_key| ColumnSpec {
+            name: name.to_owned(),
+            column_type,
+            nullable,
+            primary_key,
+        };
+        for change in [
+            TableChange::CreateTable {
+                schema: Some("public".to_owned()),
+                table: table.clone(),
+                columns: vec![
+                    column("id", ColumnType::Integer, false, true),
+                    column("name", ColumnType::Text, false, false),
+                    column("paid", ColumnType::Boolean, true, false),
+                ],
+            },
+            TableChange::AddColumn {
+                schema: Some("public".to_owned()),
+                table: table.clone(),
+                column: column("amount", ColumnType::Decimal, true, false),
+            },
+        ] {
+            let statement = change.statement(DatabaseKind::PostgreSql).unwrap();
+            sqlx::query(AssertSqlSafe(statement.as_str()))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let insert = format!(
+            "INSERT INTO public.\"{table}\" (id, name, paid, amount) VALUES (1, 'Ann', TRUE, 12.5)"
+        );
+        sqlx::query(AssertSqlSafe(insert.as_str()))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            postgres_primary_key_columns(&pool, Some("public".to_owned()), table.clone())
+                .await
+                .unwrap(),
+            vec!["id"]
+        );
+        let read = format!("SELECT name, paid, amount::text FROM public.\"{table}\"");
+        let row: (String, bool, String) = sqlx::query_as(AssertSqlSafe(read.as_str()))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row, ("Ann".to_owned(), true, "12.5000000000".to_owned()));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
+    async fn live_mysql_table_changes_create_and_extend_a_table() {
+        use crate::ddl::{ColumnSpec, ColumnType, TableChange};
+        let url = std::env::var("REDROB_TEST_MYSQL_URL")
+            .expect("REDROB_TEST_MYSQL_URL must be set when this ignored live test is run");
+        let pool = MySqlPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let table = format!("redrob_ddl_{}", Uuid::new_v4().simple());
+        let column = |name: &str, column_type, nullable, primary_key| ColumnSpec {
+            name: name.to_owned(),
+            column_type,
+            nullable,
+            primary_key,
+        };
+        for change in [
+            TableChange::CreateTable {
+                schema: None,
+                table: table.clone(),
+                columns: vec![
+                    column("id", ColumnType::Integer, false, true),
+                    column("name", ColumnType::Text, false, false),
+                    column("at", ColumnType::Timestamp, true, false),
+                ],
+            },
+            TableChange::AddColumn {
+                schema: None,
+                table: table.clone(),
+                column: column("born", ColumnType::Date, true, false),
+            },
+        ] {
+            let statement = change.statement(DatabaseKind::MySql).unwrap();
+            sqlx::query(AssertSqlSafe(statement.as_str()))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let insert =
+            format!("INSERT INTO `{table}` (id, name, born) VALUES (1, 'Ann', '2020-01-02')");
+        sqlx::query(AssertSqlSafe(insert.as_str()))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            mysql_primary_key_columns(&pool, None, table.clone())
+                .await
+                .unwrap(),
+            vec!["id"]
+        );
+        let read = format!("SELECT name, DATE_FORMAT(born, '%Y-%m-%d') FROM `{table}`");
+        let row: (String, String) = sqlx::query_as(AssertSqlSafe(read.as_str()))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row, ("Ann".to_owned(), "2020-01-02".to_owned()));
+    }
+
     #[tokio::test]
     #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
     async fn live_mysql_native_scalars_when_configured() {
