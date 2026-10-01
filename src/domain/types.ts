@@ -65,6 +65,8 @@ export interface ResultColumn {
   dataType: DataType;
   nullable?: boolean;
   primaryKey?: boolean;
+  /** The engine's value type for this column (desktop only), so an edit is written back as that type, not as text. */
+  wireType?: string;
 }
 
 export interface QueryResult {
@@ -78,6 +80,7 @@ export interface QueryResult {
   truncated?: boolean;
   message?: string;
   editSource?: {
+    schema?: string;
     table: string;
     primaryKey: string;
   };
@@ -92,6 +95,11 @@ export interface CellMutation {
   column: string;
   previousValue: CellValue;
   nextValue: CellValue;
+  schema?: string;
+  /** The key value as typed, and the engine types to write key and value back as. */
+  keyValue?: CellValue;
+  keyWireType?: string;
+  wireType?: string;
 }
 
 export interface MutationResult {

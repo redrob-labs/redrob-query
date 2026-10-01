@@ -232,13 +232,23 @@ describe('TauriBridge wire adapter', () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  it('rejects desktop mutations without invoking native commands', async () => {
+  it('sends staged edits as one typed change set, grouped by row', async () => {
+    invokeMock.mockResolvedValueOnce({ rowsAffected: 2, elapsedMs: 3, committed: true });
     const bridge = new TauriBridge();
-    await expect(bridge.applyMutations([{
-      id: 'blocked-edit', connectionId: 'connection-1', table: 'customers', primaryKey: 'id',
-      rowKey: 'row-1', column: 'email', previousValue: 'before@example.test', nextValue: 'after@example.test',
-    }])).rejects.toThrow('Desktop preview is read-only');
-    expect(invokeMock).not.toHaveBeenCalled();
+    const base = { connectionId: 'connection-1', schema: 'public', table: 'customers', primaryKey: 'id', previousValue: null };
+    const result = await bridge.applyMutations([
+      { ...base, id: 'a', rowKey: '7', keyValue: 7, keyWireType: 'integer', column: 'email', nextValue: 'a@example.test', wireType: 'text' },
+      { ...base, id: 'b', rowKey: '7', keyValue: 7, keyWireType: 'integer', column: 'mrr', nextValue: '12.50', wireType: 'decimal' },
+      { ...base, id: 'c', rowKey: '8', keyValue: 8, keyWireType: 'integer', column: 'active', nextValue: null, wireType: 'boolean' },
+    ]);
+    expect(invokeMock).toHaveBeenCalledWith('apply_cell_edits', {
+      connectionId: 'connection-1',
+      edits: { schema: 'public', table: 'customers', primaryKey: 'id', rows: [
+        { key: { type: 'integer', value: '7' }, changes: [{ column: 'email', value: { type: 'text', value: 'a@example.test' } }, { column: 'mrr', value: { type: 'decimal', value: '12.50' } }] },
+        { key: { type: 'integer', value: '8' }, changes: [{ column: 'active', value: { type: 'null' } }] },
+      ] },
+    });
+    expect(result.message).toBe('Saved 3 changes in 2 rows.');
   });
 
   it('saves the Redrob key through secure desktop storage', async () => {

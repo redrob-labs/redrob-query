@@ -1,3 +1,4 @@
+import { editableSource } from './editSource';
 import { invoke } from '@tauri-apps/api/core';
 import type {
   AiRequest,
@@ -479,6 +480,17 @@ const fromWireProfile = (profile: WireProfile): ConnectionProfile => ({
   builtIn: Boolean(profile.builtIn),
   isDemo: Boolean(profile.builtIn),
 });
+// Back to the engine's type: a decimal, date or uuid reaches the grid as text and must not be written
+// back as text. Without a known type, the JavaScript type decides.
+const toWireValue = (value: CellValue, wireType?: string): WireValue => {
+  if (value === null) return { type: 'null' };
+  if (typeof value === 'boolean') return { type: 'boolean', value };
+  if (typeof value === 'object') return { type: wireType === 'bson' ? 'bson' : 'json', value };
+  if (wireType === 'float') return { type: 'float', value: Number(value) };
+  if (wireType && wireType !== 'boolean' && wireType !== 'json' && wireType !== 'bson') return { type: wireType, value: String(value) };
+  if (typeof value === 'number') return Number.isInteger(value) ? { type: 'integer', value: String(value) } : { type: 'float', value };
+  return { type: 'text', value };
+};
 const fromWireValue = (cell: WireValue): CellValue => {
   if (cell.type === 'null') return null;
   if (cell.type === 'boolean') return Boolean(cell.value);
@@ -580,8 +592,11 @@ export class TauriBridge implements DataBridge {
       parameters: [], limit: request.limit ?? 500, offset: request.offset ?? 0, timeoutMs: 30000,
     } });
     const keys = page.columns.map((column, index) => page.columns.findIndex((item) => item.name === column.name) === index ? column.name : `${column.name}_${index + 1}`);
+    const wireTypes = page.columns.map((_, index) => page.rows.map((row) => row[index]?.type).find((type) => type && type !== 'null'));
+    const editSource = await this.findEditSource(request, page.columns.map((column) => column.name));
     return {
-      columns: page.columns.map((column, index) => ({ key: keys[index], label: column.name, dataType: toDataType(column.dataType), nullable: column.nullable ?? undefined })),
+      ...(editSource ? { editSource } : {}),
+      columns: page.columns.map((column, index) => ({ key: keys[index], label: column.name, dataType: toDataType(column.dataType), nullable: column.nullable ?? undefined, wireType: wireTypes[index], primaryKey: editSource?.primaryKey === keys[index] || undefined })),
       rows: page.rows.map((row) => Object.fromEntries(keys.map((key, index) => [key, fromWireValue(row[index] ?? { type: 'null' })]))),
       rowCount: page.stats.rowsReturned,
       durationMs: page.stats.elapsedMs,
@@ -593,8 +608,36 @@ export class TauriBridge implements DataBridge {
     };
   }
 
-  async applyMutations(_mutations: CellMutation[]): Promise<MutationResult> {
-    throw new Error('Desktop preview is read-only. Staged editing is available only in the browser demo.');
+  // A result is editable only when its SQL plainly reads one table (see editSource.ts) and that table
+  // has a single-column primary key that the result includes. Anything else stays read-only.
+  private async findEditSource(request: QueryRequest, columnNames: string[]): Promise<QueryResult['editSource'] | undefined> {
+    const kind = this.profiles.get(request.connectionId)?.kind;
+    if (request.language !== 'sql' || !kind) return undefined;
+    const source = editableSource(request.query, kind);
+    if (!source) return undefined;
+    try {
+      const keys = await invoke<string[]>('primary_key_columns', { connectionId: request.connectionId, schema: source.schema ?? null, table: source.table });
+      if (keys.length !== 1 || !columnNames.includes(keys[0])) return undefined;
+      return { ...source, primaryKey: keys[0] };
+    } catch {
+      return undefined;
+    }
+  }
+
+  async applyMutations(mutations: CellMutation[]): Promise<MutationResult> {
+    if (!mutations.length) return { applied: 0, message: 'No staged changes.' };
+    const [first] = mutations;
+    const rows = new Map<string, { key: WireValue; changes: { column: string; value: WireValue }[] }>();
+    for (const mutation of mutations) {
+      const row = rows.get(mutation.rowKey) ?? { key: toWireValue(mutation.keyValue ?? mutation.rowKey, mutation.keyWireType), changes: [] };
+      row.changes.push({ column: mutation.column, value: toWireValue(mutation.nextValue, mutation.wireType) });
+      rows.set(mutation.rowKey, row);
+    }
+    const result = await invoke<{ rowsAffected: number }>('apply_cell_edits', {
+      connectionId: first.connectionId,
+      edits: { schema: first.schema ?? null, table: first.table, primaryKey: first.primaryKey, rows: [...rows.values()] },
+    });
+    return { applied: mutations.length, message: `Saved ${mutations.length} change${mutations.length === 1 ? '' : 's'} in ${result.rowsAffected} row${result.rowsAffected === 1 ? '' : 's'}.` };
   }
 
   async saveAiKey(secret: string): Promise<void> {
