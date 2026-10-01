@@ -4,6 +4,10 @@ export const WORKSPACE_STORAGE_KEY = 'redrob-query.workspace.v1';
 export const WORKSPACE_PERSISTENCE_KEY = 'redrob-query.workspace-persistence.v1';
 export const MAX_PERSISTED_TABS = 30;
 export const MAX_HISTORY_ENTRIES = 50;
+export const MAX_PINNED_TABLES = 100;
+
+/** A table or view the person pinned to the top of the sidebar, per connection. */
+export interface PinnedTable { connectionId: string; schema?: string; table: string }
 export const MAX_PERSISTED_QUERY_CHARACTERS = 200_000;
 export const MAX_WORKSPACE_CHARACTERS = 1_500_000;
 
@@ -11,9 +15,12 @@ interface WorkspaceSnapshot {
   version: 1;
   tabs: QueryTab[];
   history: QueryHistoryEntry[];
+  /** Optional: a workspace saved before pins existed has none. */
+  pins?: PinnedTable[];
 }
 
 export interface LoadedWorkspace extends Pick<WorkspaceSnapshot, 'tabs' | 'history'> {
+  pins: PinnedTable[];
   warning?: string;
   storageError?: string;
 }
@@ -68,7 +75,7 @@ const clearedWarning = (description: string): Pick<LoadedWorkspace, 'warning' | 
 };
 
 export const loadWorkspace = (profiles: ConnectionProfile[]): LoadedWorkspace => {
-  const empty: LoadedWorkspace = { tabs: [], history: [] };
+  const empty: LoadedWorkspace = { tabs: [], history: [], pins: [] };
   const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
   let raw: string | null;
   try { raw = localStorage.getItem(WORKSPACE_STORAGE_KEY); } catch { return { ...empty, warning: 'Local query workspace storage is unavailable.', storageError: 'Local query workspace storage is unavailable.' }; }
@@ -114,13 +121,24 @@ export const loadWorkspace = (profiles: ConnectionProfile[]): LoadedWorkspace =>
       }];
     }).slice(0, MAX_HISTORY_ENTRIES);
 
-    return { tabs, history, ...(discarded ? { warning: 'Some invalid local query workspace entries were not restored.' } : {}) };
+    const pinKeys = new Set<string>();
+    const pins = (Array.isArray(parsed.pins) ? parsed.pins : []).flatMap((candidate) => {
+      const profile = candidate && typeof candidate === 'object' ? profilesById.get(candidate.connectionId) : undefined;
+      const table = candidate && typeof candidate === 'object' ? cleanLabel(candidate.table, 200) : '';
+      const schema = candidate && typeof candidate === 'object' && candidate.schema !== undefined ? cleanLabel(candidate.schema, 200) : undefined;
+      const key = `${profile?.id}\u0000${schema ?? ''}\u0000${table}`;
+      if (!profile || !table || pinKeys.has(key)) { discarded = true; return []; }
+      pinKeys.add(key);
+      return [{ connectionId: profile.id, table, ...(schema ? { schema } : {}) }];
+    }).slice(0, MAX_PINNED_TABLES);
+
+    return { tabs, history, pins, ...(discarded ? { warning: 'Some invalid local query workspace entries were not restored.' } : {}) };
   } catch {
     return { ...empty, ...clearedWarning('Unreadable') };
   }
 };
 
-export const saveWorkspace = (tabs: QueryTab[], history: QueryHistoryEntry[]): WorkspaceSaveResult => {
+export const saveWorkspace = (tabs: QueryTab[], history: QueryHistoryEntry[], pins: PinnedTable[] = []): WorkspaceSaveResult => {
   if (tabs.some((entry) => !validDraftQuery(entry.query)) || history.some((entry) => !validHistoryQuery(entry.query))) {
     const cleared = clearWorkspace();
     return { ok: false, message: cleared.ok
@@ -131,6 +149,7 @@ export const saveWorkspace = (tabs: QueryTab[], history: QueryHistoryEntry[]): W
     version: 1,
     tabs: tabs.slice(-MAX_PERSISTED_TABS).map(({ id, connectionId, name, language, query, dirty }) => ({ id, connectionId, name, language, query, dirty })),
     history: history.slice(0, MAX_HISTORY_ENTRIES).map(({ id, connectionId, name, language, query, executedAt }) => ({ id, connectionId, name, language, query, executedAt })),
+    pins: pins.slice(0, MAX_PINNED_TABLES).map(({ connectionId, schema, table }) => ({ connectionId, table, ...(schema ? { schema } : {}) })),
   };
   try {
     const serialized = JSON.stringify(snapshot);

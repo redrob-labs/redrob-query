@@ -401,6 +401,23 @@ describe('workspace state flows', () => {
 
 
 describe('release workspace contracts', () => {
+  it('restores pinned tables, drops invalid ones, and saves a new pin', async () => {
+    const pins = [{ connectionId: postgres.id, schema: 'public', table: 'customers' }, { connectionId: postgres.id, schema: 'public', table: 'customers' }, { connectionId: 'gone', table: 'x' }, { connectionId: postgres.id, table: '' }];
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify({ version: 1, tabs: [], history: [], pins }));
+    const store = createWorkspaceStore(controllableBridge('desktop'));
+    await store.getState().initialize();
+    expect(store.getState().pinnedTables).toEqual([{ connectionId: postgres.id, schema: 'public', table: 'customers' }]);
+
+    await store.getState().setActiveConnection(postgres.id);
+    store.getState().togglePin('orders', 'public');
+    expect(JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY) ?? '{}').pins).toEqual([
+      { connectionId: postgres.id, schema: 'public', table: 'customers' },
+      { connectionId: postgres.id, schema: 'public', table: 'orders' },
+    ]);
+    store.getState().togglePin('customers', 'public');
+    expect(store.getState().pinnedTables.map((pin) => pin.table)).toEqual(['orders']);
+  });
+
   it('restores bounded desktop query-only state without selecting, connecting, or running', async () => {
     const tabs = Array.from({ length: 35 }, (_, index) => ({ id: `saved-${index}`, connectionId: postgres.id, name: `Saved ${index}`, language: 'sql', query: `SELECT ${index}`, dirty: true, credentials: 'must-not-restore' }));
     const history = Array.from({ length: 55 }, (_, index) => ({ id: `history-${index}`, connectionId: postgres.id, name: 'Saved', language: 'sql', query: `SELECT ${index}`, executedAt: index, rows: [{ secret: true }], aiPrompt: 'private' }));

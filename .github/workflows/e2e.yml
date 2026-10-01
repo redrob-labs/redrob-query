@@ -1,0 +1,90 @@
+name: E2E
+
+# The desktop app, driven the way a user drives it: add a SQLite connection, query a table, edit a
+# cell, apply, run again. Unit and live-server tests run the core; this is the only check that the
+# window, the bridge and the core write a change together -- and the last step reads the change
+# back from the database file itself, not from the screen.
+
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Desktop edit and apply over WebDriver
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux desktop and WebDriver dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev librsvg2-dev
+          patchelf libssl-dev webkit2gtk-driver xvfb sqlite3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Install pinned tauri-driver
+        run: cargo install tauri-driver --version 2.1.0 --locked
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+
+      - name: Build the debug app
+        run: npx tauri build --debug --no-bundle
+
+      - name: Seed the database
+        run: sqlite3 "$RUNNER_TEMP/people.db" < e2e/seed.sql
+
+      - name: Drive the desktop app
+        env:
+          APP: ${{ github.workspace }}/target/debug/redrob-query
+          REDROB_E2E_DB: ${{ runner.temp }}/people.db
+          SHOTS: ${{ github.workspace }}/e2e/screenshots
+          # A home of its own, so saved connections and the keyring fallback start empty.
+          HOME: ${{ runner.temp }}/e2e-home
+          # Software rendering on a virtual display; the DMA-BUF path needs a GPU the runner lacks.
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+        run: |
+          mkdir -p "$HOME"
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" bash -c '
+            tauri-driver --port 4444 > e2e/tauri-driver.log 2>&1 &
+            driver=$!
+            for _ in $(seq 1 50); do curl -fs http://127.0.0.1:4444/status >/dev/null && break; sleep 0.2; done
+            node e2e/run.mjs
+            status=$?
+            kill $driver
+            exit $status
+          '
+
+      - name: The change is in the database file
+        run: |
+          name=$(sqlite3 "$RUNNER_TEMP/people.db" "SELECT name FROM people WHERE id = 1")
+          other=$(sqlite3 "$RUNNER_TEMP/people.db" "SELECT name FROM people WHERE id = 2")
+          echo "row 1: $name / row 2: $other"
+          test "$name" = "Ann Lee-Kim" && test "$other" = "Bo"
+
+      - name: Keep the screenshots and driver log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-desktop
+          path: |
+            e2e/screenshots
+            e2e/tauri-driver.log
+          if-no-files-found: warn

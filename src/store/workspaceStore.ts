@@ -15,7 +15,7 @@ import type {
   QueryTab,
   ToastMessage,
 } from '../domain/types';
-import { clearWorkspace, loadWorkspace, loadWorkspacePersistencePreference, MAX_HISTORY_ENTRIES, saveWorkspace, setWorkspacePersistence } from './workspacePersistence';
+import { clearWorkspace, loadWorkspace, loadWorkspacePersistencePreference, MAX_HISTORY_ENTRIES, MAX_PINNED_TABLES, saveWorkspace, setWorkspacePersistence, type PinnedTable } from './workspacePersistence';
 
 const postgresStarter = `SELECT
   id,
@@ -64,6 +64,8 @@ interface WorkspaceState {
   tabs: QueryTab[];
   activeTabId: string;
   queryHistory: QueryHistoryEntry[];
+  /** Tables and views pinned to the top of the sidebar, saved with the workspace. */
+  pinnedTables: PinnedTable[];
   localPersistenceEnabled: boolean;
   localPersistenceStatus: 'disabled' | 'saved' | 'error';
   localPersistenceMessage: string | null;
@@ -114,6 +116,7 @@ interface WorkspaceState {
   newTab(language?: QueryLanguage): void;
   setTabLanguage(language: QueryLanguage): void;
   closeTab(id: string): void;
+  togglePin(table: string, schema?: string): void;
   closeOtherTabs(id: string): void;
   closeTabsToRight(id: string): void;
   duplicateTab(id: string): void;
@@ -162,7 +165,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
     const persist = () => {
       const state = get();
       if (bridge.mode !== 'desktop' || !state.localPersistenceEnabled) return;
-      const saved = saveWorkspace(state.tabs, state.queryHistory);
+      const saved = saveWorkspace(state.tabs, state.queryHistory, state.pinnedTables);
       set({ localPersistenceStatus: saved.ok ? 'saved' : 'error', localPersistenceMessage: saved.message ?? null });
     };
     const clearProfile = (connectionId: string, removeProfile = false) => {
@@ -175,7 +178,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         expandedNodes: wasActive ? new Set() : state.expandedNodes,
         tabs: removeProfile ? state.tabs.filter((tab) => tab.connectionId !== connectionId) : state.tabs,
         activeTabId: removeProfile && wasActive ? '' : state.activeTabId,
-        queryHistory: removeProfile ? state.queryHistory.filter((entry) => entry.connectionId !== connectionId) : state.queryHistory,
+        queryHistory: removeProfile ? state.queryHistory.filter((entry) => entry.connectionId !== connectionId) : state.queryHistory, pinnedTables: removeProfile ? state.pinnedTables.filter((pin) => pin.connectionId !== connectionId) : state.pinnedTables,
         result: wasActive ? null : state.result,
         pageOffset: wasActive ? 0 : state.pageOffset,
         queryStatus: wasActive ? 'idle' : state.queryStatus,
@@ -189,7 +192,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
     };
     return {
       bridge, initialized: false, startupWarnings: [], connections: [], activeConnectionId: null,
-      metadata: {}, expandedNodes: new Set(), tabs: [], activeTabId: '', queryHistory: [],
+      metadata: {}, expandedNodes: new Set(), tabs: [], activeTabId: '', queryHistory: [], pinnedTables: [],
       localPersistenceEnabled: false, localPersistenceStatus: 'disabled', localPersistenceMessage: null,
       result: null, resultRevision: 0,
       pageSize: 50, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle',
@@ -207,7 +210,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           const profileWarnings = await warningRequest;
           const preference = bridge.mode === 'desktop' ? loadWorkspacePersistencePreference() : { ok: true, enabled: false };
           const disabledCleanup = bridge.mode === 'desktop' && preference.ok && !preference.enabled ? clearWorkspace() : { ok: true };
-          const restored = bridge.mode === 'desktop' && preference.enabled ? loadWorkspace(connections) : { tabs: [], history: [] };
+          const restored = bridge.mode === 'desktop' && preference.enabled ? loadWorkspace(connections) : { tabs: [], history: [], pins: [] };
           const startupWarnings = [...profileWarnings, ...(preference.message ? [preference.message] : []), ...(disabledCleanup.message ? [disabledCleanup.message] : []), ...(restored.warning ? [restored.warning] : [])];
           const persistenceError = preference.ok ? disabledCleanup.ok ? restored.storageError : disabledCleanup.message : preference.message;
           const restoredSequence = restored.tabs.reduce((max, tab) => Math.max(max, Number(tab.id.match(/^query-(\d+)$/)?.[1] ?? 0)), 0);
@@ -215,7 +218,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           const activeConnection = bridge.mode === 'demo' ? connections.find((item) => item.state === 'connected') : undefined;
           const starter = activeConnection ? makeStarterTab(activeConnection, nextTabId()) : null;
           set({
-            connections, startupWarnings, tabs: starter ? [starter] : restored.tabs, queryHistory: restored.history,
+            connections, startupWarnings, tabs: starter ? [starter] : restored.tabs, queryHistory: restored.history, pinnedTables: restored.pins,
             localPersistenceEnabled: Boolean(preference.enabled && !persistenceError),
             localPersistenceStatus: persistenceError ? 'error' : preference.enabled ? 'saved' : 'disabled',
             localPersistenceMessage: persistenceError ?? null,
@@ -384,6 +387,12 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const compatibleLanguage: QueryLanguage = connection.kind === 'mongodb' ? 'mql' : 'sql';
         if (language !== compatibleLanguage) return;
         set((current) => ({ tabs: current.tabs.map((tab) => tab.id === current.activeTabId ? { ...tab, language, dirty: true } : tab) })); persist();
+      },
+      togglePin(table, schema) {
+        const state = get(); const connectionId = state.activeConnectionId; if (!connectionId) return;
+        const same = (pin: PinnedTable) => pin.connectionId === connectionId && pin.table === table && (pin.schema ?? '') === (schema ?? '');
+        const pinnedTables = state.pinnedTables.some(same) ? state.pinnedTables.filter((pin) => !same(pin)) : [...state.pinnedTables, { connectionId, table, ...(schema ? { schema } : {}) }].slice(0, MAX_PINNED_TABLES);
+        set({ pinnedTables }); persist();
       },
       closeTab(id) {
         const state = get(); const target = state.tabs.find((tab) => tab.id === id); if (!target) return;
