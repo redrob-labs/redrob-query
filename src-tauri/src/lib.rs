@@ -27,6 +27,7 @@ pub fn run() {
             commands::load_metadata,
             commands::execute_query,
             commands::apply_cell_edits,
+            commands::apply_table_change,
             commands::primary_key_columns,
             commands::save_ai_secret,
             commands::ai_chat,

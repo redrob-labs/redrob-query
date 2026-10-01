@@ -35,6 +35,7 @@ const controllableBridge = (mode: DataBridge['mode'] = 'demo') => {
     testConnection: vi.fn(),
     loadMetadata: vi.fn(async (connectionId: string) => connectionId === postgres.id ? pgRoot : mongoRoot),
     executeQuery: vi.fn(async (request) => result(request.connectionId)),
+    applyTableChange: vi.fn(async () => undefined),
     applyMutations: vi.fn(),
     saveAiKey: vi.fn(),
     askAi: vi.fn(),

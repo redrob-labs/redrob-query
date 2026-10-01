@@ -671,3 +671,10 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .new-row-fields input { min-height: 30px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--surface-base); color: var(--ink-primary); }
 .new-row-error { margin: 0; color: var(--status-danger); }
 .value-diff.is-insert { color: var(--status-success); gap: 6px; }
+
+/* The New table / Add column form. */
+.table-change-form { display: grid; gap: 12px; }
+.table-change-names, .table-change-column { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; align-items: end; }
+.table-change-form label:not(.checkbox-label) { display: grid; gap: 4px; }
+.table-change-form label span { color: var(--ink-muted); font-size: 11px; }
+.table-change-form input:not([type=checkbox]), .table-change-form select { min-height: 30px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--surface-base); color: var(--ink-primary); }

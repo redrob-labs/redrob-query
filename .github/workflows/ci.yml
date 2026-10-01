@@ -130,6 +130,8 @@ jobs:
           connection::tests::live_mysql_native_scalars_when_configured
           connection::tests::live_postgres_cell_edits_commit_together_or_not_at_all
           connection::tests::live_mysql_cell_edits_commit_together_or_not_at_all
+          connection::tests::live_postgres_table_changes_create_and_extend_a_table
+          connection::tests::live_mysql_table_changes_create_and_extend_a_table
 
   # This job exists because its absence cost a failed release. The rustls advisory
   # RUSTSEC-2026-0285 sat in Cargo.lock through every green pull request, because the

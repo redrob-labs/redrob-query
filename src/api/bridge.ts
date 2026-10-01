@@ -1,6 +1,6 @@
 import { editableSource } from './editSource';
 import { invoke } from '@tauri-apps/api/core';
-import type {
+import type { TableChange,
   AiRequest,
   AiResponse,
   CellMutation,
@@ -30,6 +30,7 @@ export interface DataBridge {
   loadMetadata(connectionId: string, parentId?: string | null): Promise<MetadataNode[]>;
   executeQuery(request: QueryRequest): Promise<QueryResult>;
   applyMutations(mutations: CellMutation[]): Promise<MutationResult>;
+  applyTableChange(connectionId: string, change: TableChange): Promise<void>;
   saveAiKey(secret: string): Promise<void>;
   askAi(request: AiRequest): Promise<AiResponse>;
 }
@@ -347,6 +348,11 @@ export class DemoBridge implements DataBridge {
     };
   }
 
+  async applyTableChange(_connectionId: string, _change: TableChange): Promise<void> {
+    await wait(80);
+    throw new Error('Creating tables needs a desktop connection; the browser demo has fixed sample tables.');
+  }
+
   async applyMutations(mutations: CellMutation[]): Promise<MutationResult> {
     await wait(260);
     if (!mutations.length) throw new Error('There are no staged changes to apply.');
@@ -641,6 +647,10 @@ export class TauriBridge implements DataBridge {
     } catch {
       return { readOnlyReason: 'Read-only · the table key could not be looked up' };
     }
+  }
+
+  async applyTableChange(connectionId: string, change: TableChange): Promise<void> {
+    await invoke<void>('apply_table_change', { connectionId, change: { ...change, schema: change.schema || null } });
   }
 
   async applyMutations(mutations: CellMutation[]): Promise<MutationResult> {

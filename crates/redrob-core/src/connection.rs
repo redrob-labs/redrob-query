@@ -1,6 +1,7 @@
 //! Profile registry, live connection lifecycle, and database operations.
 
 use crate::cell_edits::{CellEditSet, RowUpdate, build_row_updates};
+use crate::ddl::TableChange;
 use std::{collections::HashMap, net::IpAddr, path::PathBuf, sync::Arc, time::Instant};
 
 use base64::Engine as _;
@@ -1000,6 +1001,45 @@ impl DataService {
             ActiveConnection::SQLite(pool) => sqlite_primary_key_columns(&pool, table).await,
             ActiveConnection::Mongo { .. } => Ok(Vec::new()),
         }
+    }
+
+    /// Create a table or add a column from the form (see `ddl`). Refused on a read-only profile.
+    pub async fn apply_table_change(&self, connection_id: Uuid, change: TableChange) -> Result<()> {
+        self.ensure_persistent_storage_available()?;
+        let profile = self.profile(connection_id).await?;
+        if profile.read_only {
+            return Err(DataError::ReadOnlyViolation(
+                "profile is read-only".to_owned(),
+            ));
+        }
+        let statement = change.statement(profile.kind)?;
+        let failed = |e: sqlx::Error| DataError::database("table change failed", &e);
+        match self.ensure_connected(connection_id).await? {
+            ActiveConnection::PostgreSql(pool) => {
+                sqlx::query(AssertSqlSafe(statement.as_str()))
+                    .execute(&pool)
+                    .await
+                    .map_err(failed)?;
+            }
+            ActiveConnection::MySql(pool) => {
+                sqlx::query(AssertSqlSafe(statement.as_str()))
+                    .execute(&pool)
+                    .await
+                    .map_err(failed)?;
+            }
+            ActiveConnection::SQLite(pool) => {
+                sqlx::query(AssertSqlSafe(statement.as_str()))
+                    .execute(&pool)
+                    .await
+                    .map_err(failed)?;
+            }
+            ActiveConnection::Mongo { .. } => {
+                return Err(DataError::Unsupported(
+                    "table changes are SQL-only".to_owned(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Apply a reviewed set of staged cell edits in one transaction. Each row's UPDATE must change
@@ -3993,6 +4033,129 @@ mod tests {
         );
     }
 
+    // The live DDL tests create a uniquely named table on the per-run CI service container, which is
+    // thrown away with the run; they use the same builder the desktop command uses.
+    #[tokio::test]
+    #[ignore = "requires REDROB_TEST_POSTGRES_URL and an external PostgreSQL server"]
+    async fn live_postgres_table_changes_create_and_extend_a_table() {
+        use crate::ddl::{ColumnSpec, ColumnType, TableChange};
+        let url = std::env::var("REDROB_TEST_POSTGRES_URL")
+            .expect("REDROB_TEST_POSTGRES_URL must be set when this ignored live test is run");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let table = format!("redrob_ddl_{}", Uuid::new_v4().simple());
+        let column = |name: &str, column_type, nullable, primary_key| ColumnSpec {
+            name: name.to_owned(),
+            column_type,
+            nullable,
+            primary_key,
+        };
+        for change in [
+            TableChange::CreateTable {
+                schema: Some("public".to_owned()),
+                table: table.clone(),
+                columns: vec![
+                    column("id", ColumnType::Integer, false, true),
+                    column("name", ColumnType::Text, false, false),
+                    column("paid", ColumnType::Boolean, true, false),
+                ],
+            },
+            TableChange::AddColumn {
+                schema: Some("public".to_owned()),
+                table: table.clone(),
+                column: column("amount", ColumnType::Decimal, true, false),
+            },
+        ] {
+            let statement = change.statement(DatabaseKind::PostgreSql).unwrap();
+            sqlx::query(AssertSqlSafe(statement.as_str()))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let insert = format!(
+            "INSERT INTO public.\"{table}\" (id, name, paid, amount) VALUES (1, 'Ann', TRUE, 12.5)"
+        );
+        sqlx::query(AssertSqlSafe(insert.as_str()))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            postgres_primary_key_columns(&pool, Some("public".to_owned()), table.clone())
+                .await
+                .unwrap(),
+            vec!["id"]
+        );
+        let read = format!("SELECT name, paid, amount::text FROM public.\"{table}\"");
+        let row: (String, bool, String) = sqlx::query_as(AssertSqlSafe(read.as_str()))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row, ("Ann".to_owned(), true, "12.5000000000".to_owned()));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
+    async fn live_mysql_table_changes_create_and_extend_a_table() {
+        use crate::ddl::{ColumnSpec, ColumnType, TableChange};
+        let url = std::env::var("REDROB_TEST_MYSQL_URL")
+            .expect("REDROB_TEST_MYSQL_URL must be set when this ignored live test is run");
+        let pool = MySqlPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let table = format!("redrob_ddl_{}", Uuid::new_v4().simple());
+        let column = |name: &str, column_type, nullable, primary_key| ColumnSpec {
+            name: name.to_owned(),
+            column_type,
+            nullable,
+            primary_key,
+        };
+        for change in [
+            TableChange::CreateTable {
+                schema: None,
+                table: table.clone(),
+                columns: vec![
+                    column("id", ColumnType::Integer, false, true),
+                    column("name", ColumnType::Text, false, false),
+                    column("at", ColumnType::Timestamp, true, false),
+                ],
+            },
+            TableChange::AddColumn {
+                schema: None,
+                table: table.clone(),
+                column: column("born", ColumnType::Date, true, false),
+            },
+        ] {
+            let statement = change.statement(DatabaseKind::MySql).unwrap();
+            sqlx::query(AssertSqlSafe(statement.as_str()))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let insert =
+            format!("INSERT INTO `{table}` (id, name, born) VALUES (1, 'Ann', '2020-01-02')");
+        sqlx::query(AssertSqlSafe(insert.as_str()))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            mysql_primary_key_columns(&pool, None, table.clone())
+                .await
+                .unwrap(),
+            vec!["id"]
+        );
+        let read = format!("SELECT name, DATE_FORMAT(born, '%Y-%m-%d') FROM `{table}`");
+        let row: (String, String) = sqlx::query_as(AssertSqlSafe(read.as_str()))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row, ("Ann".to_owned(), "2020-01-02".to_owned()));
+    }
+
     #[tokio::test]
     #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
     async fn live_mysql_native_scalars_when_configured() {
@@ -4270,6 +4433,71 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("matched 0 rows"), "{error}");
         assert_eq!(names().await, vec![text("Ann Lee"), text("Cy")]);
+    }
+
+    #[tokio::test]
+    async fn sqlite_table_changes_create_and_extend_a_table() {
+        use crate::ddl::{ColumnSpec, ColumnType, TableChange};
+        let service = service();
+        let column = |name: &str, column_type, nullable, primary_key| ColumnSpec {
+            name: name.to_owned(),
+            column_type,
+            nullable,
+            primary_key,
+        };
+        service
+            .apply_table_change(
+                DEMO_PROFILE_ID,
+                TableChange::CreateTable {
+                    schema: None,
+                    table: "pets".to_owned(),
+                    columns: vec![
+                        column("id", ColumnType::Integer, false, true),
+                        column("name", ColumnType::Text, false, false),
+                    ],
+                },
+            )
+            .await
+            .unwrap();
+        service
+            .apply_table_change(
+                DEMO_PROFILE_ID,
+                TableChange::AddColumn {
+                    schema: None,
+                    table: "pets".to_owned(),
+                    column: column("born", ColumnType::Date, true, false),
+                },
+            )
+            .await
+            .unwrap();
+        let insert = service
+            .prepare_mutation(
+                DEMO_PROFILE_ID,
+                "INSERT INTO pets (id, name, born) VALUES (1, 'Rex', '2020-01-02')".to_owned(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        service.apply_mutation(insert).await.unwrap();
+        let rows = service
+            .execute_query(query("SELECT name, born FROM pets"))
+            .await
+            .unwrap()
+            .rows;
+        assert_eq!(
+            rows,
+            vec![vec![
+                DataValue::Text("Rex".to_owned()),
+                DataValue::Date("2020-01-02".to_owned())
+            ]]
+        );
+        assert_eq!(
+            service
+                .primary_key_columns(DEMO_PROFILE_ID, None, "pets".to_owned())
+                .await
+                .unwrap(),
+            vec!["id"]
+        );
     }
 
     #[tokio::test]
