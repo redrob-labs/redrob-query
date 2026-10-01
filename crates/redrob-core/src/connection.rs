@@ -2124,8 +2124,10 @@ fn convert_mysql_cell(row: &MySqlRow, index: usize) -> Result<DataValue> {
         return Ok(DataValue::Null);
     }
     let type_name = row.column(index).type_info().name().to_ascii_uppercase();
+    // sqlx names any TINYINT(1) "BOOLEAN", and such a column can hold 0..=127 (or -128): decoding it as a
+    // boolean fails on 5 and calls 1 "true" when the column may mean a count. It is a TINYINT; say so.
     if matches!(type_name.as_str(), "BOOL" | "BOOLEAN") {
-        return decode_cell(row, index, DataValue::Boolean, "boolean");
+        return decode_integer_cell::<i8, _>(row, index);
     }
     if type_name == "BIT" {
         return decode_mysql_bit(row, index);
@@ -2354,7 +2356,9 @@ fn format_utc_date_time(value: DateTime<Utc>) -> String {
 }
 
 fn format_mysql_time(value: MySqlTime) -> String {
-    let sign = if !value.is_zero() && value.is_negative() {
+    // Read the sign itself: sqlx-mysql 0.9.0's MySqlTime::is_negative() returns sign.is_positive(),
+    // which printed every positive TIME with a minus and dropped it from every negative one.
+    let sign = if !value.is_zero() && value.sign().is_negative() {
         "-"
     } else {
         ""
@@ -3492,7 +3496,7 @@ mod tests {
         let result = execute_postgres_query(
             &pool,
             &query(
-                "SELECT NULL::text, TRUE, -32768::int2, 2147483647::int4, 9223372036854775807::int8, 1.5::float4, 2.5::float8, decode('AP8=', 'base64')::bytea, DATE '2025-02-03', TIME '23:59:58.123456', TIMESTAMP '2025-02-03 04:05:06.700800', TIMESTAMPTZ '2025-02-03 04:05:06.700800+02', 123456789012345678901234567890.0012300::numeric, '{\"safe\":true}'::json, '{\"exact\":\"9007199254740993\"}'::jsonb, '12345678-1234-5678-90ab-1234567890ab'::uuid, 'hello'::text",
+                "SELECT NULL::text, TRUE, (-32768)::int2, 2147483647::int4, 9223372036854775807::int8, 1.5::float4, 2.5::float8, decode('AP8=', 'base64')::bytea, DATE '2025-02-03', TIME '23:59:58.123456', TIMESTAMP '2025-02-03 04:05:06.700800', TIMESTAMPTZ '2025-02-03 04:05:06.700800+02', 123456789012345678901234567890.0012300::numeric, '{\"safe\":true}'::json, '{\"exact\":\"9007199254740993\"}'::jsonb, '12345678-1234-5678-90ab-1234567890ab'::uuid, 'hello'::text",
             ),
         )
         .await
@@ -3878,6 +3882,16 @@ mod tests {
             sqlite_text_value("UUID", id.to_string()).unwrap(),
             DataValue::Uuid(id)
         );
+    }
+
+    #[test]
+    fn mysql_time_keeps_its_sign() {
+        use sqlx::mysql::types::MySqlTimeSign;
+        let positive = MySqlTime::new(MySqlTimeSign::Positive, 25, 2, 3, 123_456).unwrap();
+        let negative = MySqlTime::new(MySqlTimeSign::Negative, 25, 2, 3, 123_456).unwrap();
+        assert_eq!(format_mysql_time(positive), "25:02:03.123456");
+        assert_eq!(format_mysql_time(negative), "-25:02:03.123456");
+        assert_eq!(format_mysql_time(MySqlTime::ZERO), "00:00:00");
     }
 
     #[tokio::test]
