@@ -150,4 +150,4 @@ https://console.redrob.ai/api/backend/v1/chat/completions
 
 ## 라이선스와 귀속
 
-Redrob Query는 [Apache License 2.0](LICENSE)으로 배포됩니다. DBeaver Community 워크플로 귀속은 [NOTICE](NOTICE)를 보세요. 서드파티 구성요소는 각자의 라이선스를 따릅니다.
+Redrob Query는 [GNU General Public License 버전 3 이상](LICENSE)으로 배포됩니다. Beekeeper Studio Community Edition 소스를 이식하기 시작하면서 Apache-2.0에서 옮겼습니다 — 그쪽이 GPL-3.0-or-later이므로 더 강한 카피레프트가 코드와 함께 따라옵니다. 귀속과 상표 유보는 [NOTICE](NOTICE)를 보세요. 서드파티 구성요소는 각자의 라이선스를 따릅니다.

@@ -1,0 +1,121 @@
+# Pinned upstream specifications. Update only with compatibility review.
+#
+# Same schema as redrob-canvas's docs/upstream-sources.toml, deliberately: three products read from
+# upstream authorities and they should not each invent their own vocabulary for it.
+#
+# `kind` is the load-bearing field, and scripts/verify-upstream.mjs checks it:
+#
+#   code       Source code is COPIED into this repository, file by file. The upstream licence
+#              therefore binds our distribution. Every such source needs an attribution entry in
+#              UPSTREAM_NOTICES.md recording its pinned commit, and a `boundary` saying where
+#              copying stops.
+#   algorithm  Read for behaviour, formats and results. Nothing is copied. We reimplement and
+#              compare. No copyright obligation follows from reading, so these entries are a
+#              reproducibility record, not a licence claim.
+#   library    Linked as a dependency, not copied. Licence binds linking only.
+#   redistributed  PREBUILT FILES we copy into our own build output and ship. Stronger than `library`:
+#              GPL section 6 makes a source offer owed for each, so the pin must be an exact `version`
+#              and NOTICE must carry a "Redistributed binaries" section. verify-upstream.mjs checks
+#              both. Calling one of these a `library` is the mistake this kind exists to prevent --
+#              linking and shipping look identical in a package.json and are not the same obligation.
+#   protocol   A wire format or API we speak. Nothing is copied and nothing is linked.
+#
+# Confusing `code` with `algorithm` is the one mistake here that cannot be walked back after
+# shipping: an `algorithm` source may be licensed on terms we could never redistribute under, and
+# reading it is still safe, while copying one line from the same file is not.
+
+[beekeeper]
+repository = "https://github.com/beekeeper-studio/beekeeper-studio"
+branch = "master"
+commit = "c67ca751f4a006b195d6a29d91a9a4f7b11e84b1"
+kind = "code"
+role = [
+  "data editor and write path",
+  "DDL, constraint and index panels",
+  "multi-statement runner",
+  "transaction toolbar",
+  "plugin host protocol",
+]
+# "ER diagrams" was removed from this list on 2026-09-30, and the replacement of it by "plugin host
+# protocol" is the finding rather than a rewording. Searching the whole tree at the pinned commit for
+# entity/relation/erd/diagram returns ZERO source files, and no graph-layout library is imported: the
+# feature is a separate GPL-3.0 npm PLUGIN, registered below, loaded as prebuilt HTML in an iframe.
+# Leaving the row here would have sent a future cycle looking for source that does not exist.
+# Measurement: docs/beekeeper-porting-boundary.md.
+license = "GPL-3.0-or-later for everything outside src-commercial; see boundary"
+# THE REPOSITORY IS MIXED LICENCE, and the boundary is mechanical rather than a judgement call.
+# LICENSE-COMMERCIAL.md: files in any `src-commercial` directory are under a commercial licence that
+# forbids use in our own project; every other file is GPLv3. Measured at the pinned commit:
+#
+#   src-commercial  55 files    544 KB   COPYING ANY OF THESE IS A LICENCE VIOLATION
+#   GPLv3        1,817 files  284.1 MB   portable
+#
+# 55 of 1,872 is small enough that no reviewer would reliably notice one slipping through, which is
+# exactly why it is a machine check and not a note. scripts/check-upstream-paths.mjs IS IN PLACE and
+# runs in `npm run check`: it hashes every tracked file against the 54 commercial blob SHA-1 values
+# in docs/beekeeper-commercial-fingerprint.json, refuses a commercial path in the provenance table or
+# the git index, and asserts /upstream/ is ignored. Only hashes are recorded -- they come from the
+# upstream git TREE listing, which publishes a blob's hash without its bytes, so no commercial
+# content was fetched or stored. Reverse-verified six ways including a renamed paste.
+#
+# LICENSE.md grants "either version 3 of the License, or (at your option) any later version", so
+# `-or-later`. That is why this product relicensed from Apache-2.0 rather than to GPL-3.0-only.
+boundary = "exclude every **/src-commercial directory; Vue views are translated to React, not copied"
+
+[dbeaver]
+repository = "https://github.com/dbeaver/dbeaver"
+branch = "devel"
+commit = "6e651b8349f41a249672a25550e84753e6e44bbd"
+kind = "algorithm"
+role = ["navigator", "connection wizard", "SQL editor", "data viewer", "object properties workflows"]
+license = "Apache-2.0; algorithm-only, so no file is reused"
+# Not `code`, and the reason is this product's own identity line rather than a licence problem:
+# Apache-2.0 would let us copy it. DBeaver is Java, and reusing it would mean bundling a JVM, which
+# contradicts "JVM-free, AI-native desktop database client". Its workflows are the authority; the
+# per-workflow mapping and the boundary of each is docs/DBEAVER-PORTING-MAP.md.
+
+[redrob_code]
+repository = "https://github.com/redrob-labs/redrob-code"
+tag = "v0.1.0"
+commit = "0a144f3b719d1f0de9101747327276507ad68ba3"
+kind = "protocol"
+role = ["Redrob API protocol", "device authorization", "streaming tool calls", "model discovery"]
+# A tag and the commit it points at. A bare commit reachable only from a deleted ref does not
+# survive, and this engine deleted every tag in its repository once when it reset its version line.
+
+[beekeeper_plugin_sdk]
+repository = "https://github.com/beekeeper-studio/plugin"
+registry = "https://www.npmjs.com/package/@beekeeperstudio/plugin"
+minimum_version = "1.7.1"
+kind = "library"
+role = ["plugin-side SDK for the postMessage request/response protocol"]
+license = "MIT"
+# MIT into a GPL-3.0-or-later project is the permitted direction, and only linking is involved: this
+# is the SDK a PLUGIN uses to talk to its host, so it is pinned by minimum_version like any library
+# rather than by a commit. The host side of the same protocol is specified by 1,272 lines of public
+# reference documentation (docs/plugin_development/api-reference.md at beekeeper's pinned commit), so
+# implementing it requires no guessing and no copying.
+boundary = "Linked as a dependency. No source is copied from it."
+
+[beekeeper_er_diagram]
+repository = "https://github.com/beekeeper-studio/bks-er-diagram"
+registry = "https://www.npmjs.com/package/@beekeeperstudio/bks-er-diagram"
+version = "1.1.2"
+kind = "redistributed"
+role = ["entity relationship diagram viewer"]
+license = "GPL-3.0"
+# GPL-3.0 into GPL-3.0-or-later is one-directional and allowed, the same direction canvas takes with
+# Graphite. This is where the ER diagram actually lives -- it is NOT in the beekeeper repository.
+#
+# The package ships manifest.json + dist/index.html, not a JS module: it is a plugin that the host
+# loads into an iframe. Its own internals are Vue plus @dagrejs/dagre, and that is invisible to us,
+# because we load the prebuilt HTML rather than its source. So the porting plan's "translate Vue to
+# React" does not apply to this feature at all -- there are zero lines to translate.
+boundary = """
+Loaded as a prebuilt plugin in a sandboxed frame. No source is copied and its Vue internals are never
+touched -- but its BUILT FILES are redistributed, which is a stronger obligation than linking and is
+recorded in NOTICE under "Redistributed binaries" with the source offer GPL section 6 requires.
+scripts/install-plugin-assets.mjs places them and makes exactly two reported edits to its index.html:
+an absolute favicon path made relative, and a storage shim the sandbox's opaque origin requires. The
+3.9 MB source map is excluded from our build; `npm pack` at the pinned version reproduces it.
+"""

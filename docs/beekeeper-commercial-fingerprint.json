@@ -1,0 +1,279 @@
+{
+  "upstream": "beekeeper-studio/beekeeper-studio",
+  "commit": "c67ca751f4a006b195d6a29d91a9a4f7b11e84b1",
+  "why": "git blob SHA-1 of every file under apps/studio/src-commercial at the pinned commit. Those files are under a COMMERCIAL licence that forbids use in this project; everything else in that repository is GPLv3. Only hashes are recorded -- no commercial content is fetched, stored or transmitted by this file or by the guard that reads it.",
+  "empty_blob_excluded": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+  "empty_blob_note": "src-commercial/.keep is an empty file, and every empty file shares that hash. Recording it would flag every empty file in this repository, so it is excluded by hash rather than by name.",
+  "files": [
+    {
+      "sha1": "0c410cbc856ae5e6195877e369069bd6b32cee60",
+      "path": "apps/studio/src-commercial/backend/handlers/awsHandlers.ts",
+      "size": 2088
+    },
+    {
+      "sha1": "e2a13c66d87517062e2a868a736916cb0593495e",
+      "path": "apps/studio/src-commercial/backend/handlers/backupHandlers.ts",
+      "size": 3325
+    },
+    {
+      "sha1": "7d09c83e43c792fa5fcf80ad92192f6e9528093e",
+      "path": "apps/studio/src-commercial/backend/handlers/cliHandlers.ts",
+      "size": 2266
+    },
+    {
+      "sha1": "9dbd8258f4cc9572f108a5898b0d23364aeca716",
+      "path": "apps/studio/src-commercial/backend/handlers/connHandlers.ts",
+      "size": 35913
+    },
+    {
+      "sha1": "e75b14d5df7aaf741e6e6c26cb209d38c8409383",
+      "path": "apps/studio/src-commercial/backend/handlers/enumHandlers.ts",
+      "size": 1646
+    },
+    {
+      "sha1": "fa230df4e8287eacedd4c5a358c3a5e9d6809fc2",
+      "path": "apps/studio/src-commercial/backend/handlers/exportHandlers.ts",
+      "size": 4423
+    },
+    {
+      "sha1": "3d70b7b83c0455705999a26ea1218d24beb521f8",
+      "path": "apps/studio/src-commercial/backend/handlers/handlers.ts",
+      "size": 960
+    },
+    {
+      "sha1": "ed143c2185c28d1884fa0d83024a5aa0896dd32d",
+      "path": "apps/studio/src-commercial/backend/handlers/importHandlers.ts",
+      "size": 4422
+    },
+    {
+      "sha1": "1f6142e146e33a84bbf2bcf705fc14d7ba3fa97e",
+      "path": "apps/studio/src-commercial/backend/handlers/pluginHandlers.ts",
+      "size": 4169
+    },
+    {
+      "sha1": "4ec959ee46980128b935f6103120616ca87ff636",
+      "path": "apps/studio/src-commercial/backend/lib/connection-provider.ts",
+      "size": 6832
+    },
+    {
+      "sha1": "d05ca1a62a317190dce1d787668d10cb037120a9",
+      "path": "apps/studio/src-commercial/backend/lib/db/client.ts",
+      "size": 3106
+    },
+    {
+      "sha1": "792b6c0d7ea2d2aed465ffcb6a4d8a1d3d95fc97",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/anywhere.ts",
+      "size": 44393
+    },
+    {
+      "sha1": "027a7945e0591d6a6df6a1603f40b4b0009541e9",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/anywhere/SqlAnywhereCursor.ts",
+      "size": 2016
+    },
+    {
+      "sha1": "273e7a8703d1b5e63cfe83e32e494ebcc3641424",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/anywhere/SqlAnywherePool.ts",
+      "size": 3287
+    },
+    {
+      "sha1": "9bd9266d10d00cb0184e58e8b8f78922a0819e5c",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/cassandra.ts",
+      "size": 28469
+    },
+    {
+      "sha1": "3ad779e3c871685f106a3b6f27e1b5878663c6f8",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/cassandra/CassandraCursor.ts",
+      "size": 2528
+    },
+    {
+      "sha1": "e62cbbf9e7899ae9b665dae9ceb2ac58b7ccef02",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/clickhouse.ts",
+      "size": 36563
+    },
+    {
+      "sha1": "fa37f05b483d70fb1835deb0b75f31e2fc0db9ca",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/clickhouse/ClickHouseCursor.ts",
+      "size": 2797
+    },
+    {
+      "sha1": "3bbca9f5540e65d0297965df86c8221ad70252e6",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/duckdb.ts",
+      "size": 34305
+    },
+    {
+      "sha1": "590ca91b209938424191cd2da95e227f4014cd87",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/duckdb/DuckDBCursor.ts",
+      "size": 1278
+    },
+    {
+      "sha1": "acb0130bcfc62d557e09b957e31108a8fc398394",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/dynamodb.ts",
+      "size": 30889
+    },
+    {
+      "sha1": "98f4448262c87b6a9682336b6949f5d6ac398272",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/dynamodb/DynamoDBCursor.ts",
+      "size": 3645
+    },
+    {
+      "sha1": "dbe9c2752176c4c022802a36334804573e007099",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/firebird.ts",
+      "size": 45656
+    },
+    {
+      "sha1": "2817ef60f0949a45b8d92294366f005c9fa5272e",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/firebird/FirebirdCursor.ts",
+      "size": 1578
+    },
+    {
+      "sha1": "4b8fcf7ccc200f6d517cfd043f46c963eab60c70",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/firebird/NodeFirebirdWrapper.ts",
+      "size": 8368
+    },
+    {
+      "sha1": "507b6a76014d255e5d07837bd8e3a73bee7934a4",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/libsql.ts",
+      "size": 4996
+    },
+    {
+      "sha1": "a55948a4811e5eb5964ac6d6584ab9b60c9573d6",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/libsql/LibSQLCursor.ts",
+      "size": 1927
+    },
+    {
+      "sha1": "817f1d2789df4516e574a26fab4dc10a5f12a18f",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/mongodb.ts",
+      "size": 38224
+    },
+    {
+      "sha1": "32c827ca6ab181cd2df9ff9721bccfb041a9b934",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/mongodb/MongoDBCursor.ts",
+      "size": 1937
+    },
+    {
+      "sha1": "baef54264785db68b6b8e5a3737f4c1c5f149af2",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/oracle.ts",
+      "size": 42495
+    },
+    {
+      "sha1": "25bbc0f95959ba7f847b66a097b8e4f4efd60ea2",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/oracle/OracleCursor.ts",
+      "size": 2679
+    },
+    {
+      "sha1": "2609a3fcb2a0499b467e0f6e27f62a72500e77da",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/scylladb.ts",
+      "size": 105
+    },
+    {
+      "sha1": "de28e8916f93aaf857bd27440d2b793a285e7f42",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/snowflake.ts",
+      "size": 33665
+    },
+    {
+      "sha1": "f65c315d3907b863738aacb4a841275d539c4ad3",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/snowflake/SnowflakeCursor.ts",
+      "size": 2176
+    },
+    {
+      "sha1": "78cc77b77bf48d336cc940ab85579e1901d6fcba",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/surrealdb.ts",
+      "size": 30208
+    },
+    {
+      "sha1": "13eaefc453046fe593138dbba3f37b69a14bc7e5",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/surrealdb/SurrealDBCursor.ts",
+      "size": 2670
+    },
+    {
+      "sha1": "1ad3188a7d6d441eb6a3e8e33e4cc8efff8b2d52",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/surrealdb/SurrealDBPool.ts",
+      "size": 3526
+    },
+    {
+      "sha1": "574bc00beaf18f688b62b4b2afe98c9410cca0e9",
+      "path": "apps/studio/src-commercial/backend/lib/db/clients/trino.ts",
+      "size": 21005
+    },
+    {
+      "sha1": "0bde4b7ad96d8982b8b4dc0db117c040acbd55b3",
+      "path": "apps/studio/src-commercial/backend/lib/db/server.ts",
+      "size": 2425
+    },
+    {
+      "sha1": "75e2cb507cadb16225a71d7837db82011afec7e4",
+      "path": "apps/studio/src-commercial/backend/lib/import/formats/csv.ts",
+      "size": 3841
+    },
+    {
+      "sha1": "a570ea30ac344c44a587099dd990546763484e26",
+      "path": "apps/studio/src-commercial/backend/lib/import/formats/json.ts",
+      "size": 2268
+    },
+    {
+      "sha1": "4953f9858832dc0ef11c379dff5dafd8c78d2d20",
+      "path": "apps/studio/src-commercial/backend/lib/import/formats/jsonline.ts",
+      "size": 2671
+    },
+    {
+      "sha1": "141731db83d8818700e9fa5479dc529b3787e40b",
+      "path": "apps/studio/src-commercial/backend/lib/import/formats/xlsx.ts",
+      "size": 2264
+    },
+    {
+      "sha1": "9b04cff3bec3441f5c93744ecc056299c56a0101",
+      "path": "apps/studio/src-commercial/backend/lib/import/models.ts",
+      "size": 528
+    },
+    {
+      "sha1": "89b3f4f586120395b7057393953fa3ac606bfc71",
+      "path": "apps/studio/src-commercial/backend/lib/import/utils.js",
+      "size": 499
+    },
+    {
+      "sha1": "1bb4b7e8560939d8b7c88036afb69ccfeec9e883",
+      "path": "apps/studio/src-commercial/backend/plugin-system/modules/BundledPluginModule.ts",
+      "size": 4235
+    },
+    {
+      "sha1": "e03dd64382d656d169139feaa17413b9406291b5",
+      "path": "apps/studio/src-commercial/backend/plugin-system/modules/ConfigurationModule.ts",
+      "size": 2748
+    },
+    {
+      "sha1": "4eeaaa218d21874a367e504b3f2932ed1c6d0ac6",
+      "path": "apps/studio/src-commercial/backend/plugin-system/modules/README.md",
+      "size": 2040
+    },
+    {
+      "sha1": "51f52880196b5e1cfedf2764da619f7097d10fd9",
+      "path": "apps/studio/src-commercial/backend/plugin-system/modules/index.ts",
+      "size": 122
+    },
+    {
+      "sha1": "dd1a28afef8bde007e5d8a5061702ff4d529c523",
+      "path": "apps/studio/src-commercial/entrypoints/main.ts",
+      "size": 11463
+    },
+    {
+      "sha1": "e46df0af69494d2207eba3d95bfb5c0ee478f2c0",
+      "path": "apps/studio/src-commercial/entrypoints/preload.ts",
+      "size": 6033
+    },
+    {
+      "sha1": "fd2b5407ec36345b9adc808292a481e9523cb49c",
+      "path": "apps/studio/src-commercial/entrypoints/renderer.ts",
+      "size": 8339
+    },
+    {
+      "sha1": "8dd1c14f6697ba6cf39c71f2d203fa956bf0b4bf",
+      "path": "apps/studio/src-commercial/entrypoints/utility.ts",
+      "size": 6953
+    },
+    {
+      "sha1": "bcf75854c04f65710a4f8f38f6ea4987c6124fdd",
+      "path": "bin/check-for-src-commercial.sh",
+      "size": 278
+    }
+  ]
+}
