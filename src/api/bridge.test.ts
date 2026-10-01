@@ -245,6 +245,25 @@ describe('TauriBridge wire adapter', () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
+  it('says why a desktop result cannot be edited, and makes it editable when it can', async () => {
+    const id = 'c1e5165c-a925-4f9c-b065-e395bbd433b4';
+    let keys: string[] = ['id']; let readOnly = false;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'list_connections') return [{ id, name: 'Local', kind: 's_q_lite', config: { filePath: '/tmp/a.db', tls: false, options: {} }, readOnly, builtIn: false }];
+      if (command === 'execute_query') return { columns: [{ name: 'id', dataType: 'INTEGER' }, { name: 'name', dataType: 'TEXT' }], rows: [[{ type: 'integer', value: '1' }, { type: 'text', value: 'Ann' }]], stats: { rowsReturned: 1, elapsedMs: 1 } };
+      if (command === 'primary_key_columns') return keys;
+      return [];
+    });
+    const run = async (query: string) => { const bridge = new TauriBridge(); await bridge.listConnections(); return bridge.executeQuery({ connectionId: id, language: 'sql', query }); };
+
+    expect((await run('SELECT id, name FROM people')).editSource).toEqual({ table: 'people', primaryKey: 'id' });
+    expect((await run('SELECT p.name AS who FROM people p')).readOnlyReason).toMatch(/plain SELECT from one table/);
+    keys = []; expect((await run('SELECT * FROM people')).readOnlyReason).toMatch(/people has no primary key/);
+    keys = ['a', 'b']; expect((await run('SELECT * FROM people')).readOnlyReason).toMatch(/key of 2 columns/);
+    keys = ['uid']; expect((await run('SELECT * FROM people')).readOnlyReason).toMatch(/include the key column uid/);
+    readOnly = true; keys = ['id']; expect((await run('SELECT * FROM people')).readOnlyReason).toMatch(/Allow edits/);
+  });
+
   it('sends a staged new row as typed values, leaving out what was not filled in', async () => {
     invokeMock.mockResolvedValueOnce({ rowsAffected: 1, elapsedMs: 2, committed: true });
     const bridge = new TauriBridge();

@@ -604,9 +604,9 @@ export class TauriBridge implements DataBridge {
     } });
     const keys = page.columns.map((column, index) => page.columns.findIndex((item) => item.name === column.name) === index ? column.name : `${column.name}_${index + 1}`);
     const wireTypes = page.columns.map((_, index) => page.rows.map((row) => row[index]?.type).find((type) => type && type !== 'null'));
-    const editSource = await this.findEditSource(request, page.columns.map((column) => column.name));
+    const { editSource, readOnlyReason } = await this.findEditSource(request, page.columns.map((column) => column.name));
     return {
-      ...(editSource ? { editSource } : {}),
+      ...(editSource ? { editSource } : { readOnlyReason }),
       columns: page.columns.map((column, index) => ({ key: keys[index], label: column.name, dataType: toDataType(column.dataType), nullable: column.nullable ?? undefined, wireType: wireTypes[index], primaryKey: editSource?.primaryKey === keys[index] || undefined })),
       rows: page.rows.map((row) => Object.fromEntries(keys.map((key, index) => [key, fromWireValue(row[index] ?? { type: 'null' })]))),
       rowCount: page.stats.rowsReturned,
@@ -621,19 +621,25 @@ export class TauriBridge implements DataBridge {
 
   // A result is editable only when its SQL plainly reads one table (see editSource.ts) and that table
   // has a single-column primary key that the result includes. Anything else stays read-only.
-  private async findEditSource(request: QueryRequest, columnNames: string[]): Promise<QueryResult['editSource'] | undefined> {
+  // Either the source a result can be written back to, or the plain reason it cannot -- shown under
+  // the grid, so a person knows what would make it editable rather than guessing.
+  private async findEditSource(request: QueryRequest, columnNames: string[]): Promise<{ editSource?: QueryResult['editSource']; readOnlyReason?: string }> {
     const profile = this.profiles.get(request.connectionId);
     const kind = profile?.kind;
-    // A read-only connection offers no editing at all, rather than staging edits that Apply would refuse.
-    if (request.language !== 'sql' || !kind || (profile as { readOnly?: boolean }).readOnly !== false) return undefined;
+    if (!kind) return { readOnlyReason: 'Read-only · the connection is not known' };
+    if (request.language !== 'sql') return { readOnlyReason: 'Read-only · MongoDB results cannot be edited here' };
+    if (kind === 'sqlserver') return { readOnlyReason: 'Read-only · SQL Server editing is not supported' };
+    if ((profile as { readOnly?: boolean }).readOnly !== false) return { readOnlyReason: 'Read-only connection · turn on "Allow edits" in its settings to edit' };
     const source = editableSource(request.query, kind);
-    if (!source) return undefined;
+    if (!source) return { readOnlyReason: 'Read-only · only a plain SELECT from one table, without aliases or joins, can be edited' };
     try {
       const keys = await invoke<string[]>('primary_key_columns', { connectionId: request.connectionId, schema: source.schema ?? null, table: source.table });
-      if (keys.length !== 1 || !columnNames.includes(keys[0])) return undefined;
-      return { ...source, primaryKey: keys[0] };
+      if (keys.length === 0) return { readOnlyReason: `Read-only · ${source.table} has no primary key, so a row cannot be identified` };
+      if (keys.length > 1) return { readOnlyReason: `Read-only · ${source.table} has a key of ${keys.length} columns; only single-column keys can be edited` };
+      if (!columnNames.includes(keys[0])) return { readOnlyReason: `Read-only · include the key column ${keys[0]} in the SELECT to edit` };
+      return { editSource: { ...source, primaryKey: keys[0] } };
     } catch {
-      return undefined;
+      return { readOnlyReason: 'Read-only · the table key could not be looked up' };
     }
   }
 

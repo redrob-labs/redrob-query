@@ -164,7 +164,20 @@ try {
   await until('Run to accept a click', () => click('run-query'));
   await until('the new row after a fresh run', async () => (await cell('name, result row 2')) === 'Cy');
   await shot('6-inserted');
-  console.log(`e2e: SQLite connection -> Query this table -> Run -> edit name -> Apply -> Run -> "${NEW_NAME}" -> delete row 2 -> Apply -> Run -> 1 row -> add "Cy" -> Apply -> Run -> 2 rows`);
+
+  // 7. A table without a primary key: Query this table works, but nothing can be edited, and the
+  //    grid says why.
+  await until('the notes table and its menu', async () => (await clickLabel('Actions for notes')) && clickLabel('Query this table'));
+  await until('Run to accept a click', () => click('run-query'));
+  await until('the notes rows', async () => (await cell('body, result row 1')) === 'first');
+  await until('the reason it is read-only', () => shows('notes has no primary key'));
+  const locked = await js(
+    `const cell = document.querySelector('[role=cell][aria-label="body, result row 1"]');
+     const add = document.querySelector('[data-testid=add-row]');
+     return cell.getAttribute('contenteditable') !== 'true' && add.disabled;`);
+  if (!locked) throw new Error('the key-less table offered editing');
+  await shot('7-no-key');
+  console.log(`e2e: SQLite connection -> Query this table -> Run -> edit name -> Apply -> Run -> "${NEW_NAME}" -> delete row 2 -> Apply -> Run -> 1 row -> add "Cy" -> Apply -> Run -> 2 rows -> key-less notes: read-only, reason shown`);
 } catch (error) {
   failed = true;
   console.error(`e2e failed: ${error.message}`);
