@@ -46,7 +46,7 @@ export function AiPanel() {
         <div className="ai-welcome"><span><Icon name="sparkle" size={24} /></span><h2>Build queries for this engine</h2><p>{mode === 'desktop' ? 'Your prompt and active query are sent to Redrob. Database result rows and credentials are not automatically attached. The desktop app trusts user-entered content in those fields, so anything you include there is sent.' : 'Demo AI runs locally with your prompt and active query. Result rows and credentials are not used.'}</p></div>
         {messages.map((message, index) => <div key={`${message.role}-${index}`} className={`ai-message ${message.role}`}>
           {message.role === 'assistant' ? <span className="bot-avatar"><Icon name="sparkle" /></span> : null}
-          <div className="message-content"><p>{message.content}</p>{message.query ? <div className="generated-query"><div><Icon name="code" /> Generated {message.language === 'mql' ? 'MQL' : 'SQL'}</div><pre>{message.query}</pre><button data-testid="use-ai-query" onClick={() => useQuery(message.query!)}>Use in editor</button></div> : null}</div>
+          <div className="message-content"><p>{message.content}</p>{message.query ? <div className="generated-query"><div><Icon name="code" /> Generated {message.language === 'mql' ? 'MQL' : 'SQL'}</div><pre>{message.query}</pre><button data-testid="use-ai-query" onClick={() => useQuery(message.query!)}><Icon name="edit" /> Use in editor</button></div> : null}</div>
         </div>)}
         {status === 'loading' ? <div className="ai-message assistant"><span className="bot-avatar"><Icon name="sparkle" /></span><div className="ai-thinking"><i /><i /><i /><span>Thinking with engine and active-query context</span></div></div> : null}
       </div>
