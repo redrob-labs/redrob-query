@@ -210,7 +210,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .grid-header .pk { margin-left: auto; padding: 1px 3px; border-radius: 3px; background: var(--surface-material); color: var(--amber); font-size: 7px; }
 .sort-icon { margin-left: auto; }
 .grid-body { position: relative; min-width: max-content; }
-.grid-row { position: absolute; left: 0; top: 29px; width: max-content; height: 34px; display: grid; border-bottom: 1px solid var(--border-subtle); }
+.grid-row { position: absolute; left: 0; top: 0; width: max-content; height: 34px; display: grid; border-bottom: 1px solid var(--border-subtle); }
 .grid-row:hover { background: var(--surface-base); }
 .grid-row > div { min-width: 0; height: 34px; display: flex; align-items: center; padding: 0 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-right: 1px solid var(--border-subtle); }
 .grid-row .row-number, .grid-header .row-number { justify-content: flex-end; color: var(--ink-muted); background: var(--surface-base); }
@@ -432,6 +432,15 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .grid-header > div { padding: 0; }
 .column-sort { width: 100%; height: 100%; display: flex; align-items: center; gap: 5px; padding: 0 8px; background: transparent; color: inherit; text-align: left; }
 .column-sort:hover { background: var(--surface-raised); color: var(--ink-primary); }
+/* The column menu sits beside the sort button, shown on hover or focus; an open one stacks over the rows. */
+/* The cell lets the open menu out; the sort button clips the label instead. */
+.grid-header [role="columnheader"] { position: relative; display: flex; align-items: center; overflow: visible; }
+.grid-header .column-sort { min-width: 0; overflow: hidden; }
+.column-menu { opacity: 0; }
+.grid-header [role="columnheader"]:hover .column-menu, .column-menu:focus-within { opacity: 1; }
+.grid-header [role="columnheader"]:focus-within { z-index: 5; }
+.column-menu .rr-btn { padding: 0 3px; min-width: 0; }
+.column-menu .rr-btn__icon { display: none; }
 .column-sort .pk { margin-left: auto; }
 .sort-placeholder { margin-left: auto; width: 11px; }
 .page-size { width: auto !important; border: 0 !important; background: transparent !important; }
