@@ -90,6 +90,8 @@ export interface QueryResult {
 
 export interface CellMutation {
   id: string;
+  /** 'delete' removes the whole row (column is empty); otherwise one cell changes. */
+  kind?: 'update' | 'delete';
   connectionId: string;
   table: string;
   primaryKey: string;

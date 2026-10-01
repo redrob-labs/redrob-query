@@ -124,6 +124,7 @@ interface WorkspaceState {
   enableLocalWorkspace(): void;
   focusNavigatorSearch(): void;
   stageCell(rowIndex: number, column: string, value: CellValue): void;
+  stageDelete(rowIndex: number): void;
   discardMutation(id: string): void;
   discardAllMutations(): void;
   applyMutations(): Promise<void>;
@@ -462,6 +463,14 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const mutations = [...state.mutations.filter((item) => item.id !== mutationId), { id: mutationId, connectionId: state.activeConnectionId, table: source.table, schema: source.schema, primaryKey: source.primaryKey, rowKey, column, previousValue, nextValue: value, keyValue: row[source.primaryKey], keyWireType: state.result?.columns.find((item) => item.key === source.primaryKey)?.wireType, wireType: state.result?.columns.find((item) => item.key === column)?.wireType }];
         set({ mutations, changesOpen: true });
       },
+      // Deleting a row replaces any edits staged on it: the core refuses a row both edited and deleted.
+      stageDelete(rowIndex) {
+        const state = get(); const row = state.result?.rows[rowIndex]; const source = state.result?.editSource;
+        if (!row || !source || !state.activeConnectionId) return;
+        const rowKey = String(row[source.primaryKey]); if (!rowKey) return;
+        const deletion: CellMutation = { id: `${rowKey}-delete`, kind: 'delete', connectionId: state.activeConnectionId, table: source.table, schema: source.schema, primaryKey: source.primaryKey, rowKey, column: '', previousValue: null, nextValue: null, keyValue: row[source.primaryKey], keyWireType: state.result?.columns.find((item) => item.key === source.primaryKey)?.wireType };
+        set({ mutations: [...state.mutations.filter((item) => item.rowKey !== rowKey), deletion], changesOpen: true });
+      },
       discardMutation(id) { set((state) => ({ mutations: state.mutations.filter((item) => item.id !== id) })); },
       discardAllMutations() { mutationGeneration += 1; set({ mutations: [], changesOpen: false, mutationStatus: 'idle' }); },
       async applyMutations() {
@@ -477,7 +486,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           set((current) => {
             const remainingMutations = current.mutations.filter((mutation) => !submittedMutations.has(mutation));
             return { mutationStatus: 'success', mutations: remainingMutations, changesOpen: remainingMutations.length > 0,
-              result: current.result ? { ...current.result, rows: current.result.rows.map((row) => { const primaryKey = current.result?.editSource?.primaryKey; const changes = primaryKey ? mutations.filter((change) => change.rowKey === String(row[primaryKey])) : []; return changes.reduce((updated, change) => ({ ...updated, [change.column]: change.nextValue }), row); }) } : null,
+              result: current.result ? { ...current.result, rows: current.result.rows.filter((row) => { const primaryKey = current.result?.editSource?.primaryKey; return !primaryKey || !mutations.some((change) => change.kind === 'delete' && change.rowKey === String(row[primaryKey])); }).map((row) => { const primaryKey = current.result?.editSource?.primaryKey; const changes = primaryKey ? mutations.filter((change) => change.rowKey === String(row[primaryKey])) : []; return changes.reduce((updated, change) => ({ ...updated, [change.column]: change.nextValue }), row); }) } : null,
               toasts: [...current.toasts, { id: toastId(), tone: 'success', title: 'Changes applied', detail: result.message }],
             };
           });

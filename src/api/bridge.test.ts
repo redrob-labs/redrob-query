@@ -245,6 +245,19 @@ describe('TauriBridge wire adapter', () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
+  it('sends a staged row delete as a typed key, apart from the cell edits', async () => {
+    invokeMock.mockResolvedValueOnce({ rowsAffected: 2, elapsedMs: 3, committed: true });
+    const bridge = new TauriBridge();
+    const base = { connectionId: 'connection-1', table: 'people', primaryKey: 'id', previousValue: null, keyWireType: 'integer' };
+    await bridge.applyMutations([
+      { ...base, id: '1-name', rowKey: '1', keyValue: 1, column: 'name', nextValue: 'Ann Lee', wireType: 'text' },
+      { ...base, id: '2-delete', kind: 'delete', rowKey: '2', keyValue: 2, column: '', nextValue: null },
+    ]);
+    expect(invokeMock.mock.calls[0][1].edits).toEqual({ schema: null, table: 'people', primaryKey: 'id',
+      rows: [{ key: { type: 'integer', value: '1' }, changes: [{ column: 'name', value: { type: 'text', value: 'Ann Lee' } }] }],
+      deletes: [{ type: 'integer', value: '2' }] });
+  });
+
   it('sends staged edits as one typed change set, grouped by row', async () => {
     invokeMock.mockResolvedValueOnce({ rowsAffected: 2, elapsedMs: 3, committed: true });
     const bridge = new TauriBridge();
@@ -259,7 +272,7 @@ describe('TauriBridge wire adapter', () => {
       edits: { schema: 'public', table: 'customers', primaryKey: 'id', rows: [
         { key: { type: 'integer', value: '7' }, changes: [{ column: 'email', value: { type: 'text', value: 'a@example.test' } }, { column: 'mrr', value: { type: 'decimal', value: '12.50' } }] },
         { key: { type: 'integer', value: '8' }, changes: [{ column: 'active', value: { type: 'null' } }] },
-      ] },
+      ], deletes: [] },
     });
     expect(result.message).toBe('Saved 3 changes in 2 rows.');
   });
