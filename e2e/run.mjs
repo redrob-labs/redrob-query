@@ -93,6 +93,9 @@ try {
   await until('the SQLite choice', () => click('database-sqlite'));
   await until('the name field', () => fill('connection-name', 'E2E people'));
   await until('the file field', () => fill('connection-file', DB));
+  // New connections are read-only; editing needs the person's explicit yes.
+  await until('the Allow edits switch', () => click('connection-allow-edits'));
+  if (!(await js("return document.querySelector('[data-testid=connection-allow-edits]').checked;"))) throw new Error('Allow edits did not turn on');
   await shot('1-connection');
   await until('Save to accept a click', () => click('save-connection'));
   // The saved connection becomes the active one; connect it from the sidebar's actions menu.
