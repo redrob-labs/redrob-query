@@ -203,7 +203,8 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .grid-toolbar > button:not(.icon-button), .page-size { height: 24px; display: flex; align-items: center; gap: 5px; padding: 0 7px; border-radius: 4px; background: transparent; color: var(--ink-muted); }
 .grid-toolbar > button:hover { background: var(--surface-raised); color: var(--ink-primary); }
 .grid-toolbar .changes-pill { border: 1px solid var(--border-strong); background: var(--surface-material) !important; color: var(--amber) !important; }
-.data-grid { flex: 1; min-height: 0; position: relative; overflow: auto; color: var(--ink-secondary); font-family: var(--font-mono); font-size: 10px; }
+/* isolation: the sticky header's z-index stays inside the grid, so no overlay (modal, drawer) has it drawn across. */
+.data-grid { isolation: isolate; flex: 1; min-height: 0; position: relative; overflow: auto; color: var(--ink-secondary); font-family: var(--font-mono); font-size: 10px; }
 .grid-header { position: sticky; top: 0; z-index: 3; min-width: max-content; height: 29px; display: grid; background: var(--surface-base); border-bottom: 1px solid var(--border-subtle); }
 .grid-header > div { min-width: 0; display: flex; align-items: center; gap: 5px; padding: 0 8px; overflow: hidden; border-right: 1px solid var(--border-subtle); color: var(--ink-secondary); font-family: var(--font-sans); font-size: 9px; font-weight: 650; }
 .grid-header svg { color: var(--ink-muted); }
