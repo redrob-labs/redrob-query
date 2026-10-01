@@ -56,10 +56,23 @@ for (const [prefix, [command, args]] of Object.entries(HARNESSES)) {
 }
 
 const rows = [];
+let inFeatureTable = false;
 for (const [index, line] of readFileSync(MATRIX, 'utf8').split('\n').entries()) {
+  if (line.startsWith('| Domain')) inFeatureTable = true;
+  else if (!line.startsWith('|')) inFeatureTable = false;
   if (!line.startsWith('| ') || line.startsWith('| Domain') || /^[|\-\s]+$/.test(line)) continue;
+  const cellCount = line.trim().replace(/^\||\|$/g, '').split('|').length;
+  if (inFeatureTable && cellCount !== 6 && cellCount !== 7) {
+    // Measured: a stray `|` made a row 8 cells wide and it silently left the parse, so the guard passed with
+    // one row fewer. Inside the feature table every row must be counted or rejected.
+    problems.push(`line ${index + 1}: feature row has ${cellCount} cells; expected 7`);
+    continue;
+  }
   const cells = line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
-  if (cells.length === 6 && STATUSES.has(cells[4])) rows.push({ line: index + 1, cells });
+  // A 6-cell row is kept so it can be rejected: a row that drops the Works column must fail, not vanish
+  // from the parse and pass.
+  if ((cells.length === 6 || cells.length === 7) && STATUSES.has(cells[4]))
+    rows.push({ line: index + 1, cells });
 }
 
 if (!rows.length) {
@@ -72,10 +85,41 @@ if (!rows.length) {
 const counts = { planned: 0, native: 0, adapter: 0, parity: 0 };
 const cited = new Set();
 const verifiedNotParity = [];
+// `Works` answers a different question from `Status`: `native` meant "the code is here", and the shipped app had
+// native rows no button reaches (docs/user-paths.md). `yes` needs a citation of a test that drives the feature
+// the way a user does -- `e2e:<path>::<name>`, where <path> exists and contains <name>.
+const E2E = /`e2e:([A-Za-z0-9_./-]+)::([A-Za-z0-9_]+)`/g;
+let working = 0;
 
 for (const { line, cells } of rows) {
-  const [domain, feature, authority, route, status, evidence] = cells;
+  if (cells.length !== 7) {
+    problems.push(`line ${line}: ${cells[0]}/${cells[1].slice(0, 40)} has no Works column`);
+    continue;
+  }
+  const [domain, feature, authority, route, status, evidence, works] = cells;
   counts[status] += 1;
+  if (works !== 'yes' && works !== 'no') {
+    problems.push(`line ${line}: ${domain}/${feature.slice(0, 40)} Works must be yes or no, not '${works}'`);
+  } else if (works === 'yes') {
+    working += 1;
+    if (status === 'planned') {
+      problems.push(`line ${line}: ${domain}/${feature.slice(0, 40)} is planned but claims Works: yes`);
+    }
+    const e2e = [...evidence.matchAll(E2E)];
+    if (!e2e.length) {
+      problems.push(
+        `line ${line}: ${domain}/${feature.slice(0, 40)} claims Works: yes but cites no \`e2e:<path>::<name>\``,
+      );
+    }
+    for (const [, path, name] of e2e) {
+      const target = path; // relative to the repo root, like MATRIX
+      if (!existsSync(target)) {
+        problems.push(`line ${line}: cites \`e2e:${path}::${name}\` but ${path} does not exist`);
+      } else if (!readFileSync(target, 'utf8').includes(name)) {
+        problems.push(`line ${line}: cites \`e2e:${path}::${name}\` but ${path} has no ${name}`);
+      }
+    }
+  }
   const keys = [...evidence.matchAll(/`([a-z-]+):([a-z0-9-]+)`/g)].map((match) => [match[1], match[2]]);
 
   if (status === 'parity' && !keys.length) {
@@ -107,6 +151,7 @@ for (const { line, cells } of rows) {
 }
 
 console.log(`compatibility matrix: ${rows.length} rows`);
+console.log(`  works ${working} of ${rows.length} (driven end to end by a cited test)`);
 for (const status of ['parity', 'native', 'adapter', 'planned']) {
   console.log(`  ${status.padEnd(8)} ${counts[status]}`);
 }
