@@ -441,6 +441,19 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .grid-header [role="columnheader"]:focus-within { z-index: 5; }
 .column-menu .rr-btn { padding: 0 3px; min-width: 0; }
 .column-menu .rr-btn__icon { display: none; }
+/* The row menu sits in the row-number cell beside the number; the number hides while it shows. */
+.grid-row .row-number { position: relative; overflow: visible; gap: 2px; }
+.row-menu { position: absolute; inset: 0 auto 0 0; display: flex; align-items: center; opacity: 0; }
+.grid-row:hover .row-menu, .row-menu:focus-within { opacity: 1; }
+.grid-row:hover .row-number > span, .grid-row .row-number:focus-within > span { visibility: hidden; }
+.grid-row:focus-within { z-index: 2; }
+.row-menu .rr-btn { padding: 0 3px; min-width: 0; }
+.row-menu .rr-btn__icon { display: none; }
+.row-details { display: grid; gap: 12px; margin: 0; }
+.row-details > div { display: grid; gap: 3px; }
+.row-details dt { color: var(--ink-muted); font-size: 11px; }
+.row-details dd { margin: 0; color: var(--ink-primary); font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.row-details dd.null { color: var(--ink-muted); font-style: italic; }
 .column-sort .pk { margin-left: auto; }
 .sort-placeholder { margin-left: auto; width: 11px; }
 .page-size { width: auto !important; border: 0 !important; background: transparent !important; }
@@ -643,3 +656,5 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
   font-size: 11px;
   color: var(--ink-muted);
 }
+/* The row drawer is portalled to the body; it must sit over the sticky grid header and the AI panel. */
+.rr-drawer-scrim { z-index: 60; }
