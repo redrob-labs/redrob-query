@@ -114,6 +114,9 @@ interface WorkspaceState {
   newTab(language?: QueryLanguage): void;
   setTabLanguage(language: QueryLanguage): void;
   closeTab(id: string): void;
+  closeOtherTabs(id: string): void;
+  closeTabsToRight(id: string): void;
+  duplicateTab(id: string): void;
   setActiveTab(id: string): void;
   restoreHistory(id: string): void;
   clearHistory(connectionId: string): void;
@@ -387,6 +390,32 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const tabs = state.tabs.filter((tab) => tab.id !== id); if (state.activeTabId !== id) { set({ tabs }); persist(); return; }
         const next = tabs.filter((tab) => tab.connectionId === target.connectionId).at(-1)!; queryGeneration += 1; mutationGeneration += 1;
         set({ tabs, activeTabId: next.id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+      },
+      // The tab menu (Beekeeper's CoreTabHeader). Each acts within the tab's own connection, the only
+      // tabs the strip shows, and keeps the chosen tab: a connection never ends up with no tab.
+      closeOtherTabs(id) {
+        const state = get(); const target = state.tabs.find((tab) => tab.id === id); if (!target) return;
+        const tabs = state.tabs.filter((tab) => tab.connectionId !== target.connectionId || tab.id === id);
+        if (tabs.length === state.tabs.length) return;
+        if (state.activeTabId === id) { set({ tabs }); persist(); return; }
+        queryGeneration += 1; mutationGeneration += 1;
+        set({ tabs, activeTabId: id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+      },
+      closeTabsToRight(id) {
+        const state = get(); const target = state.tabs.find((tab) => tab.id === id); if (!target) return;
+        const siblings = state.tabs.filter((tab) => tab.connectionId === target.connectionId);
+        const doomed = new Set(siblings.slice(siblings.indexOf(target) + 1).map((tab) => tab.id)); if (!doomed.size) return;
+        const tabs = state.tabs.filter((tab) => !doomed.has(tab.id));
+        if (!doomed.has(state.activeTabId ?? '')) { set({ tabs }); persist(); return; }
+        queryGeneration += 1; mutationGeneration += 1;
+        set({ tabs, activeTabId: id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+      },
+      duplicateTab(id) {
+        const state = get(); const index = state.tabs.findIndex((tab) => tab.id === id); if (index < 0) return;
+        const source = state.tabs[index]; const copy: QueryTab = { ...source, id: nextTabId(), name: `${source.name} copy`, dirty: true };
+        const tabs = [...state.tabs.slice(0, index + 1), copy, ...state.tabs.slice(index + 1)];
+        queryGeneration += 1; mutationGeneration += 1;
+        set({ tabs, activeTabId: copy.id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
       },
       setActiveTab(activeTabId) {
         const state = get(); const tab = state.tabs.find((item) => item.id === activeTabId);

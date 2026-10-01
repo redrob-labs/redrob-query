@@ -61,6 +61,28 @@ describe('workspace state flows', () => {
     }));
   });
 
+  it('closes other tabs, closes tabs to the right and duplicates, within one connection', async () => {
+    const store = createWorkspaceStore(controllableBridge('desktop'));
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    store.getState().newTab(); store.getState().newTab(); store.getState().newTab();
+    const names = () => store.getState().tabs.map((tab) => tab.name);
+    const [first, second] = store.getState().tabs;
+    expect(names()).toEqual(['Customer overview', 'Untitled 2', 'Untitled 3', 'Untitled 4']);
+
+    store.getState().duplicateTab(second.id);
+    expect(names()).toEqual(['Customer overview', 'Untitled 2', 'Untitled 2 copy', 'Untitled 3', 'Untitled 4']);
+    expect(store.getState().tabs.find((tab) => tab.id === store.getState().activeTabId)?.name).toBe('Untitled 2 copy');
+
+    store.getState().closeTabsToRight(second.id);
+    expect(names()).toEqual(['Customer overview', 'Untitled 2']);
+    expect(store.getState().activeTabId).toBe(second.id);
+
+    store.getState().closeOtherTabs(first.id);
+    expect(names()).toEqual(['Customer overview']);
+    expect(store.getState().activeTabId).toBe(first.id);
+  });
+
   it('loads metadata and a starter tab when the first desktop connection is explicitly selected', async () => {
     const bridge = controllableBridge('desktop');
     const store = createWorkspaceStore(bridge);

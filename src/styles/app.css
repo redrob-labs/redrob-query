@@ -135,7 +135,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 
 .main-workspace { min-width: 450px; flex: 1; display: grid; grid-template-rows: minmax(260px, 43%) minmax(0, 57%); overflow: hidden; background: var(--surface-0); }
 .query-editor-shell { min-height: 0; display: grid; grid-template-rows: 35px 38px minmax(0, 1fr); border-bottom: 1px solid var(--border-subtle); }
-.query-tabs { display: flex; align-items: stretch; background: var(--surface-base); border-bottom: 1px solid var(--line); overflow: hidden; }
+.query-tabs { display: flex; align-items: stretch; background: var(--surface-base); border-bottom: 1px solid var(--line); overflow-x: clip; overflow-y: visible; }
 .query-tab { position: relative; min-width: 145px; max-width: 200px; display: flex; align-items: center; border-right: 1px solid var(--line-soft); background: var(--surface-base); color: var(--ink-muted); }
 .query-tab.is-active { background: var(--surface-base); color: var(--ink-primary); }
 .query-tab.is-active::before { content: ''; position: absolute; z-index: 1; inset: 0 0 auto; height: 2px; background: var(--accent); }
@@ -146,6 +146,14 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .tab-close { width: 17px; height: 17px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 3px; opacity: 0; }
 .query-tab:hover .tab-close { opacity: 1; }
 .tab-close:hover { background: var(--surface-sunken); }
+/* The tab menu shows on hover or focus, like the close button; an open panel stacks above the editor. */
+.query-tab { position: relative; }
+.tab-menu { opacity: 0; }
+.query-tab:hover .tab-menu, .query-tab.is-active .tab-menu, .tab-menu:focus-within { opacity: 1; }
+.query-tab:focus-within { z-index: 5; }
+/* Clip sideways only: the strip still hides tabs past its width, and the open menu can drop below it. */
+.tab-menu .rr-btn { padding: 0 3px; min-width: 0; }
+.tab-menu .rr-btn__icon { display: none; }
 .query-tabs > .icon-button { align-self: center; margin-left: 3px; }
 .drag-spacer, .toolbar-spacer, .status-spacer { flex: 1; }
 .saved-state { align-self: center; display: flex; align-items: center; gap: 4px; margin-right: 10px; color: var(--ink-muted); font-size: 9px; }
