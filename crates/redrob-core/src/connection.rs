@@ -2522,7 +2522,7 @@ async fn apply_sqlite_row_updates(pool: &SqlitePool, updates: &[RowUpdate]) -> R
         .map_err(|e| DataError::database("transaction commit failed", &e))
 }
 
-/// The display scale of a binary PostgreSQL `NUMERIC`: `ndigits`, `weight`, `sign`, `dscale`, each a big-endian
+/// The display scale of a binary `PostgreSQL` `NUMERIC`: `ndigits`, `weight`, `sign`, `dscale`, each a big-endian
 /// 16-bit field. NaN and the infinities carry no scale to apply.
 fn postgres_numeric_dscale(bytes: &[u8]) -> Option<u16> {
     let field = |at: usize| {
