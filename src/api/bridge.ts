@@ -461,7 +461,8 @@ const toWireProfile = (draft: ConnectionDraft): Omit<WireProfile, 'id'> & { id?:
     tls: draft.tls,
     options: draft.kind === 'mongodb' && draft.authSource ? { authSource: draft.authSource } : {},
   },
-  readOnly: true,
+  // Read-only unless the person ticked "Allow edits": the core refuses every write to such a profile.
+  readOnly: draft.readOnly ?? true,
   builtIn: false,
 });
 const fromWireProfile = (profile: WireProfile): ConnectionProfile => ({
@@ -479,6 +480,7 @@ const fromWireProfile = (profile: WireProfile): ConnectionProfile => ({
   state: 'disconnected',
   builtIn: Boolean(profile.builtIn),
   isDemo: Boolean(profile.builtIn),
+  readOnly: profile.readOnly ?? true,
 });
 // Back to the engine's type: a decimal, date or uuid reaches the grid as text and must not be written
 // back as text. Without a known type, the JavaScript type decides.
@@ -611,8 +613,10 @@ export class TauriBridge implements DataBridge {
   // A result is editable only when its SQL plainly reads one table (see editSource.ts) and that table
   // has a single-column primary key that the result includes. Anything else stays read-only.
   private async findEditSource(request: QueryRequest, columnNames: string[]): Promise<QueryResult['editSource'] | undefined> {
-    const kind = this.profiles.get(request.connectionId)?.kind;
-    if (request.language !== 'sql' || !kind) return undefined;
+    const profile = this.profiles.get(request.connectionId);
+    const kind = profile?.kind;
+    // A read-only connection offers no editing at all, rather than staging edits that Apply would refuse.
+    if (request.language !== 'sql' || !kind || (profile as { readOnly?: boolean }).readOnly !== false) return undefined;
     const source = editableSource(request.query, kind);
     if (!source) return undefined;
     try {

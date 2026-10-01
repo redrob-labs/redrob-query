@@ -15,6 +15,8 @@ export interface ConnectionProfile {
   filePath?: string;
   srv?: boolean;
   tls: boolean;
+  /** Writes are refused unless this is explicitly false. Saved profiles default to read-only. */
+  readOnly?: boolean;
   authSource?: string;
   state: ConnectionState;
   builtIn?: boolean;
