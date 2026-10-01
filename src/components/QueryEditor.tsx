@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useGround } from '../ui/useGround';
-import { Loader } from '@redrob-labs/ui';
+import { Loader, Menu } from '@redrob-labs/ui';
 import { Icon } from '../ui/Icon';
 import clsx from 'clsx';
 import { useWorkspace } from '../store/WorkspaceProvider';
@@ -42,6 +42,9 @@ export function QueryEditor() {
   const enableLocalWorkspace = useWorkspace((state) => state.enableLocalWorkspace);
   const notify = useWorkspace((state) => state.notify);
   const setUi = useWorkspace((state) => state.setUi);
+  const duplicateTab = useWorkspace((state) => state.duplicateTab);
+  const closeOtherTabs = useWorkspace((state) => state.closeOtherTabs);
+  const closeTabsToRight = useWorkspace((state) => state.closeTabsToRight);
   const [historyOpen, setHistoryOpen] = useState(false);
   const activeConnection = connections.find((connection) => connection.id === activeConnectionId);
   const connectionHistory = history.filter((entry) => entry.connectionId === activeConnectionId);
@@ -50,7 +53,16 @@ export function QueryEditor() {
   const canRun = activeConnection?.state === 'connected' && status !== 'loading';
   return (
     <section className="query-editor-shell" aria-label="Query editor">
-      <div className="query-tabs" role="tablist" aria-label="Open queries">{visibleTabs.map((tab) => <div key={tab.id} className={clsx('query-tab', tab.id === activeTabId && 'is-active')}><button role="tab" aria-selected={tab.id === activeTabId} onClick={() => setActiveTab(tab.id)}><span className="sql-chip">{tab.language === 'sql' ? 'SQL' : 'M'}</span><span>{tab.name}</span>{tab.dirty ? <i className="dirty-dot" /> : null}</button><button className="tab-close" aria-label={`Close ${tab.name}`} onClick={() => closeTab(tab.id)}><Icon name="close" /></button></div>)}<IconButton label="New query" onClick={() => newTab()}><Icon name="filePlus" /></IconButton><div className="drag-spacer" /><span className="saved-state" title={bridgeMode === 'demo' ? 'Browser demo queries remain in memory for this session only.' : localPersistenceMessage ?? 'Query text remains on this device and excludes result rows, credentials, and AI prompts.'}>{localPersistenceStatus === 'error' ? <Icon name="warning" /> : <Icon name="check" />} {bridgeMode === 'demo' ? 'In-memory demo' : !localPersistenceEnabled ? 'Local save off' : localPersistenceStatus === 'error' ? 'Local save unavailable' : 'Saved locally'}</span></div>
+      <div className="query-tabs" role="tablist" aria-label="Open queries">{visibleTabs.map((tab) => <div key={tab.id} className={clsx('query-tab', tab.id === activeTabId && 'is-active')}><button role="tab" aria-selected={tab.id === activeTabId} onClick={() => setActiveTab(tab.id)}><span className="sql-chip">{tab.language === 'sql' ? 'SQL' : 'M'}</span><span>{tab.name}</span>{tab.dirty ? <i className="dirty-dot" /> : null}</button><button className="tab-close" aria-label={`Close ${tab.name}`} onClick={() => closeTab(tab.id)}><Icon name="close" /></button><Menu
+        label={<><Icon name="more" /><span className="sr-only">Tab actions for {tab.name}</span></>}
+        variant="ghost" size="sm" align="left" className="tab-menu"
+        items={[
+          { id: 'duplicate', label: 'Duplicate', icon: <Icon name="duplicate" />, onSelect: () => duplicateTab(tab.id) },
+          { type: 'separator' },
+          { id: 'close', label: 'Close', icon: <Icon name="close" />, disabled: visibleTabs.length === 1, onSelect: () => closeTab(tab.id) },
+          { id: 'close-others', label: 'Close others', icon: <Icon name="target" />, disabled: visibleTabs.length === 1, onSelect: () => closeOtherTabs(tab.id) },
+          { id: 'close-right', label: 'Close tabs to the right', icon: <Icon name="chevronsRight" />, disabled: visibleTabs.at(-1)?.id === tab.id, onSelect: () => closeTabsToRight(tab.id) },
+        ]} /></div>)}<IconButton label="New query" onClick={() => newTab()}><Icon name="filePlus" /></IconButton><div className="drag-spacer" /><span className="saved-state" title={bridgeMode === 'demo' ? 'Browser demo queries remain in memory for this session only.' : localPersistenceMessage ?? 'Query text remains on this device and excludes result rows, credentials, and AI prompts.'}>{localPersistenceStatus === 'error' ? <Icon name="warning" /> : <Icon name="check" />} {bridgeMode === 'demo' ? 'In-memory demo' : !localPersistenceEnabled ? 'Local save off' : localPersistenceStatus === 'error' ? 'Local save unavailable' : 'Saved locally'}</span></div>
       <div className="query-toolbar">
         <button className="run-button" data-testid="run-query" onClick={() => void runQuery()} disabled={!canRun}>{status === 'loading' ? <Loader size="sm" label="Running the query" /> : <Icon name="play" fill="currentColor" />} {status === 'loading' ? 'Running' : 'Run'} <kbd>⌘↵</kbd></button>
         <span className="toolbar-select fixed-language" data-testid="query-language"><span className="sql-chip">{activeTab.language === 'sql' ? 'SQL' : 'MQL'}</span>{activeTab.language.toUpperCase()}</span>
