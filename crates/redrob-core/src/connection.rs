@@ -2565,17 +2565,38 @@ async fn mysql_primary_key_columns(
     schema: Option<String>,
     table: String,
 ) -> Result<Vec<String>> {
-    let database = |e: sqlx::Error| DataError::database("primary key lookup failed", &e);
-    sqlx::query_scalar::<_, String>(
-                "SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE \
-                 WHERE CONSTRAINT_NAME = 'PRIMARY' AND TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ? \
-                 ORDER BY ORDINAL_POSITION",
-            )
-            .bind(schema)
-            .bind(table)
-            .fetch_all(pool)
-            .await
-            .map_err(database)
+    // SHOW KEYS, not information_schema: the latter does not list TEMPORARY tables, which a session
+    // can query and edit like any other. The name cannot be bound here, so it is quoted the way
+    // cell_edits quotes it (backticks, doubled inside), and refused when empty or holding a NUL.
+    let quote = |name: &str| -> Result<String> {
+        if name.is_empty() || name.contains('\0') {
+            return Err(DataError::InvalidQuery(format!(
+                "not a usable identifier: {name:?}"
+            )));
+        }
+        Ok(format!("`{}`", name.replace('`', "``")))
+    };
+    let target = match &schema {
+        Some(schema) if !schema.is_empty() => format!("{}.{}", quote(schema)?, quote(&table)?),
+        _ => quote(&table)?,
+    };
+    let statement = format!("SHOW KEYS FROM {target} WHERE Key_name = 'PRIMARY'");
+    let rows = match sqlx::query(AssertSqlSafe(statement.as_str()))
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        // A table that does not exist has no key to edit by; the result simply stays read-only.
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("42S02") => {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(DataError::database("primary key lookup failed", &error)),
+    };
+    // SHOW KEYS lists an index's columns in key order (Seq_in_index), so the order is kept as read.
+    rows.iter()
+        .map(|row| row.try_get::<String, _>("Column_name"))
+        .collect::<std::result::Result<Vec<_>, sqlx::Error>>()
+        .map_err(|error| DataError::database("primary key lookup failed", &error))
 }
 
 async fn sqlite_primary_key_columns(pool: &SqlitePool, table: String) -> Result<Vec<String>> {
