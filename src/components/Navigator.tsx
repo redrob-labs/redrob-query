@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader } from '@redrob-labs/ui';
+import { Loader, Menu } from '@redrob-labs/ui';
 import { Icon } from '../ui/Icon';
 import clsx from 'clsx';
 import type { ConnectionProfile, DatabaseKind, MetadataNode } from '../domain/types';
@@ -10,6 +10,13 @@ const engineLabel: Record<DatabaseKind, string> = { postgresql: 'PostgreSQL', my
 const engineGlyph: Record<DatabaseKind, string> = { postgresql: 'PG', mysql: 'MY', sqlite: 'SQ', mongodb: 'MO', sqlserver: 'MS' };
 const NodeIcon = ({ node }: { node: MetadataNode }) => node.kind === 'database' ? <Icon name="database" /> : node.kind === 'table' ? <Icon name="grid" className="node-icon table" /> : node.kind === 'view' ? <Icon name="eye" className="node-icon view" /> : node.kind === 'column' ? <Icon name="columns" className="node-icon column" /> : <span className="schema-icon">S</span>;
 
+// Beekeeper puts table actions in a right-click menu (TableListContextMenus.ts:50-180). A row menu
+// button carries the same actions and is reachable by keyboard and touch, which a bare right-click is not.
+const quoteIdentifier = (kind: DatabaseKind | undefined, name: string) =>
+  kind === 'mysql' ? `\`${name.replace(/`/g, '``')}\`` : kind === 'sqlserver' ? `[${name.replace(/]/g, ']]')}]` : `"${name.replace(/"/g, '""')}"`;
+export const selectStatement = (kind: DatabaseKind | undefined, table: string, schema?: string) =>
+  `SELECT *\nFROM ${schema ? `${quoteIdentifier(kind, schema)}.` : ''}${quoteIdentifier(kind, table)}\n${kind === 'sqlserver' ? '' : 'LIMIT 100'}`.trimEnd();
+
 // `schema` is threaded down rather than looked up: a node knows its parentId but not the parent's
 // NAME, and the structure panel needs the name to qualify a table. The schema node passes its own
 // name to its children, which is the only place that name is known for certain.
@@ -19,9 +26,22 @@ function TreeNode({ node, depth, filter, schema }: { node: MetadataNode; depth: 
   const toggleNode = useWorkspace((state) => state.toggleNode);
   const setUi = useWorkspace((state) => state.setUi);
   const hasChildren = Boolean(node.childCount);
+  const kind = useWorkspace((state) => state.connections.find((item) => item.id === state.activeConnectionId)?.kind);
+  const newTab = useWorkspace((state) => state.newTab);
+  const updateQuery = useWorkspace((state) => state.updateQuery);
+  const notify = useWorkspace((state) => state.notify);
+  const isRelation = node.kind === 'table' || node.kind === 'view';
   const visibleChildren = children?.filter((child) => !filter || child.name.toLowerCase().includes(filter) || Boolean(child.childCount));
   if (filter && !hasChildren && !node.name.toLowerCase().includes(filter)) return null;
-  return <><button className={clsx('tree-node', node.kind === 'column' && 'is-column')} style={{ paddingLeft: 10 + depth * 14 }} onClick={() => { if (node.kind === 'table' || node.kind === 'view') { setUi({ structureTarget: { table: node.name, schema } }); } if (hasChildren) void toggleNode(node); }} aria-expanded={hasChildren ? expanded : undefined} data-testid={`metadata-${node.id}`}><span className="tree-chevron">{hasChildren ? (expanded ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />) : <span />}</span><NodeIcon node={node} /><span className="tree-label">{node.name}</span>{node.dataType ? <span className="tree-type">{node.dataType}</span> : null}</button>{expanded && !children ? <div className="tree-loading" style={{ paddingLeft: 32 + depth * 14 }}><Icon name="dot" /> Loading…</div> : null}{expanded && visibleChildren?.map((child) => <TreeNode key={child.id} node={child} depth={depth + 1} filter={filter} schema={node.kind === 'schema' ? node.name : schema} />)}</>;
+  return <><div className="tree-row"><button className={clsx('tree-node', node.kind === 'column' && 'is-column')} style={{ paddingLeft: 10 + depth * 14 }} onClick={() => { if (node.kind === 'table' || node.kind === 'view') { setUi({ structureTarget: { table: node.name, schema } }); } if (hasChildren) void toggleNode(node); }} aria-expanded={hasChildren ? expanded : undefined} data-testid={`metadata-${node.id}`}><span className="tree-chevron">{hasChildren ? (expanded ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />) : <span />}</span><NodeIcon node={node} /><span className="tree-label">{node.name}</span>{node.dataType ? <span className="tree-type">{node.dataType}</span> : null}</button>{isRelation && kind !== 'mongodb' ? <Menu
+      label={<><Icon name="more" /><span className="sr-only">Actions for {node.name}</span></>}
+      variant="ghost" size="sm" align="right" className="tree-row-menu"
+      items={[
+        { id: 'select', label: 'Query this table', icon: <Icon name="play" />, onSelect: () => { newTab(); updateQuery(selectStatement(kind, node.name, schema)); } },
+        { id: 'structure', label: 'View structure', icon: <Icon name="columns" />, onSelect: () => setUi({ structureTarget: { table: node.name, schema } }) },
+        { type: 'separator' },
+        { id: 'copy', label: 'Copy name', icon: <Icon name="copy" />, onSelect: () => { void navigator.clipboard.writeText(schema ? `${schema}.${node.name}` : node.name).then(() => notify('success', 'Copied', node.name), () => notify('error', 'Copy failed', 'The clipboard is not available here.')); } },
+      ]} /> : null}</div>{expanded && !children ? <div className="tree-loading" style={{ paddingLeft: 32 + depth * 14 }}><Icon name="dot" /> Loading…</div> : null}{expanded && visibleChildren?.map((child) => <TreeNode key={child.id} node={child} depth={depth + 1} filter={filter} schema={node.kind === 'schema' ? node.name : schema} />)}</>;
 }
 
 export function Navigator() {
