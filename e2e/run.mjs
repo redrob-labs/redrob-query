@@ -135,7 +135,20 @@ try {
   await until('Run to accept a click', () => click('run-query'));
   await until('the new name after a fresh run', async () => (await cell('name, result row 1')) === NEW_NAME);
   await shot('4-applied');
-  console.log(`e2e: SQLite connection -> Query this table -> Run -> edit name -> Apply -> Run -> "${NEW_NAME}"`);
+
+  // 5. Delete row 2 from its menu, Apply, and read the table again.
+  await until("row 2's menu and Delete row", async () => (await clickLabel('Row 2 actions')) && clickLabel('Delete row'));
+  await until('the staged delete', () => shows('Delete this row'));
+  await until('Apply to accept a click', () => click('apply-changes'));
+  await until('the staged delete to clear', async () => {
+    const failure = await js("const t = document.body.innerText ?? ''; const i = t.indexOf('Could not apply changes'); return i < 0 ? null : t.slice(i, i + 300);");
+    if (failure) throw Object.assign(new Error(`Apply failed: ${failure}`), { fatal: true });
+    return !(await shows('Delete this row'));
+  });
+  await until('Run to accept a click', () => click('run-query'));
+  await until('row 2 gone after a fresh run', async () => (await cell('name, result row 1')) === NEW_NAME && (await cell('name, result row 2')) === null);
+  await shot('5-deleted');
+  console.log(`e2e: SQLite connection -> Query this table -> Run -> edit name -> Apply -> Run -> "${NEW_NAME}" -> delete row 2 -> Apply -> Run -> 1 row`);
 } catch (error) {
   failed = true;
   console.error(`e2e failed: ${error.message}`);
