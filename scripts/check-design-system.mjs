@@ -143,7 +143,7 @@ function stripExpressions(text) {
 const TEXT_ONLY_BUTTONS = new Set([
   "Cancel", // dialog footers: AiSettingsModal, Navigator
   "Discard all", // ChangesPanel footer, beside its own staged list
-  "Search or run a command ⌘ K", // the command-bar trigger, which is a field, not an action
+  "Search or run a command", // the command-bar trigger (its key hint is written from shortcuts.ts), which is a field, not an action
 ]);
 for (const file of files.filter((f) => f.endsWith(".tsx") && !f.includes(".test."))) {
   const source = readFileSync(file, "utf8");
