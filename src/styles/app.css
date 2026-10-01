@@ -111,6 +111,12 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .tree-toolbar .icon-button { width: 25px; height: 25px; }
 .schema-tree { flex: 1; padding: 5px 0; overflow: auto; }
 .tree-node { width: 100%; min-height: 26px; display: grid; grid-template-columns: 14px 16px minmax(0, 1fr) auto; align-items: center; gap: 4px; padding-right: 9px; color: var(--ink-secondary); text-align: left; background: transparent; border-left: 2px solid transparent; }
+.tree-row { position: relative; }
+.tree-row-menu { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); opacity: 0; }
+.tree-row:hover .tree-row-menu, .tree-row:focus-within .tree-row-menu { opacity: 1; }
+/* The open menu panel must paint over the rows that follow; each row is its own stacking context
+   (the button is transformed), so raise the row that holds focus. */
+.tree-row:focus-within { z-index: 5; }
 .tree-node:hover { background: var(--surface-base); color: var(--ink-primary); }
 .tree-node[aria-expanded="true"] { color: var(--ink-primary); }
 .tree-chevron { display: grid; place-items: center; color: var(--ink-muted); }
