@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Loader, Menu } from '@redrob-labs/ui';
+import { createPortal } from 'react-dom';
+import { Drawer, Loader, Menu } from '@redrob-labs/ui';
+import { rowAsJson, rowAsTsv } from './rowExport';
 import { Icon } from '../ui/Icon';
 import clsx from 'clsx';
 import type { CellValue, DataType } from '../domain/types';
@@ -34,6 +36,8 @@ export function ResultGrid() {
   const [sort, setSort] = useState<SortState>(null);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
   const [columnsOpen, setColumnsOpen] = useState(false);
+  // The row whose details are open, as shown: a staged edit counts, since that is what the row reads.
+  const [detailRow, setDetailRow] = useState<{ number: number; values: Record<string, CellValue> } | null>(null);
   const [activeView, setActiveView] = useState<'results' | 'messages'>('results');
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -92,9 +96,26 @@ export function ResultGrid() {
             { id: 'hide', label: 'Hide column', icon: <Icon name="eyeOff" />, disabled: visibleColumns.length === 1, onSelect: () => setHiddenColumns((current) => new Set(current).add(column.key)) },
             { id: 'copy', label: 'Copy column name', icon: <Icon name="copy" />, onSelect: () => { void navigator.clipboard.writeText(column.label).then(() => notify('success', 'Column name copied', column.label), () => notify('error', 'Copy unavailable', 'Select the name and copy it manually.')) } },
           ]} /></div>)}</div>
-          <div className="grid-body" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((virtualRow) => { const { row, originalIndex } = visibleRows[virtualRow.index]; const primaryKey = result.editSource?.primaryKey; const rowIdentity = primaryKey ? String(row[primaryKey]) : String(originalIndex); return <div className="grid-row" role="row" data-index={virtualRow.index} key={rowIdentity} style={{ gridTemplateColumns: gridTemplate, transform: `translateY(${virtualRow.start}px)` }}><div className="row-number" role="cell">{originalIndex + 1}</div>{visibleColumns.map((column) => { const editable = Boolean(result.editSource && column.key !== result.editSource.primaryKey); const mutation = mutations.find((item) => item.rowKey === rowIdentity && item.column === column.key); const value = mutation?.nextValue ?? row[column.key]; return <div role="cell" key={column.key} className={clsx('grid-cell', column.dataType === 'number' && 'numeric', column.dataType === 'boolean' && 'boolean', value === null && 'null', mutation && 'is-staged', !editable && 'read-only')} contentEditable={editable} suppressContentEditableWarning onBlur={(event) => { if (!editable) return; const raw = event.currentTarget.textContent ?? ''; if (raw === formatCell(value, column.dataType)) return; try { stageCell(originalIndex, column.key, parseCellInput(raw, column.dataType, column.nullable)); } catch (parseError) { event.currentTarget.textContent = formatCell(value, column.dataType); notify('error', 'Invalid cell value', parseError instanceof Error ? parseError.message : 'Check the value and try again.'); } }} aria-readonly={!editable} aria-label={`${column.label}, result row ${originalIndex + 1}`}>{formatCell(value, column.dataType)}</div>; })}</div>; })}</div></div>
+          <div className="grid-body" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((virtualRow) => { const { row, originalIndex } = visibleRows[virtualRow.index]; const primaryKey = result.editSource?.primaryKey; const rowIdentity = primaryKey ? String(row[primaryKey]) : String(originalIndex); return <div className="grid-row" role="row" data-index={virtualRow.index} key={rowIdentity} style={{ gridTemplateColumns: gridTemplate, transform: `translateY(${virtualRow.start}px)` }}><div className="row-number" role="cell"><span>{originalIndex + 1}</span>{(() => {
+            const shown: Record<string, CellValue> = Object.fromEntries(result.columns.map((column) => [column.key, mutations.find((item) => item.rowKey === rowIdentity && item.column === column.key)?.nextValue ?? row[column.key]]));
+            const copy = (text: string, what: string) => { void navigator.clipboard.writeText(text).then(() => notify('success', `${what} copied`), () => notify('error', 'Copy unavailable', 'Open See details and copy from there.')); };
+            return <Menu
+              label={<><Icon name="more" /><span className="sr-only">Row {originalIndex + 1} actions</span></>}
+              variant="ghost" size="sm" align="left" className="row-menu"
+              items={[
+                { id: 'details', label: 'See details', icon: <Icon name="panelRight" />, onSelect: () => setDetailRow({ number: originalIndex + 1, values: shown }) },
+                { type: 'separator' },
+                { id: 'json', label: 'Copy row as JSON', icon: <Icon name="copy" />, onSelect: () => copy(rowAsJson(result.columns, (key) => shown[key]), 'Row as JSON') },
+                { id: 'tsv', label: 'Copy row as TSV', icon: <Icon name="columns" />, onSelect: () => copy(rowAsTsv(result.columns, (key) => shown[key]), 'Row as TSV') },
+              ]} />;
+          })()}</div>{visibleColumns.map((column) => { const editable = Boolean(result.editSource && column.key !== result.editSource.primaryKey); const mutation = mutations.find((item) => item.rowKey === rowIdentity && item.column === column.key); const value = mutation?.nextValue ?? row[column.key]; return <div role="cell" key={column.key} className={clsx('grid-cell', column.dataType === 'number' && 'numeric', column.dataType === 'boolean' && 'boolean', value === null && 'null', mutation && 'is-staged', !editable && 'read-only')} contentEditable={editable} suppressContentEditableWarning onBlur={(event) => { if (!editable) return; const raw = event.currentTarget.textContent ?? ''; if (raw === formatCell(value, column.dataType)) return; try { stageCell(originalIndex, column.key, parseCellInput(raw, column.dataType, column.nullable)); } catch (parseError) { event.currentTarget.textContent = formatCell(value, column.dataType); notify('error', 'Invalid cell value', parseError instanceof Error ? parseError.message : 'Check the value and try again.'); } }} aria-readonly={!editable} aria-label={`${column.label}, result row ${originalIndex + 1}`}>{formatCell(value, column.dataType)}</div>; })}</div>; })}</div></div>
         <div className="grid-footer"><span>{filter ? `${visibleRows.length} matching rows on this page` : start ? `Showing ${start}–${end}` : 'No rows'} · {result.nextOffset !== null && result.nextOffset !== undefined ? 'more available' : 'end of results'}</span><span className="grid-hint">{result.editSource ? 'Double-click a cell to edit · changes are staged' : 'Editing unavailable · source identity unavailable'}</span><div className="pagination"><button aria-label="Previous page" disabled={pageOffset === 0} onClick={() => void previousPage()}><Icon name="chevronLeft" /></button><button className="active" aria-label={`Page ${pageNumber}`}>{pageNumber}</button><button aria-label="Next page" disabled={result.nextOffset === null || result.nextOffset === undefined} onClick={() => void nextPage()}><Icon name="chevronRight" /></button></div></div>
       </> : null}
+      {/* Every column, hidden ones too, with the whole value: a cell shows one line and an ellipsis. Portalled
+          to the body: inside the results pane it stacked under the AI panel beside it. */}
+      {createPortal(<Drawer open={detailRow !== null} side="right" title={detailRow ? `Row ${detailRow.number}` : ''} description="Every column of this row, in full." closeLabel="Close row details" onClose={() => setDetailRow(null)}>
+        {detailRow ? <dl className="row-details">{(result?.columns ?? []).map((column) => { const cell = detailRow.values[column.key]; return <div key={column.key}><dt>{column.label}</dt><dd className={clsx(cell === null && 'null')}>{cell === null ? 'NULL' : typeof cell === 'object' ? JSON.stringify(cell, null, 2) : String(cell)}</dd></div>; })}</dl> : null}
+      </Drawer>, document.body)}
     </section>
   );
 }
