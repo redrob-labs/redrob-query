@@ -81,6 +81,8 @@ export interface QueryResult {
   nextOffset?: number | null;
   truncated?: boolean;
   message?: string;
+  /** Why the result cannot be edited, when it cannot (desktop). */
+  readOnlyReason?: string;
   editSource?: {
     schema?: string;
     table: string;
