@@ -986,6 +986,24 @@ impl DataService {
         })
     }
 
+    /// The primary-key columns of one table, in key order; empty when it has none. Names are passed
+    /// as bound values and resolved by the database itself, never spliced into the statement.
+    pub async fn primary_key_columns(
+        &self,
+        connection_id: Uuid,
+        schema: Option<String>,
+        table: String,
+    ) -> Result<Vec<String>> {
+        match self.ensure_connected(connection_id).await? {
+            ActiveConnection::PostgreSql(pool) => {
+                postgres_primary_key_columns(&pool, schema, table).await
+            }
+            ActiveConnection::MySql(pool) => mysql_primary_key_columns(&pool, schema, table).await,
+            ActiveConnection::SQLite(pool) => sqlite_primary_key_columns(&pool, table).await,
+            ActiveConnection::Mongo { .. } => Ok(Vec::new()),
+        }
+    }
+
     /// Apply a reviewed set of staged cell edits in one transaction. Each row's UPDATE must change
     /// exactly one row; otherwise nothing is committed. See `cell_edits` for how the statements are built.
     pub async fn apply_cell_edits(
@@ -2522,6 +2540,54 @@ async fn apply_sqlite_row_updates(pool: &SqlitePool, updates: &[RowUpdate]) -> R
         .map_err(|e| DataError::database("transaction commit failed", &e))
 }
 
+async fn postgres_primary_key_columns(
+    pool: &PgPool,
+    schema: Option<String>,
+    table: String,
+) -> Result<Vec<String>> {
+    let database = |e: sqlx::Error| DataError::database("primary key lookup failed", &e);
+    sqlx::query_scalar::<_, String>(
+                "SELECT a.attname::text FROM pg_index i \
+                 JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) \
+                 WHERE i.indisprimary AND i.indrelid = to_regclass(CASE WHEN $1::text IS NULL THEN quote_ident($2) ELSE quote_ident($1) || '.' || quote_ident($2) END) \
+                 ORDER BY array_position(i.indkey, a.attnum)",
+            )
+            .bind(schema)
+            .bind(table)
+            .fetch_all(pool)
+            .await
+            .map_err(database)
+}
+
+async fn mysql_primary_key_columns(
+    pool: &MySqlPool,
+    schema: Option<String>,
+    table: String,
+) -> Result<Vec<String>> {
+    let database = |e: sqlx::Error| DataError::database("primary key lookup failed", &e);
+    sqlx::query_scalar::<_, String>(
+                "SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE \
+                 WHERE CONSTRAINT_NAME = 'PRIMARY' AND TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ? \
+                 ORDER BY ORDINAL_POSITION",
+            )
+            .bind(schema)
+            .bind(table)
+            .fetch_all(pool)
+            .await
+            .map_err(database)
+}
+
+async fn sqlite_primary_key_columns(pool: &SqlitePool, table: String) -> Result<Vec<String>> {
+    let database = |e: sqlx::Error| DataError::database("primary key lookup failed", &e);
+    sqlx::query_scalar::<_, String>(
+        "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .map_err(database)
+}
+
 /// The display scale of a binary `PostgreSQL` `NUMERIC`: `ndigits`, `weight`, `sign`, `dscale`, each a big-endian
 /// 16-bit field. NaN and the infinities carry no scale to apply.
 fn postgres_numeric_dscale(bytes: &[u8]) -> Option<u16> {
@@ -3718,6 +3784,12 @@ mod tests {
             read().await,
             vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
         );
+        assert_eq!(
+            postgres_primary_key_columns(&pool, None, "redrob_cell_edits".to_owned())
+                .await
+                .unwrap(),
+            vec!["id"]
+        );
 
         let updates = build_row_updates(
             DatabaseKind::PostgreSql,
@@ -3793,6 +3865,12 @@ mod tests {
         assert_eq!(
             read().await,
             vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
+        assert_eq!(
+            mysql_primary_key_columns(&pool, None, "redrob_cell_edits".to_owned())
+                .await
+                .unwrap(),
+            vec!["id"]
         );
 
         let updates = build_row_updates(
@@ -3938,6 +4016,28 @@ mod tests {
         assert_eq!(format_mysql_time(positive), "25:02:03.123456");
         assert_eq!(format_mysql_time(negative), "-25:02:03.123456");
         assert_eq!(format_mysql_time(MySqlTime::ZERO), "00:00:00");
+    }
+
+    #[tokio::test]
+    async fn sqlite_primary_key_columns_are_read_from_the_table() {
+        let service = service();
+        for statement in [
+            "CREATE TABLE pk_single (id INTEGER PRIMARY KEY, name TEXT)",
+            "CREATE TABLE pk_pair (b TEXT, a TEXT, v TEXT, PRIMARY KEY (a, b))",
+            "CREATE TABLE pk_none (v TEXT)",
+        ] {
+            let plan = service
+                .prepare_mutation(DEMO_PROFILE_ID, statement.to_owned(), Vec::new())
+                .await
+                .unwrap();
+            service.apply_mutation(plan).await.unwrap();
+        }
+        let keys =
+            |table: &str| service.primary_key_columns(DEMO_PROFILE_ID, None, table.to_owned());
+        assert_eq!(keys("pk_single").await.unwrap(), vec!["id"]);
+        assert_eq!(keys("pk_pair").await.unwrap(), vec!["a", "b"]);
+        assert!(keys("pk_none").await.unwrap().is_empty());
+        assert!(keys("no_such_table").await.unwrap().is_empty());
     }
 
     #[tokio::test]
