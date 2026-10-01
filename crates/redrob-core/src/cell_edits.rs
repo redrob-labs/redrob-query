@@ -30,6 +30,14 @@ pub struct RowEdit {
     pub changes: Vec<CellChange>,
 }
 
+/// A new row: the columns the person filled in. Columns left out take the table's defaults, so an
+/// auto-increment key may be omitted and the database assigns it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowInsert {
+    pub values: Vec<CellChange>,
+}
+
 /// A reviewed change set for one table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +48,10 @@ pub struct CellEditSet {
     pub primary_key: String,
     #[serde(default)]
     pub rows: Vec<RowEdit>,
-    /// Keys of rows to delete. Applied after the updates, in the same transaction.
+    /// New rows. Applied after the updates and before the deletes, in the same transaction.
+    #[serde(default)]
+    pub inserts: Vec<RowInsert>,
+    /// Keys of rows to delete. Applied last, in the same transaction.
     #[serde(default)]
     pub deletes: Vec<DataValue>,
 }
@@ -83,10 +94,10 @@ fn placeholder(kind: DatabaseKind, index: usize) -> String {
 /// One UPDATE per row, in the order given. Refuses an empty set, a row with no changes, a change to
 /// the key column itself (the row would lose the identity that found it), and a column named twice.
 pub fn build_row_updates(kind: DatabaseKind, edits: &CellEditSet) -> Result<Vec<RowUpdate>> {
-    if edits.rows.is_empty() && edits.deletes.is_empty() {
+    if edits.rows.is_empty() && edits.inserts.is_empty() && edits.deletes.is_empty() {
         return Err(DataError::InvalidQuery("no staged changes".to_owned()));
     }
-    if edits.rows.len() + edits.deletes.len() > MAX_EDITED_ROWS {
+    if edits.rows.len() + edits.inserts.len() + edits.deletes.len() > MAX_EDITED_ROWS {
         return Err(DataError::InvalidQuery(format!(
             "at most {MAX_EDITED_ROWS} rows can be applied at once"
         )));
@@ -149,7 +160,10 @@ pub fn build_row_updates(kind: DatabaseKind, edits: &CellEditSet) -> Result<Vec<
             })
         })
         .collect::<Result<Vec<_>>>()
-        .map(|mut updates| {
+        .and_then(|mut updates| {
+            for insert in &edits.inserts {
+                updates.push(insert_statement(kind, &table, insert)?);
+            }
             updates.extend(edits.deletes.iter().map(|key| RowUpdate {
                 statement: format!(
                     "DELETE FROM {table} WHERE {key_column} = {}",
@@ -157,8 +171,44 @@ pub fn build_row_updates(kind: DatabaseKind, edits: &CellEditSet) -> Result<Vec<
                 ),
                 parameters: vec![key.clone()],
             }));
-            updates
+            Ok(updates)
         })
+}
+
+/// `INSERT INTO table (columns) VALUES (placeholders)`, every value bound. Refuses a row with no
+/// values and a column named twice.
+fn insert_statement(kind: DatabaseKind, table: &str, insert: &RowInsert) -> Result<RowUpdate> {
+    if insert.values.is_empty() {
+        return Err(DataError::InvalidQuery(
+            "a new row has no values".to_owned(),
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut columns = Vec::with_capacity(insert.values.len());
+    for value in &insert.values {
+        if !seen.insert(value.column.as_str()) {
+            return Err(DataError::InvalidQuery(format!(
+                "column {:?} is set twice in a new row",
+                value.column
+            )));
+        }
+        columns.push(quote(kind, &value.column)?);
+    }
+    let placeholders: Vec<String> = (1..=columns.len())
+        .map(|index| placeholder(kind, index))
+        .collect();
+    Ok(RowUpdate {
+        statement: format!(
+            "INSERT INTO {table} ({}) VALUES ({})",
+            columns.join(", "),
+            placeholders.join(", ")
+        ),
+        parameters: insert
+            .values
+            .iter()
+            .map(|value| value.value.clone())
+            .collect(),
+    })
 }
 
 #[cfg(test)]
@@ -167,6 +217,7 @@ mod tests {
 
     fn set(rows: Vec<RowEdit>) -> CellEditSet {
         CellEditSet {
+            inserts: Vec::new(),
             deletes: Vec::new(),
             schema: Some("public".into()),
             table: "customers".into(),
@@ -208,6 +259,7 @@ mod tests {
     #[test]
     fn quotes_names_per_dialect_and_escapes_the_quote() {
         let edits = CellEditSet {
+            inserts: Vec::new(),
             deletes: Vec::new(),
             schema: None,
             table: "we`ird\"t".into(),
@@ -239,6 +291,49 @@ mod tests {
         )
         .unwrap();
         assert!(!updates[0].statement.contains("DROP"));
+    }
+
+    #[test]
+    fn inserts_bind_every_value_and_sit_between_updates_and_deletes() {
+        let edits = CellEditSet {
+            inserts: vec![RowInsert {
+                values: vec![change("name", "Cy"), change("plan", "Free")],
+            }],
+            deletes: vec![DataValue::Integer("9".into())],
+            ..set(vec![RowEdit {
+                key: DataValue::Integer("1".into()),
+                changes: vec![change("name", "Ann")],
+            }])
+        };
+        let updates = build_row_updates(DatabaseKind::PostgreSql, &edits).unwrap();
+        assert!(updates[0].statement.starts_with("UPDATE"));
+        assert_eq!(
+            updates[1].statement,
+            r#"INSERT INTO "public"."customers" ("name", "plan") VALUES ($1, $2)"#
+        );
+        assert_eq!(
+            updates[1].parameters,
+            vec![DataValue::Text("Cy".into()), DataValue::Text("Free".into())]
+        );
+        assert!(updates[2].statement.starts_with("DELETE"));
+        let mysql = CellEditSet {
+            inserts: vec![RowInsert {
+                values: vec![change("name", "x'); DROP")],
+            }],
+            ..set(vec![])
+        };
+        let insert = &build_row_updates(DatabaseKind::MySql, &mysql).unwrap()[0];
+        assert_eq!(
+            insert.statement,
+            "INSERT INTO `public`.`customers` (`name`) VALUES (?)"
+        );
+        for bad in [vec![], vec![change("name", "a"), change("name", "b")]] {
+            let edits = CellEditSet {
+                inserts: vec![RowInsert { values: bad }],
+                ..set(vec![])
+            };
+            assert!(build_row_updates(DatabaseKind::SQLite, &edits).is_err());
+        }
     }
 
     #[test]
