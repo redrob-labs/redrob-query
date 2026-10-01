@@ -3778,6 +3778,7 @@ mod tests {
             }],
         };
         let set = |rows| CellEditSet {
+            deletes: Vec::new(),
             schema: None,
             table: "redrob_cell_edits".to_owned(),
             primary_key: "id".to_owned(),
@@ -3829,6 +3830,15 @@ mod tests {
             read().await,
             vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
         );
+
+        // A delete goes in the same change set and must also hit exactly one row.
+        let deletes = CellEditSet {
+            deletes: vec![DataValue::Integer("2".to_owned())],
+            ..set(vec![])
+        };
+        let updates = build_row_updates(DatabaseKind::PostgreSql, &deletes).unwrap();
+        apply_postgres_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(read().await, vec![owned("Ann Lee", "Free")]);
     }
 
     #[tokio::test]
@@ -3860,6 +3870,7 @@ mod tests {
             }],
         };
         let set = |rows| CellEditSet {
+            deletes: Vec::new(),
             schema: None,
             table: "redrob_cell_edits".to_owned(),
             primary_key: "id".to_owned(),
@@ -3909,6 +3920,15 @@ mod tests {
             read().await,
             vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
         );
+
+        // A delete goes in the same change set and must also hit exactly one row.
+        let deletes = CellEditSet {
+            deletes: vec![DataValue::Integer("2".to_owned())],
+            ..set(vec![])
+        };
+        let updates = build_row_updates(DatabaseKind::MySql, &deletes).unwrap();
+        apply_mysql_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(read().await, vec![owned("Ann Lee", "Free")]);
     }
 
     #[tokio::test]
@@ -4063,6 +4083,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sqlite_deletes_apply_with_edits_or_not_at_all() {
+        use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
+        let service = service();
+        for statement in [
+            "CREATE TABLE gone (id INTEGER PRIMARY KEY, name TEXT)",
+            "INSERT INTO gone VALUES (1, 'Ann'), (2, 'Bo'), (3, 'Cy')",
+        ] {
+            let plan = service
+                .prepare_mutation(DEMO_PROFILE_ID, statement.to_owned(), Vec::new())
+                .await
+                .unwrap();
+            service.apply_mutation(plan).await.unwrap();
+        }
+        let key = |v: &str| DataValue::Integer(v.to_owned());
+        let set = |rows: Vec<RowEdit>, deletes: Vec<DataValue>| CellEditSet {
+            schema: None,
+            table: "gone".to_owned(),
+            primary_key: "id".to_owned(),
+            rows,
+            deletes,
+        };
+        let names = || async {
+            service
+                .execute_query(query("SELECT name FROM gone ORDER BY id"))
+                .await
+                .unwrap()
+                .rows
+        };
+        let text = |v: &str| vec![DataValue::Text(v.to_owned())];
+
+        let edit = RowEdit {
+            key: key("1"),
+            changes: vec![CellChange {
+                column: "name".to_owned(),
+                value: DataValue::Text("Ann Lee".to_owned()),
+            }],
+        };
+        service
+            .apply_cell_edits(DEMO_PROFILE_ID, set(vec![edit], vec![key("2")]))
+            .await
+            .unwrap();
+        assert_eq!(names().await, vec![text("Ann Lee"), text("Cy")]);
+
+        // Row 2 is already gone: deleting 3 and 2 together must leave 3 in place.
+        let error = service
+            .apply_cell_edits(DEMO_PROFILE_ID, set(vec![], vec![key("3"), key("2")]))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("matched 0 rows"), "{error}");
+        assert_eq!(names().await, vec![text("Ann Lee"), text("Cy")]);
+    }
+
+    #[tokio::test]
     async fn sqlite_cell_edits_commit_together_or_not_at_all() {
         use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
         let service = service();
@@ -4085,6 +4158,7 @@ mod tests {
             }],
         };
         let set = |rows| CellEditSet {
+            deletes: Vec::new(),
             schema: None,
             table: "people".to_owned(),
             primary_key: "id".to_owned(),

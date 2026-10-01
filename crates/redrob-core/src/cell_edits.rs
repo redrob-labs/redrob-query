@@ -38,7 +38,11 @@ pub struct CellEditSet {
     pub schema: Option<String>,
     pub table: String,
     pub primary_key: String,
+    #[serde(default)]
     pub rows: Vec<RowEdit>,
+    /// Keys of rows to delete. Applied after the updates, in the same transaction.
+    #[serde(default)]
+    pub deletes: Vec<DataValue>,
 }
 
 /// One UPDATE and the values it binds, in placeholder order.
@@ -79,13 +83,23 @@ fn placeholder(kind: DatabaseKind, index: usize) -> String {
 /// One UPDATE per row, in the order given. Refuses an empty set, a row with no changes, a change to
 /// the key column itself (the row would lose the identity that found it), and a column named twice.
 pub fn build_row_updates(kind: DatabaseKind, edits: &CellEditSet) -> Result<Vec<RowUpdate>> {
-    if edits.rows.is_empty() {
+    if edits.rows.is_empty() && edits.deletes.is_empty() {
         return Err(DataError::InvalidQuery("no staged changes".to_owned()));
     }
-    if edits.rows.len() > MAX_EDITED_ROWS {
+    if edits.rows.len() + edits.deletes.len() > MAX_EDITED_ROWS {
         return Err(DataError::InvalidQuery(format!(
             "at most {MAX_EDITED_ROWS} rows can be applied at once"
         )));
+    }
+    // A row both edited and deleted is a change set nobody can have meant as a whole.
+    if edits
+        .deletes
+        .iter()
+        .any(|key| edits.rows.iter().any(|row| &row.key == key))
+    {
+        return Err(DataError::InvalidQuery(
+            "a row is both edited and deleted".to_owned(),
+        ));
     }
     let table = match &edits.schema {
         Some(schema) if !schema.is_empty() => {
@@ -94,6 +108,7 @@ pub fn build_row_updates(kind: DatabaseKind, edits: &CellEditSet) -> Result<Vec<
         _ => quote(kind, &edits.table)?,
     };
     let key = quote(kind, &edits.primary_key)?;
+    let key_column = key.clone();
     edits
         .rows
         .iter()
@@ -133,7 +148,17 @@ pub fn build_row_updates(kind: DatabaseKind, edits: &CellEditSet) -> Result<Vec<
                 parameters,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()
+        .map(|mut updates| {
+            updates.extend(edits.deletes.iter().map(|key| RowUpdate {
+                statement: format!(
+                    "DELETE FROM {table} WHERE {key_column} = {}",
+                    placeholder(kind, 1)
+                ),
+                parameters: vec![key.clone()],
+            }));
+            updates
+        })
 }
 
 #[cfg(test)]
@@ -142,6 +167,7 @@ mod tests {
 
     fn set(rows: Vec<RowEdit>) -> CellEditSet {
         CellEditSet {
+            deletes: Vec::new(),
             schema: Some("public".into()),
             table: "customers".into(),
             primary_key: "id".into(),
@@ -182,6 +208,7 @@ mod tests {
     #[test]
     fn quotes_names_per_dialect_and_escapes_the_quote() {
         let edits = CellEditSet {
+            deletes: Vec::new(),
             schema: None,
             table: "we`ird\"t".into(),
             primary_key: "id".into(),
@@ -212,6 +239,38 @@ mod tests {
         )
         .unwrap();
         assert!(!updates[0].statement.contains("DROP"));
+    }
+
+    #[test]
+    fn deletes_follow_the_updates_and_bind_the_key() {
+        let mut edits = set(vec![RowEdit {
+            key: DataValue::Integer("1".into()),
+            changes: vec![change("name", "Ann")],
+        }]);
+        edits.deletes = vec![DataValue::Integer("2".into())];
+        let updates = build_row_updates(DatabaseKind::PostgreSql, &edits).unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(
+            updates[1].statement,
+            r#"DELETE FROM "public"."customers" WHERE "id" = $1"#
+        );
+        assert_eq!(updates[1].parameters, vec![DataValue::Integer("2".into())]);
+
+        let only_deletes = CellEditSet {
+            rows: vec![],
+            deletes: vec![DataValue::Integer("3".into())],
+            ..set(vec![])
+        };
+        assert_eq!(
+            build_row_updates(DatabaseKind::MySql, &only_deletes).unwrap()[0].statement,
+            "DELETE FROM `public`.`customers` WHERE `id` = ?"
+        );
+
+        edits.deletes = vec![DataValue::Integer("1".into())];
+        assert!(
+            build_row_updates(DatabaseKind::PostgreSql, &edits).is_err(),
+            "edited and deleted"
+        );
     }
 
     #[test]

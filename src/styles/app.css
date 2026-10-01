@@ -659,3 +659,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 }
 /* The row drawer is portalled to the body; it must sit over the sticky grid header and the AI panel. */
 .rr-drawer-scrim { z-index: 60; }
+
+/* A row staged for deletion: struck through and dimmed until the change set is applied or discarded. */
+.grid-row.is-deleted > div[role="cell"] { text-decoration: line-through; color: var(--ink-muted); }
+.value-diff.is-delete { color: var(--status-danger); gap: 6px; }
