@@ -1,5 +1,6 @@
 //! Profile registry, live connection lifecycle, and database operations.
 
+use crate::cell_edits::{CellEditSet, RowUpdate, build_row_updates};
 use std::{collections::HashMap, net::IpAddr, path::PathBuf, sync::Arc, time::Instant};
 
 use base64::Engine as _;
@@ -976,6 +977,48 @@ impl DataService {
             }
         };
         let rows_affected = timeout(std::time::Duration::from_secs(30), mutation)
+            .await
+            .map_err(|_| DataError::Timeout(std::time::Duration::from_secs(30)))??;
+        Ok(MutationResult {
+            rows_affected,
+            elapsed_ms: elapsed_ms(started),
+            committed: true,
+        })
+    }
+
+    /// Apply a reviewed set of staged cell edits in one transaction. Each row's UPDATE must change
+    /// exactly one row; otherwise nothing is committed. See `cell_edits` for how the statements are built.
+    pub async fn apply_cell_edits(
+        &self,
+        connection_id: Uuid,
+        edits: CellEditSet,
+    ) -> Result<MutationResult> {
+        self.ensure_persistent_storage_available()?;
+        let profile = self.profile(connection_id).await?;
+        if profile.read_only {
+            return Err(DataError::ReadOnlyViolation(
+                "profile is read-only".to_owned(),
+            ));
+        }
+        let updates = build_row_updates(profile.kind, &edits)?;
+        let active = self.ensure_connected(connection_id).await?;
+        let started = Instant::now();
+        let work = async {
+            match active {
+                ActiveConnection::PostgreSql(pool) => {
+                    apply_postgres_row_updates(&pool, &updates).await?;
+                }
+                ActiveConnection::MySql(pool) => apply_mysql_row_updates(&pool, &updates).await?,
+                ActiveConnection::SQLite(pool) => apply_sqlite_row_updates(&pool, &updates).await?,
+                ActiveConnection::Mongo { .. } => {
+                    return Err(DataError::Unsupported("cell edits are SQL-only".to_owned()));
+                }
+            }
+            Ok::<u64, DataError>(updates.len() as u64)
+        };
+        // Dropping an uncommitted sqlx transaction rolls it back, so every early return above undoes
+        // the rows already updated.
+        let rows_affected = timeout(std::time::Duration::from_secs(30), work)
             .await
             .map_err(|_| DataError::Timeout(std::time::Duration::from_secs(30)))??;
         Ok(MutationResult {
@@ -2054,12 +2097,26 @@ fn convert_postgres_cell(row: &PgRow, index: usize) -> Result<DataValue> {
             |value: DateTime<Utc>| DataValue::DateTime(format_utc_date_time(value)),
             "date-time",
         ),
-        "NUMERIC" => decode_cell(
-            row,
-            index,
-            |value: BigDecimal| DataValue::Decimal(value.to_string()),
-            "decimal",
-        ),
+        "NUMERIC" => {
+            // sqlx builds the BigDecimal from PostgreSQL's base-10000 digit groups, so its scale is a
+            // multiple of four: 1.0012300 (scale 7) came back as 1.00123000. The wire value carries
+            // the real display scale (dscale); apply it so the cell reads as PostgreSQL prints it.
+            let scale = row
+                .try_get_raw(index)
+                .ok()
+                .and_then(|raw| raw.as_bytes().ok().and_then(postgres_numeric_dscale));
+            decode_cell(
+                row,
+                index,
+                move |value: BigDecimal| {
+                    DataValue::Decimal(match scale {
+                        Some(scale) => value.with_scale(i64::from(scale)).to_string(),
+                        None => value.to_string(),
+                    })
+                },
+                "decimal",
+            )
+        }
         "JSON" | "JSONB" => decode_cell(row, index, DataValue::Json, "JSON"),
         "UUID" => decode_cell(row, index, DataValue::Uuid, "UUID"),
         _ => decode_cell(row, index, DataValue::Text, "text"),
@@ -2081,8 +2138,10 @@ fn convert_mysql_cell(row: &MySqlRow, index: usize) -> Result<DataValue> {
         return Ok(DataValue::Null);
     }
     let type_name = row.column(index).type_info().name().to_ascii_uppercase();
+    // sqlx names any TINYINT(1) "BOOLEAN", and such a column can hold 0..=127 (or -128): decoding it as a
+    // boolean fails on 5 and calls 1 "true" when the column may mean a count. It is a TINYINT; say so.
     if matches!(type_name.as_str(), "BOOL" | "BOOLEAN") {
-        return decode_cell(row, index, DataValue::Boolean, "boolean");
+        return decode_integer_cell::<i8, _>(row, index);
     }
     if type_name == "BIT" {
         return decode_mysql_bit(row, index);
@@ -2311,7 +2370,9 @@ fn format_utc_date_time(value: DateTime<Utc>) -> String {
 }
 
 fn format_mysql_time(value: MySqlTime) -> String {
-    let sign = if !value.is_zero() && value.is_negative() {
+    // Read the sign itself: sqlx-mysql 0.9.0's MySqlTime::is_negative() returns sign.is_positive(),
+    // which printed every positive TIME with a minus and dropped it from every negative one.
+    let sign = if !value.is_zero() && value.sign().is_negative() {
         "-"
     } else {
         ""
@@ -2396,6 +2457,96 @@ async fn apply_sqlite_mutation(pool: &SqlitePool, plan: &MutationPlan) -> Result
         .await
         .map_err(|error| DataError::database("transaction commit failed", &error))?;
     Ok(result.rows_affected())
+}
+
+/// Every row update in one transaction; returning early drops the transaction, which rolls it back.
+async fn apply_postgres_row_updates(pool: &PgPool, updates: &[RowUpdate]) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| DataError::database("transaction start failed", &e))?;
+    for update in updates {
+        let done = bind_postgres_query(
+            sqlx::query(AssertSqlSafe(update.statement.as_str())),
+            &update.parameters,
+        )?
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| DataError::database("cell edit failed", &e))?;
+        exactly_one_row(done.rows_affected())?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| DataError::database("transaction commit failed", &e))
+}
+
+/// Every row update in one transaction; returning early drops the transaction, which rolls it back.
+async fn apply_mysql_row_updates(pool: &MySqlPool, updates: &[RowUpdate]) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| DataError::database("transaction start failed", &e))?;
+    for update in updates {
+        let done = bind_mysql_query(
+            sqlx::query(AssertSqlSafe(update.statement.as_str())),
+            &update.parameters,
+        )?
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| DataError::database("cell edit failed", &e))?;
+        exactly_one_row(done.rows_affected())?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| DataError::database("transaction commit failed", &e))
+}
+
+/// Every row update in one transaction; returning early drops the transaction, which rolls it back.
+async fn apply_sqlite_row_updates(pool: &SqlitePool, updates: &[RowUpdate]) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| DataError::database("transaction start failed", &e))?;
+    for update in updates {
+        let done = bind_sqlite_query(
+            sqlx::query(AssertSqlSafe(update.statement.as_str())),
+            &update.parameters,
+        )?
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| DataError::database("cell edit failed", &e))?;
+        exactly_one_row(done.rows_affected())?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| DataError::database("transaction commit failed", &e))
+}
+
+/// The display scale of a binary `PostgreSQL` `NUMERIC`: `ndigits`, `weight`, `sign`, `dscale`, each a big-endian
+/// 16-bit field. NaN and the infinities carry no scale to apply.
+fn postgres_numeric_dscale(bytes: &[u8]) -> Option<u16> {
+    let field = |at: usize| {
+        bytes
+            .get(at..at + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+    };
+    let sign = field(4)?;
+    if sign == 0xC000 || sign == 0xD000 || sign == 0xF000 {
+        return None;
+    }
+    field(6)
+}
+
+/// A cell edit is keyed by the primary key, so it must hit exactly one row: none means the row is
+/// gone, more means the key was not unique. Either way the reviewed change set does not hold.
+fn exactly_one_row(affected: u64) -> Result<()> {
+    if affected == 1 {
+        Ok(())
+    } else {
+        Err(DataError::InvalidQuery(format!(
+            "a staged change matched {affected} rows instead of one; nothing was saved"
+        )))
+    }
 }
 
 const MAX_MONGO_QUERY_BYTES: usize = 1024 * 1024;
@@ -3374,7 +3525,7 @@ mod tests {
         let result = execute_postgres_query(
             &pool,
             &query(
-                "SELECT NULL::text, TRUE, -32768::int2, 2147483647::int4, 9223372036854775807::int8, 1.5::float4, 2.5::float8, decode('AP8=', 'base64')::bytea, DATE '2025-02-03', TIME '23:59:58.123456', TIMESTAMP '2025-02-03 04:05:06.700800', TIMESTAMPTZ '2025-02-03 04:05:06.700800+02', 123456789012345678901234567890.0012300::numeric, '{\"safe\":true}'::json, '{\"exact\":\"9007199254740993\"}'::jsonb, '12345678-1234-5678-90ab-1234567890ab'::uuid, 'hello'::text",
+                "SELECT NULL::text, TRUE, (-32768)::int2, 2147483647::int4, 9223372036854775807::int8, 1.5::float4, 2.5::float8, decode('AP8=', 'base64')::bytea, DATE '2025-02-03', TIME '23:59:58.123456', TIMESTAMP '2025-02-03 04:05:06.700800', TIMESTAMPTZ '2025-02-03 04:05:06.700800+02', 123456789012345678901234567890.0012300::numeric, '{\"safe\":true}'::json, '{\"exact\":\"9007199254740993\"}'::jsonb, '12345678-1234-5678-90ab-1234567890ab'::uuid, 'hello'::text",
             ),
         )
         .await
@@ -3508,6 +3659,158 @@ mod tests {
         }
     }
 
+    // The live cell-edit tests use a TEMPORARY table on a one-connection pool: it belongs to that
+    // session and disappears with it, so a run leaves nothing behind on the shared server.
+    #[tokio::test]
+    #[ignore = "requires REDROB_TEST_POSTGRES_URL and an external PostgreSQL server"]
+    async fn live_postgres_cell_edits_commit_together_or_not_at_all() {
+        use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
+        let url = std::env::var("REDROB_TEST_POSTGRES_URL")
+            .expect("REDROB_TEST_POSTGRES_URL must be set when this ignored live test is run");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        for statement in [
+            "CREATE TEMPORARY TABLE redrob_cell_edits (id INTEGER PRIMARY KEY, name VARCHAR(40), plan VARCHAR(40))",
+            "INSERT INTO redrob_cell_edits VALUES (1, 'Ann', 'Free'), (2, 'Bo', 'Free')",
+        ] {
+            sqlx::query(AssertSqlSafe(statement))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let text = |v: &str| DataValue::Text(v.to_owned());
+        let edit = |key: &str, column: &str, value: &str| RowEdit {
+            key: DataValue::Integer(key.to_owned()),
+            changes: vec![CellChange {
+                column: column.to_owned(),
+                value: text(value),
+            }],
+        };
+        let set = |rows| CellEditSet {
+            schema: None,
+            table: "redrob_cell_edits".to_owned(),
+            primary_key: "id".to_owned(),
+            rows,
+        };
+        let read = || async {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT name, plan FROM redrob_cell_edits ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let owned = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+
+        let updates = build_row_updates(
+            DatabaseKind::PostgreSql,
+            &set(vec![
+                edit("1", "name", "Ann Lee"),
+                edit("2", "plan", "Scale"),
+            ]),
+        )
+        .unwrap();
+        apply_postgres_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
+
+        let updates = build_row_updates(
+            DatabaseKind::PostgreSql,
+            &set(vec![
+                edit("1", "name", "Changed"),
+                edit("9", "name", "Ghost"),
+            ]),
+        )
+        .unwrap();
+        let error = apply_postgres_row_updates(&pool, &updates)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("matched 0 rows"), "{error}");
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
+    async fn live_mysql_cell_edits_commit_together_or_not_at_all() {
+        use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
+        let url = std::env::var("REDROB_TEST_MYSQL_URL")
+            .expect("REDROB_TEST_MYSQL_URL must be set when this ignored live test is run");
+        let pool = MySqlPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        for statement in [
+            "CREATE TEMPORARY TABLE redrob_cell_edits (id INTEGER PRIMARY KEY, name VARCHAR(40), plan VARCHAR(40)) ENGINE=InnoDB",
+            "INSERT INTO redrob_cell_edits VALUES (1, 'Ann', 'Free'), (2, 'Bo', 'Free')",
+        ] {
+            sqlx::query(AssertSqlSafe(statement))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let text = |v: &str| DataValue::Text(v.to_owned());
+        let edit = |key: &str, column: &str, value: &str| RowEdit {
+            key: DataValue::Integer(key.to_owned()),
+            changes: vec![CellChange {
+                column: column.to_owned(),
+                value: text(value),
+            }],
+        };
+        let set = |rows| CellEditSet {
+            schema: None,
+            table: "redrob_cell_edits".to_owned(),
+            primary_key: "id".to_owned(),
+            rows,
+        };
+        let read = || async {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT name, plan FROM redrob_cell_edits ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let owned = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+
+        let updates = build_row_updates(
+            DatabaseKind::MySql,
+            &set(vec![
+                edit("1", "name", "Ann Lee"),
+                edit("2", "plan", "Scale"),
+            ]),
+        )
+        .unwrap();
+        apply_mysql_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
+
+        let updates = build_row_updates(
+            DatabaseKind::MySql,
+            &set(vec![
+                edit("1", "name", "Changed"),
+                edit("9", "name", "Ghost"),
+            ]),
+        )
+        .unwrap();
+        let error = apply_mysql_row_updates(&pool, &updates).await.unwrap_err();
+        assert!(error.to_string().contains("matched 0 rows"), "{error}");
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
     async fn live_mysql_native_scalars_when_configured() {
@@ -3607,6 +3910,109 @@ mod tests {
         assert_eq!(
             sqlite_text_value("UUID", id.to_string()).unwrap(),
             DataValue::Uuid(id)
+        );
+    }
+
+    #[test]
+    fn postgres_numeric_dscale_is_read_from_the_wire_header() {
+        // 1.0012300::numeric: 3 digit groups, weight 0, positive, dscale 7.
+        let header = [0, 3, 0, 0, 0, 0, 0, 7, 0, 1, 0, 12, 11, 184];
+        assert_eq!(postgres_numeric_dscale(&header), Some(7));
+        assert_eq!(
+            "1.00123000"
+                .parse::<BigDecimal>()
+                .unwrap()
+                .with_scale(7)
+                .to_string(),
+            "1.0012300"
+        );
+        assert_eq!(postgres_numeric_dscale(&[0, 0, 0, 0, 0xC0, 0, 0, 0]), None); // NaN
+        assert_eq!(postgres_numeric_dscale(&[0, 0]), None);
+    }
+
+    #[test]
+    fn mysql_time_keeps_its_sign() {
+        use sqlx::mysql::types::MySqlTimeSign;
+        let positive = MySqlTime::new(MySqlTimeSign::Positive, 25, 2, 3, 123_456).unwrap();
+        let negative = MySqlTime::new(MySqlTimeSign::Negative, 25, 2, 3, 123_456).unwrap();
+        assert_eq!(format_mysql_time(positive), "25:02:03.123456");
+        assert_eq!(format_mysql_time(negative), "-25:02:03.123456");
+        assert_eq!(format_mysql_time(MySqlTime::ZERO), "00:00:00");
+    }
+
+    #[tokio::test]
+    async fn sqlite_cell_edits_commit_together_or_not_at_all() {
+        use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
+        let service = service();
+        for statement in [
+            "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT, plan TEXT)",
+            "INSERT INTO people VALUES (1, 'Ann', 'Free'), (2, 'Bo', 'Free')",
+        ] {
+            let plan = service
+                .prepare_mutation(DEMO_PROFILE_ID, statement.to_owned(), Vec::new())
+                .await
+                .unwrap();
+            service.apply_mutation(plan).await.unwrap();
+        }
+        let text = |v: &str| DataValue::Text(v.to_owned());
+        let edit = |key: &str, column: &str, value: &str| RowEdit {
+            key: DataValue::Integer(key.to_owned()),
+            changes: vec![CellChange {
+                column: column.to_owned(),
+                value: text(value),
+            }],
+        };
+        let set = |rows| CellEditSet {
+            schema: None,
+            table: "people".to_owned(),
+            primary_key: "id".to_owned(),
+            rows,
+        };
+        let names = || async {
+            service
+                .execute_query(query("SELECT name, plan FROM people ORDER BY id"))
+                .await
+                .unwrap()
+                .rows
+        };
+
+        let applied = service
+            .apply_cell_edits(
+                DEMO_PROFILE_ID,
+                set(vec![
+                    edit("1", "name", "Ann Lee"),
+                    edit("2", "plan", "Scale"),
+                ]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(applied.rows_affected, 2);
+        assert_eq!(
+            names().await,
+            vec![
+                vec![text("Ann Lee"), text("Free")],
+                vec![text("Bo"), text("Scale")]
+            ]
+        );
+
+        // Row 9 does not exist: the change to row 1 that ran first must be rolled back with it.
+        let error = service
+            .apply_cell_edits(
+                DEMO_PROFILE_ID,
+                set(vec![
+                    edit("1", "name", "Changed"),
+                    edit("9", "name", "Ghost"),
+                ]),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("matched 0 rows"), "{error}");
+        assert_eq!(
+            names().await,
+            vec![
+                vec![text("Ann Lee"), text("Free")],
+                vec![text("Bo"), text("Scale")]
+            ]
         );
     }
 
