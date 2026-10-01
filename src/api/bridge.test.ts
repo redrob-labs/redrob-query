@@ -159,6 +159,19 @@ describe('DemoBridge', () => {
 describe('TauriBridge wire adapter', () => {
   beforeEach(() => invokeMock.mockReset());
 
+  it('saves a connection read-only unless edits are allowed, and keeps what the core returns', async () => {
+    const saved = (readOnly: boolean) => ({ profile: { id: 'b1e5165c-a925-4f9c-b065-e395bbd433b4', name: 'Local', kind: 's_q_lite', config: { filePath: '/tmp/a.db', tls: false, options: {} }, readOnly, builtIn: false }, warning: null });
+    const bridge = new TauriBridge();
+    invokeMock.mockResolvedValueOnce(saved(true));
+    const quiet = await bridge.saveConnection({ name: 'Local', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/a.db', tls: false });
+    expect(invokeMock.mock.calls[0][1].profile.readOnly).toBe(true);
+    expect(quiet.profile.readOnly).toBe(true);
+    invokeMock.mockResolvedValueOnce(saved(false));
+    const writable = await bridge.saveConnection({ name: 'Local', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/a.db', tls: false, readOnly: false });
+    expect(invokeMock.mock.calls[1][1].profile.readOnly).toBe(false);
+    expect(writable.profile.readOnly).toBe(false);
+  });
+
   it('saves nested connection config and its secret through one atomic command', async () => {
     invokeMock.mockResolvedValueOnce({
       profile: {
