@@ -76,6 +76,7 @@ async function until(what, check, seconds = 60) {
       const value = await check();
       if (value) return value;
     } catch (error) {
+      if (error.fatal) throw error;
       last = error.message;
     }
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}; last: ${last}`);
@@ -122,7 +123,12 @@ try {
   // 4. Apply, then read the table again.
   await until('the changes panel', async () => (await text('changes-panel')) !== null || clickLabel('1 staged change'));
   await until('Apply to accept a click', () => click('apply-changes'));
-  await until('the staged change to clear', () => js("return ![...document.querySelectorAll('button')].some((b) => /staged change/.test(b.textContent ?? ''));"));
+  // Apply reports a failure as a toast that fades in seconds, so read it while waiting.
+  await until('the staged change to clear', async () => {
+    const failure = await js("const t = document.body.innerText ?? ''; const i = t.indexOf('Could not apply changes'); return i < 0 ? null : t.slice(i, i + 300);");
+    if (failure) throw Object.assign(new Error(`Apply failed: ${failure}`), { fatal: true });
+    return js("return ![...document.querySelectorAll('button')].some((b) => /staged change/.test(b.textContent ?? ''));");
+  });
   await until('Run to accept a click', () => click('run-query'));
   await until('the new name after a fresh run', async () => (await cell('name, result row 1')) === NEW_NAME);
   await shot('4-applied');
