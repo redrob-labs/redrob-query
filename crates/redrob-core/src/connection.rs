@@ -2097,12 +2097,26 @@ fn convert_postgres_cell(row: &PgRow, index: usize) -> Result<DataValue> {
             |value: DateTime<Utc>| DataValue::DateTime(format_utc_date_time(value)),
             "date-time",
         ),
-        "NUMERIC" => decode_cell(
-            row,
-            index,
-            |value: BigDecimal| DataValue::Decimal(value.to_string()),
-            "decimal",
-        ),
+        "NUMERIC" => {
+            // sqlx builds the BigDecimal from PostgreSQL's base-10000 digit groups, so its scale is a
+            // multiple of four: 1.0012300 (scale 7) came back as 1.00123000. The wire value carries
+            // the real display scale (dscale); apply it so the cell reads as PostgreSQL prints it.
+            let scale = row
+                .try_get_raw(index)
+                .ok()
+                .and_then(|raw| raw.as_bytes().ok().and_then(postgres_numeric_dscale));
+            decode_cell(
+                row,
+                index,
+                move |value: BigDecimal| {
+                    DataValue::Decimal(match scale {
+                        Some(scale) => value.with_scale(i64::from(scale)).to_string(),
+                        None => value.to_string(),
+                    })
+                },
+                "decimal",
+            )
+        }
         "JSON" | "JSONB" => decode_cell(row, index, DataValue::Json, "JSON"),
         "UUID" => decode_cell(row, index, DataValue::Uuid, "UUID"),
         _ => decode_cell(row, index, DataValue::Text, "text"),
@@ -2506,6 +2520,21 @@ async fn apply_sqlite_row_updates(pool: &SqlitePool, updates: &[RowUpdate]) -> R
     tx.commit()
         .await
         .map_err(|e| DataError::database("transaction commit failed", &e))
+}
+
+/// The display scale of a binary PostgreSQL `NUMERIC`: `ndigits`, `weight`, `sign`, `dscale`, each a big-endian
+/// 16-bit field. NaN and the infinities carry no scale to apply.
+fn postgres_numeric_dscale(bytes: &[u8]) -> Option<u16> {
+    let field = |at: usize| {
+        bytes
+            .get(at..at + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+    };
+    let sign = field(4)?;
+    if sign == 0xC000 || sign == 0xD000 || sign == 0xF000 {
+        return None;
+    }
+    field(6)
 }
 
 /// A cell edit is keyed by the primary key, so it must hit exactly one row: none means the row is
@@ -3882,6 +3911,23 @@ mod tests {
             sqlite_text_value("UUID", id.to_string()).unwrap(),
             DataValue::Uuid(id)
         );
+    }
+
+    #[test]
+    fn postgres_numeric_dscale_is_read_from_the_wire_header() {
+        // 1.0012300::numeric: 3 digit groups, weight 0, positive, dscale 7.
+        let header = [0, 3, 0, 0, 0, 0, 0, 7, 0, 1, 0, 12, 11, 184];
+        assert_eq!(postgres_numeric_dscale(&header), Some(7));
+        assert_eq!(
+            "1.00123000"
+                .parse::<BigDecimal>()
+                .unwrap()
+                .with_scale(7)
+                .to_string(),
+            "1.0012300"
+        );
+        assert_eq!(postgres_numeric_dscale(&[0, 0, 0, 0, 0xC0, 0, 0, 0]), None); // NaN
+        assert_eq!(postgres_numeric_dscale(&[0, 0]), None);
     }
 
     #[test]
