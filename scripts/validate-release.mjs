@@ -25,7 +25,9 @@ const requireValue = (condition, message) => { if (!condition) failures.push(mes
 requireValue(packageJson.name === 'redrob-query', 'package.json name must be redrob-query');
 requireValue(packageJson.private === true, 'package.json must remain private');
 requireValue(packageJson.engines?.node === '>=22.12.0', 'package.json must require Node.js 22.12.0 or newer');
-requireValue(packageJson.license === 'Apache-2.0', 'package.json license must be Apache-2.0');
+// GPL-3.0-or-later since the Beekeeper Studio port: its LICENSE.md grants "version 3 ... or (at
+// your option) any later version", so the stronger copyleft travels with the code we incorporate.
+requireValue(packageJson.license === 'GPL-3.0-or-later', 'package.json license must be GPL-3.0-or-later');
 requireValue(packageJson.version === cargoVersion, 'package.json and Cargo workspace versions must match');
 requireValue(packageJson.version === tauri.version, 'package.json and Tauri versions must match');
 requireValue(packageJson.version === packageLock.version, 'package.json and package-lock.json versions must match');

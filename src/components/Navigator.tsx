@@ -10,14 +10,18 @@ const engineLabel: Record<DatabaseKind, string> = { postgresql: 'PostgreSQL', my
 const engineGlyph: Record<DatabaseKind, string> = { postgresql: 'PG', mysql: 'MY', sqlite: 'SQ', mongodb: 'MO', sqlserver: 'MS' };
 const NodeIcon = ({ node }: { node: MetadataNode }) => node.kind === 'database' ? <Icon name="database" /> : node.kind === 'table' ? <Icon name="grid" className="node-icon table" /> : node.kind === 'view' ? <Icon name="eye" className="node-icon view" /> : node.kind === 'column' ? <Icon name="columns" className="node-icon column" /> : <span className="schema-icon">S</span>;
 
-function TreeNode({ node, depth, filter }: { node: MetadataNode; depth: number; filter: string }) {
+// `schema` is threaded down rather than looked up: a node knows its parentId but not the parent's
+// NAME, and the structure panel needs the name to qualify a table. The schema node passes its own
+// name to its children, which is the only place that name is known for certain.
+function TreeNode({ node, depth, filter, schema }: { node: MetadataNode; depth: number; filter: string; schema?: string }) {
   const expanded = useWorkspace((state) => state.expandedNodes.has(node.id));
   const children = useWorkspace((state) => state.metadata[node.id]);
   const toggleNode = useWorkspace((state) => state.toggleNode);
+  const setUi = useWorkspace((state) => state.setUi);
   const hasChildren = Boolean(node.childCount);
   const visibleChildren = children?.filter((child) => !filter || child.name.toLowerCase().includes(filter) || Boolean(child.childCount));
   if (filter && !hasChildren && !node.name.toLowerCase().includes(filter)) return null;
-  return <><button className={clsx('tree-node', node.kind === 'column' && 'is-column')} style={{ paddingLeft: 10 + depth * 14 }} onClick={() => hasChildren && void toggleNode(node)} aria-expanded={hasChildren ? expanded : undefined} data-testid={`metadata-${node.id}`}><span className="tree-chevron">{hasChildren ? (expanded ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />) : <span />}</span><NodeIcon node={node} /><span className="tree-label">{node.name}</span>{node.dataType ? <span className="tree-type">{node.dataType}</span> : null}</button>{expanded && !children ? <div className="tree-loading" style={{ paddingLeft: 32 + depth * 14 }}><Icon name="dot" /> Loading…</div> : null}{expanded && visibleChildren?.map((child) => <TreeNode key={child.id} node={child} depth={depth + 1} filter={filter} />)}</>;
+  return <><button className={clsx('tree-node', node.kind === 'column' && 'is-column')} style={{ paddingLeft: 10 + depth * 14 }} onClick={() => { if (node.kind === 'table' || node.kind === 'view') { setUi({ structureTarget: { table: node.name, schema } }); } if (hasChildren) void toggleNode(node); }} aria-expanded={hasChildren ? expanded : undefined} data-testid={`metadata-${node.id}`}><span className="tree-chevron">{hasChildren ? (expanded ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />) : <span />}</span><NodeIcon node={node} /><span className="tree-label">{node.name}</span>{node.dataType ? <span className="tree-type">{node.dataType}</span> : null}</button>{expanded && !children ? <div className="tree-loading" style={{ paddingLeft: 32 + depth * 14 }}><Icon name="dot" /> Loading…</div> : null}{expanded && visibleChildren?.map((child) => <TreeNode key={child.id} node={child} depth={depth + 1} filter={filter} schema={node.kind === 'schema' ? node.name : schema} />)}</>;
 }
 
 export function Navigator() {

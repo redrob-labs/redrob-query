@@ -42,7 +42,7 @@ Commands run and their exit codes, on this checkout at `origin/develop` (`8c1dbb
 
 | Command | Exit code | Note |
 | --- | --- | --- |
-| `npm run release:check` | 0 | 0.12s. Printed "Release metadata is synchronized for Redrob Query 0.1.0." |
+| `npm run release:check` | 0 | 0.12s. Printed "Release metadata is synchronized for Redrob Query 0.2.0." |
 | `npm run typecheck` | 0 | `tsc --noEmit -p tsconfig.app.json`. |
 | `npm test` | 0 | vitest, 4 files, 74 tests passed, 11.8s. |
 | `npm run build` | 0 | Runs typecheck then `vite build`, 1.5s. |
@@ -59,8 +59,8 @@ they passed without exporting the URLs is not.
 
 ## Branch model and gitflow
 
-`develop` is the default branch and the base of every pull request. Of the two open right now, this
-one targets `develop` and #18 (`release/v0.1.0`) targets `main`, which is what a release promotion
+`develop` is the default branch and the base of every pull request. The exception open right now is
+`release/v0.2.0`, which targets `main` -- that is what a release promotion
 should do. `main` is released state and moves
 only by merging `develop` (through a `release/*` or `hotfix/*` branch) into it. Release tags are cut
 from `main`.

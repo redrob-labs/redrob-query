@@ -10,6 +10,7 @@ export function ActivityRail() {
   const aiOpen = useWorkspace((state) => state.aiOpen);
   const mutations = useWorkspace((state) => state.mutations.length);
   const activeTabId = useWorkspace((state) => state.activeTabId);
+  const pluginViewId = useWorkspace((state) => state.pluginViewId);
   const openConnectionModal = useWorkspace((state) => state.openConnectionModal);
   const focusNavigatorSearch = useWorkspace((state) => state.focusNavigatorSearch);
   const setUi = useWorkspace((state) => state.setUi);
@@ -22,6 +23,7 @@ export function ActivityRail() {
         <IconButton label="Schema search" onClick={focusNavigatorSearch}><Icon name="search" size={24} /></IconButton>
         <IconButton label="Query workspace" active aria-current="page" disabled={!activeTabId} onClick={() => document.querySelector<HTMLElement>('[data-testid="query-editor"] textarea')?.focus()}><Icon name="fileCode" size={24} /></IconButton>
         <IconButton label="Staged changes" badge={mutations} onClick={() => setUi({ changesOpen: true })}><Icon name="compare" size={24} /></IconButton>
+        <IconButton label={pluginViewId ? 'Close ER diagram' : 'ER diagram'} data-testid="toggle-plugin-view" active={Boolean(pluginViewId)} aria-pressed={Boolean(pluginViewId)} onClick={() => setUi({ pluginViewId: pluginViewId ? null : 'bks-er-diagram/main-view' })}><Icon name="plug" size={24} /></IconButton>
       </div>
       <div className="rail-spacer" />
       <div className="rail-group">

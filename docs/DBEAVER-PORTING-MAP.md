@@ -2,6 +2,8 @@
 
 Redrob Query is a clean Rust/React implementation informed by DBeaver Community workflows. It is not a source port, fork, plugin host, or compatibility layer, and it contains no DBeaver code or branding.
 
+DBeaver is registered in `docs/upstream-sources.toml` with `kind = "algorithm"`, which is what makes the paragraph above a checked claim rather than an assurance: `scripts/verify-upstream.mjs` refuses to let an `algorithm` source acquire an attribution entry, and only a `code` source may have one. Apache-2.0 would permit copying DBeaver; we do not, because it is Java and reusing it would mean bundling a JVM against this product's own identity line. The one `code` upstream is Beekeeper Studio, recorded in `UPSTREAM_NOTICES.md`.
+
 | DBeaver Community workflow | Redrob Query 0.1 equivalent | Current boundary |
 |---|---|---|
 | Database Navigator | Profile picker plus lazy searchable database/schema/table/view/column tree; activity-rail search focuses the filter | Lightweight metadata; Mongo fields are merged from at most 25 sampled documents |
@@ -9,11 +11,11 @@ Redrob Query is a clean Rust/React implementation informed by DBeaver Community 
 | SQL Editor | Monaco connection-owned SQL/MQL tabs, engine starters, execution, copy, formatting, shortcuts, and bounded local desktop restoration/history | No multi-statement script runner, plan UI, durable project files, or transaction toolbar |
 | Data Viewer | Typed virtualized rows, bridge/server-bounded pages, 25/50/100/250 sizes, current-page sort/filter, column visibility, messages, metrics, and visible CSV export | Desktop is read-only; sort/filter do not span unloaded pages |
 | Data Editor | Browser-demo relational cell staging, review, exact-previous-value checks, and atomic fixture apply | Sample memory only; no desktop/native editing |
-| Object properties | Expandable tables/views/columns and bounded Mongo sampled-field hints | No rich DDL, constraint/index/dependency panels, authoritative Mongo schema, or ER diagrams |
+| Object properties | Expandable tables/views/columns, bounded Mongo sampled-field hints, and a structure panel showing a table's primary key, foreign keys in both directions, and indexes | No rich DDL or dependency panel, and no authoritative Mongo schema. **An ER diagram now exists**, as a sandboxed GPL-3.0 plugin rather than a built-in view; see `docs/beekeeper-porting-boundary.md` |
 | Connection security | OS-keyring secrets, verified TLS modes, strict non-secret profiles, journaled updates, and exclusive store ownership | Public trust roots only; no custom CA/client-certificate UI |
 | Local workspace | Up to 30 query tabs (including empty drafts) and 50 nonempty successful first-page history entries in versioned desktop local storage | Plaintext query-only convenience state, user-clearable; not encrypted projects; browser demo is in-memory |
 | Tasks/data transfer | No equivalent | No scheduler, import/export pipeline beyond visible CSV, compare, sync, or migration tooling |
-| Extension ecosystem | No equivalent | Connectors are compiled Rust implementations, not Eclipse/OSGi/JDBC plugins |
+| Extension ecosystem | A plugin host for Beekeeper Studio's own plugin protocol, serving a sandboxed iframe over a measured request/response envelope | Connectors are still compiled Rust implementations, not Eclipse/OSGi/JDBC plugins. The host answers 12 methods and REFUSES the rest rather than returning an empty result |
 | AI assistance | Redrob-specific engine-aware SQL/MQL assistant | Sends prompt and optional active query to Redrob; not a DBeaver-derived feature |
 
 ## Architectural replacement

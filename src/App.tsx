@@ -15,6 +15,8 @@ import { Navigator } from './components/Navigator';
 import { QueryEditor } from './components/QueryEditor';
 import { ResultGrid } from './components/ResultGrid';
 import { StatusBar } from './components/StatusBar';
+import { StructurePanel } from './components/StructurePanel';
+import { PluginWorkspace } from './plugins/PluginWorkspace';
 import { WorkspaceProvider, useWorkspace } from './store/WorkspaceProvider';
 import './styles/app.css';
 
@@ -27,6 +29,7 @@ function Workspace() {
   const navigatorOpen = useWorkspace((state) => state.navigatorOpen);
   const aiOpen = useWorkspace((state) => state.aiOpen);
   const changesOpen = useWorkspace((state) => state.changesOpen);
+  const pluginViewId = useWorkspace((state) => state.pluginViewId);
   const setUi = useWorkspace((state) => state.setUi);
   const runQuery = useWorkspace((state) => state.runQuery);
   const newTab = useWorkspace((state) => state.newTab);
@@ -66,9 +69,16 @@ function Workspace() {
         <ActivityRail />
         {navigatorOpen ? <Navigator /> : null}
         <main className="main-workspace">
-          <QueryEditor />
-          <ResultGrid />
+          {pluginViewId ? (
+            <PluginWorkspace viewKey={pluginViewId} onClose={() => setUi({ pluginViewId: null })} />
+          ) : (
+            <>
+              <QueryEditor />
+              <ResultGrid />
+            </>
+          )}
         </main>
+        <StructurePanel />
         {changesOpen ? <ChangesPanel /> : null}
         {aiOpen ? <AiPanel /> : null}
       </div>
