@@ -30,6 +30,8 @@ function TreeNode({ node, depth, filter, schema }: { node: MetadataNode; depth: 
   const newTab = useWorkspace((state) => state.newTab);
   const updateQuery = useWorkspace((state) => state.updateQuery);
   const notify = useWorkspace((state) => state.notify);
+  const togglePin = useWorkspace((state) => state.togglePin);
+  const pinned = useWorkspace((state) => state.pinnedTables.some((pin) => pin.connectionId === state.activeConnectionId && pin.table === node.name && (pin.schema ?? '') === (schema ?? '')));
   const isRelation = node.kind === 'table' || node.kind === 'view';
   const visibleChildren = children?.filter((child) => !filter || child.name.toLowerCase().includes(filter) || Boolean(child.childCount));
   if (filter && !hasChildren && !node.name.toLowerCase().includes(filter)) return null;
@@ -40,11 +42,17 @@ function TreeNode({ node, depth, filter, schema }: { node: MetadataNode; depth: 
         { id: 'select', label: 'Query this table', icon: <Icon name="play" />, onSelect: () => { newTab(); updateQuery(selectStatement(kind, node.name, schema)); } },
         { id: 'structure', label: 'View structure', icon: <Icon name="columns" />, onSelect: () => setUi({ structureTarget: { table: node.name, schema } }) },
         { type: 'separator' },
+        { id: 'pin', label: pinned ? 'Unpin' : 'Pin to top', icon: <Icon name="pin" />, onSelect: () => togglePin(node.name, schema) },
         { id: 'copy', label: 'Copy name', icon: <Icon name="copy" />, onSelect: () => { void navigator.clipboard.writeText(schema ? `${schema}.${node.name}` : node.name).then(() => notify('success', 'Copied', node.name), () => notify('error', 'Copy failed', 'The clipboard is not available here.')); } },
       ]} /> : null}</div>{expanded && !children ? <div className="tree-loading" style={{ paddingLeft: 32 + depth * 14 }}><Icon name="dot" /> Loading…</div> : null}{expanded && visibleChildren?.map((child) => <TreeNode key={child.id} node={child} depth={depth + 1} filter={filter} schema={node.kind === 'schema' ? node.name : schema} />)}</>;
 }
 
 export function Navigator() {
+  const setUi = useWorkspace((state) => state.setUi);
+  const togglePin = useWorkspace((state) => state.togglePin);
+  const allPins = useWorkspace((state) => state.pinnedTables);
+  const activeConnectionId = useWorkspace((state) => state.activeConnectionId);
+  const pins = allPins.filter((pin) => pin.connectionId === activeConnectionId);
   const connections = useWorkspace((state) => state.connections);
   const activeId = useWorkspace((state) => state.activeConnectionId);
   const roots = useWorkspace((state) => state.metadata.root);
@@ -80,6 +88,7 @@ export function Navigator() {
         <button className="connection-current" aria-label="Choose connection" aria-expanded={pickerOpen} onClick={() => setPickerOpen((value) => !value)}><span className="database-glyph">{active ? engineGlyph[active.kind] : 'DB'}</span><span><strong>{active?.name ?? 'No connection'}</strong><small>{active ? <i className={`state-${active.state}`} /> : null} {active?.isDemo ? 'Demo ' : ''}{active ? `${engineLabel[active.kind]} · ${active.state}` : 'Select a profile'}</small></span><Icon name="chevronDown" /></button>
         {pickerOpen && connections.length > 0 ? <div className="connection-options">{connections.map((connection) => <button key={connection.id} onClick={() => { setPickerOpen(false); void setActive(connection.id); }}><strong>{connection.name}</strong><small>{connection.state}</small></button>)}</div> : null}
       </div>
+      {pins.length ? <div className="pinned-list" aria-label="Pinned tables"><div className="tree-toolbar"><span>Pinned <span className="pinned-count">{pins.length}</span></span></div>{pins.map((pin) => <div className="tree-row" key={`${pin.schema ?? ''}.${pin.table}`}><button className="tree-node" style={{ paddingLeft: 10 }} onClick={() => setUi({ structureTarget: { table: pin.table, schema: pin.schema } })}><span className="tree-chevron"><Icon name="pin" /></span><span className="tree-label">{pin.table}</span>{pin.schema ? <span className="tree-type">{pin.schema}</span> : null}</button><IconButton label={`Unpin ${pin.table}`} className="tree-row-menu" onClick={() => togglePin(pin.table, pin.schema)}><Icon name="close" /></IconButton></div>)}</div> : null}
       <div className="tree-toolbar"><span>Objects</span><div><IconButton label="Refresh schema" disabled={!active || active.state !== 'connected'} onClick={() => void loadNode(null, true)}><Icon name="refresh" /></IconButton><div className="profile-actions"><IconButton label="Connection actions" disabled={!active} onClick={() => setActionsOpen((value) => !value)}><Icon name="more" /></IconButton>{actionsOpen && active ? <div className="profile-actions-menu" role="menu"><button disabled={Boolean(active.builtIn) || active.state === 'connecting'} title={active.builtIn ? 'Built-in profiles cannot be edited' : active.state === 'connecting' ? 'Wait for the connection attempt to finish' : undefined} onClick={() => { setActionsOpen(false); openConnectionModal(active.id); }}><Icon name="edit" /> Edit</button>{active.state === 'connected' ? <button onClick={() => { setActionsOpen(false); void disconnectConnection(active.id); }}><Icon name="plug" /> Disconnect</button> : <button disabled={active.state === 'connecting'} onClick={() => { setActionsOpen(false); void connectConnection(active.id); }}><Icon name="link" /> {active.state === 'connecting' ? 'Connecting…' : 'Connect'}</button>}<button className="danger" disabled={Boolean(active.builtIn) || active.state === 'connecting'} title={active.builtIn ? 'Built-in profiles cannot be removed' : active.state === 'connecting' ? 'Wait for the connection attempt to finish' : undefined} onClick={() => { setActionsOpen(false); setPendingRemoval(active); }}><Icon name="trash" /> Remove</button></div> : null}</div></div></div>
       <div className="schema-tree" role="tree" aria-label="Database objects">{!active ? <div className="navigator-state">Select a connection to view its status.</div> : active.state !== 'connected' ? <div className="navigator-state">{active.state === 'connecting' ? <><Loader size="sm" label="Connecting" /> Connecting…</> : 'Connect this profile to load its schema.'}</div> : !roots ? <div className="navigator-state"><Loader size="sm" label="Loading the schema" /> Loading schema…</div> : roots.length === 0 ? <div className="navigator-state">No objects found</div> : roots.map((node) => <TreeNode key={node.id} node={node} depth={0} filter={filter} />)}</div>
       {active?.state === 'connected' && roots ? <div className="navigator-footer"><span className="live-dot" /> Metadata synced <span>just now</span></div> : <div className="navigator-footer">{active ? `${active.state[0].toUpperCase()}${active.state.slice(1)}` : 'Waiting for connection selection'}</div>}
