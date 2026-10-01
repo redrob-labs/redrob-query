@@ -468,7 +468,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         if (!row || !source || !state.activeConnectionId || column === source.primaryKey) return;
         const rowKey = String(row[source.primaryKey]); if (!rowKey) return;
         const mutationId = `${rowKey}-${column}`; const existing = state.mutations.find((item) => item.id === mutationId); const previousValue = existing?.previousValue ?? row[column];
-        const mutations = [...state.mutations.filter((item) => item.id !== mutationId), { id: mutationId, connectionId: state.activeConnectionId, table: source.table, primaryKey: source.primaryKey, rowKey, column, previousValue, nextValue: value }];
+        const mutations = [...state.mutations.filter((item) => item.id !== mutationId), { id: mutationId, connectionId: state.activeConnectionId, table: source.table, schema: source.schema, primaryKey: source.primaryKey, rowKey, column, previousValue, nextValue: value, keyValue: row[source.primaryKey], keyWireType: state.result?.columns.find((item) => item.key === source.primaryKey)?.wireType, wireType: state.result?.columns.find((item) => item.key === column)?.wireType }];
         set({ mutations, changesOpen: true });
       },
       discardMutation(id) { set((state) => ({ mutations: state.mutations.filter((item) => item.id !== id) })); },

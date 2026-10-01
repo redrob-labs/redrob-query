@@ -26,6 +26,8 @@ pub fn run() {
             commands::disconnect,
             commands::load_metadata,
             commands::execute_query,
+            commands::apply_cell_edits,
+            commands::primary_key_columns,
             commands::save_ai_secret,
             commands::ai_chat,
         ])

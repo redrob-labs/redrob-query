@@ -159,6 +159,19 @@ describe('DemoBridge', () => {
 describe('TauriBridge wire adapter', () => {
   beforeEach(() => invokeMock.mockReset());
 
+  it('saves a connection read-only unless edits are allowed, and keeps what the core returns', async () => {
+    const saved = (readOnly: boolean) => ({ profile: { id: 'b1e5165c-a925-4f9c-b065-e395bbd433b4', name: 'Local', kind: 's_q_lite', config: { filePath: '/tmp/a.db', tls: false, options: {} }, readOnly, builtIn: false }, warning: null });
+    const bridge = new TauriBridge();
+    invokeMock.mockResolvedValueOnce(saved(true));
+    const quiet = await bridge.saveConnection({ name: 'Local', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/a.db', tls: false });
+    expect(invokeMock.mock.calls[0][1].profile.readOnly).toBe(true);
+    expect(quiet.profile.readOnly).toBe(true);
+    invokeMock.mockResolvedValueOnce(saved(false));
+    const writable = await bridge.saveConnection({ name: 'Local', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/a.db', tls: false, readOnly: false });
+    expect(invokeMock.mock.calls[1][1].profile.readOnly).toBe(false);
+    expect(writable.profile.readOnly).toBe(false);
+  });
+
   it('saves nested connection config and its secret through one atomic command', async () => {
     invokeMock.mockResolvedValueOnce({
       profile: {
@@ -232,13 +245,23 @@ describe('TauriBridge wire adapter', () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  it('rejects desktop mutations without invoking native commands', async () => {
+  it('sends staged edits as one typed change set, grouped by row', async () => {
+    invokeMock.mockResolvedValueOnce({ rowsAffected: 2, elapsedMs: 3, committed: true });
     const bridge = new TauriBridge();
-    await expect(bridge.applyMutations([{
-      id: 'blocked-edit', connectionId: 'connection-1', table: 'customers', primaryKey: 'id',
-      rowKey: 'row-1', column: 'email', previousValue: 'before@example.test', nextValue: 'after@example.test',
-    }])).rejects.toThrow('Desktop preview is read-only');
-    expect(invokeMock).not.toHaveBeenCalled();
+    const base = { connectionId: 'connection-1', schema: 'public', table: 'customers', primaryKey: 'id', previousValue: null };
+    const result = await bridge.applyMutations([
+      { ...base, id: 'a', rowKey: '7', keyValue: 7, keyWireType: 'integer', column: 'email', nextValue: 'a@example.test', wireType: 'text' },
+      { ...base, id: 'b', rowKey: '7', keyValue: 7, keyWireType: 'integer', column: 'mrr', nextValue: '12.50', wireType: 'decimal' },
+      { ...base, id: 'c', rowKey: '8', keyValue: 8, keyWireType: 'integer', column: 'active', nextValue: null, wireType: 'boolean' },
+    ]);
+    expect(invokeMock).toHaveBeenCalledWith('apply_cell_edits', {
+      connectionId: 'connection-1',
+      edits: { schema: 'public', table: 'customers', primaryKey: 'id', rows: [
+        { key: { type: 'integer', value: '7' }, changes: [{ column: 'email', value: { type: 'text', value: 'a@example.test' } }, { column: 'mrr', value: { type: 'decimal', value: '12.50' } }] },
+        { key: { type: 'integer', value: '8' }, changes: [{ column: 'active', value: { type: 'null' } }] },
+      ] },
+    });
+    expect(result.message).toBe('Saved 3 changes in 2 rows.');
   });
 
   it('saves the Redrob key through secure desktop storage', async () => {

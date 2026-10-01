@@ -1,7 +1,7 @@
 use redrob_core::{
     AiAssistantRequest, AiChatResponse, ConnectionProfile, ConnectionStatus, DataService,
-    MetadataNode, MetadataRequest, QueryRequest, QueryResultPage, RemoveProfileOutcome,
-    SaveProfileOutcome,
+    MetadataNode, MetadataRequest, MutationResult, QueryRequest, QueryResultPage,
+    RemoveProfileOutcome, SaveProfileOutcome,
 };
 use tauri::State;
 use uuid::Uuid;
@@ -87,6 +87,35 @@ pub async fn execute_query(
     request: QueryRequest,
 ) -> Result<QueryResultPage, String> {
     service.execute_query(request).await.map_err(message)
+}
+
+/// The primary-key columns of a table, so the grid knows whether a result can be edited and how a
+/// row is identified. Empty when the table has none: such a result stays read-only.
+#[tauri::command]
+pub async fn primary_key_columns(
+    service: State<'_, DataService>,
+    connection_id: Uuid,
+    schema: Option<String>,
+    table: String,
+) -> Result<Vec<String>, String> {
+    service
+        .primary_key_columns(connection_id, schema, table)
+        .await
+        .map_err(message)
+}
+
+/// Apply a change set the person reviewed in the changes panel. The core checks the profile is
+/// writable, binds every value, and commits only if every row update hits exactly one row.
+#[tauri::command]
+pub async fn apply_cell_edits(
+    service: State<'_, DataService>,
+    connection_id: Uuid,
+    edits: redrob_core::cell_edits::CellEditSet,
+) -> Result<MutationResult, String> {
+    service
+        .apply_cell_edits(connection_id, edits)
+        .await
+        .map_err(message)
 }
 
 #[tauri::command]

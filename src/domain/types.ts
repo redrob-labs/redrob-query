@@ -15,6 +15,8 @@ export interface ConnectionProfile {
   filePath?: string;
   srv?: boolean;
   tls: boolean;
+  /** Writes are refused unless this is explicitly false. Saved profiles default to read-only. */
+  readOnly?: boolean;
   authSource?: string;
   state: ConnectionState;
   builtIn?: boolean;
@@ -65,6 +67,8 @@ export interface ResultColumn {
   dataType: DataType;
   nullable?: boolean;
   primaryKey?: boolean;
+  /** The engine's value type for this column (desktop only), so an edit is written back as that type, not as text. */
+  wireType?: string;
 }
 
 export interface QueryResult {
@@ -78,6 +82,7 @@ export interface QueryResult {
   truncated?: boolean;
   message?: string;
   editSource?: {
+    schema?: string;
     table: string;
     primaryKey: string;
   };
@@ -92,6 +97,11 @@ export interface CellMutation {
   column: string;
   previousValue: CellValue;
   nextValue: CellValue;
+  schema?: string;
+  /** The key value as typed, and the engine types to write key and value back as. */
+  keyValue?: CellValue;
+  keyWireType?: string;
+  wireType?: string;
 }
 
 export interface MutationResult {

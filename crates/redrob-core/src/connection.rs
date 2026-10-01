@@ -692,12 +692,10 @@ impl DataService {
                 "custom profiles cannot be marked built-in".to_owned(),
             ));
         }
+        // A SQLite file used to be forced read-only here. It now follows the profile's own read_only,
+        // which the desktop sets only when the person ticks "Allow edits"; relational_url opens the
+        // file mode=ro otherwise, and never mode=rwc, so a mistyped path cannot create a file.
         profile.normalize();
-        if profile.kind == DatabaseKind::SQLite
-            && profile.config.file_path.as_deref() != Some(":memory:")
-        {
-            profile.read_only = true;
-        }
         profile.validate()?;
         if profile.id.is_nil() || profile.id == DEMO_PROFILE_ID || profile.id == AI_SECRET_ID {
             return Err(DataError::InvalidProfile(
@@ -984,6 +982,24 @@ impl DataService {
             elapsed_ms: elapsed_ms(started),
             committed: true,
         })
+    }
+
+    /// The primary-key columns of one table, in key order; empty when it has none. Names are passed
+    /// as bound values and resolved by the database itself, never spliced into the statement.
+    pub async fn primary_key_columns(
+        &self,
+        connection_id: Uuid,
+        schema: Option<String>,
+        table: String,
+    ) -> Result<Vec<String>> {
+        match self.ensure_connected(connection_id).await? {
+            ActiveConnection::PostgreSql(pool) => {
+                postgres_primary_key_columns(&pool, schema, table).await
+            }
+            ActiveConnection::MySql(pool) => mysql_primary_key_columns(&pool, schema, table).await,
+            ActiveConnection::SQLite(pool) => sqlite_primary_key_columns(&pool, table).await,
+            ActiveConnection::Mongo { .. } => Ok(Vec::new()),
+        }
     }
 
     /// Apply a reviewed set of staged cell edits in one transaction. Each row's UPDATE must change
@@ -1302,7 +1318,10 @@ fn relational_url(profile: &ConnectionProfile, secret: Option<&str>) -> Result<S
         return Ok(if path == ":memory:" {
             "sqlite::memory:".to_owned()
         } else {
-            format!("sqlite://{path}?mode=ro")
+            format!(
+                "sqlite://{path}?mode={}",
+                if profile.read_only { "ro" } else { "rw" }
+            )
         });
     }
     Ok(server_url(profile, secret)?.to_string())
@@ -2522,6 +2541,75 @@ async fn apply_sqlite_row_updates(pool: &SqlitePool, updates: &[RowUpdate]) -> R
         .map_err(|e| DataError::database("transaction commit failed", &e))
 }
 
+async fn postgres_primary_key_columns(
+    pool: &PgPool,
+    schema: Option<String>,
+    table: String,
+) -> Result<Vec<String>> {
+    let database = |e: sqlx::Error| DataError::database("primary key lookup failed", &e);
+    sqlx::query_scalar::<_, String>(
+                "SELECT a.attname::text FROM pg_index i \
+                 JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) \
+                 WHERE i.indisprimary AND i.indrelid = to_regclass(CASE WHEN $1::text IS NULL THEN quote_ident($2) ELSE quote_ident($1) || '.' || quote_ident($2) END) \
+                 ORDER BY array_position(i.indkey, a.attnum)",
+            )
+            .bind(schema)
+            .bind(table)
+            .fetch_all(pool)
+            .await
+            .map_err(database)
+}
+
+async fn mysql_primary_key_columns(
+    pool: &MySqlPool,
+    schema: Option<String>,
+    table: String,
+) -> Result<Vec<String>> {
+    // SHOW KEYS, not information_schema: the latter does not list TEMPORARY tables, which a session
+    // can query and edit like any other. The name cannot be bound here, so it is quoted the way
+    // cell_edits quotes it (backticks, doubled inside), and refused when empty or holding a NUL.
+    let quote = |name: &str| -> Result<String> {
+        if name.is_empty() || name.contains('\0') {
+            return Err(DataError::InvalidQuery(format!(
+                "not a usable identifier: {name:?}"
+            )));
+        }
+        Ok(format!("`{}`", name.replace('`', "``")))
+    };
+    let target = match &schema {
+        Some(schema) if !schema.is_empty() => format!("{}.{}", quote(schema)?, quote(&table)?),
+        _ => quote(&table)?,
+    };
+    let statement = format!("SHOW KEYS FROM {target} WHERE Key_name = 'PRIMARY'");
+    let rows = match sqlx::query(AssertSqlSafe(statement.as_str()))
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        // A table that does not exist has no key to edit by; the result simply stays read-only.
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("42S02") => {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(DataError::database("primary key lookup failed", &error)),
+    };
+    // SHOW KEYS lists an index's columns in key order (Seq_in_index), so the order is kept as read.
+    rows.iter()
+        .map(|row| row.try_get::<String, _>("Column_name"))
+        .collect::<std::result::Result<Vec<_>, sqlx::Error>>()
+        .map_err(|error| DataError::database("primary key lookup failed", &error))
+}
+
+async fn sqlite_primary_key_columns(pool: &SqlitePool, table: String) -> Result<Vec<String>> {
+    let database = |e: sqlx::Error| DataError::database("primary key lookup failed", &e);
+    sqlx::query_scalar::<_, String>(
+        "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .map_err(database)
+}
+
 /// The display scale of a binary `PostgreSQL` `NUMERIC`: `ndigits`, `weight`, `sign`, `dscale`, each a big-endian
 /// 16-bit field. NaN and the infinities carry no scale to apply.
 fn postgres_numeric_dscale(bytes: &[u8]) -> Option<u16> {
@@ -3718,6 +3806,12 @@ mod tests {
             read().await,
             vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
         );
+        assert_eq!(
+            postgres_primary_key_columns(&pool, None, "redrob_cell_edits".to_owned())
+                .await
+                .unwrap(),
+            vec!["id"]
+        );
 
         let updates = build_row_updates(
             DatabaseKind::PostgreSql,
@@ -3793,6 +3887,12 @@ mod tests {
         assert_eq!(
             read().await,
             vec![owned("Ann Lee", "Free"), owned("Bo", "Scale")]
+        );
+        assert_eq!(
+            mysql_primary_key_columns(&pool, None, "redrob_cell_edits".to_owned())
+                .await
+                .unwrap(),
+            vec!["id"]
         );
 
         let updates = build_row_updates(
@@ -3938,6 +4038,28 @@ mod tests {
         assert_eq!(format_mysql_time(positive), "25:02:03.123456");
         assert_eq!(format_mysql_time(negative), "-25:02:03.123456");
         assert_eq!(format_mysql_time(MySqlTime::ZERO), "00:00:00");
+    }
+
+    #[tokio::test]
+    async fn sqlite_primary_key_columns_are_read_from_the_table() {
+        let service = service();
+        for statement in [
+            "CREATE TABLE pk_single (id INTEGER PRIMARY KEY, name TEXT)",
+            "CREATE TABLE pk_pair (b TEXT, a TEXT, v TEXT, PRIMARY KEY (a, b))",
+            "CREATE TABLE pk_none (v TEXT)",
+        ] {
+            let plan = service
+                .prepare_mutation(DEMO_PROFILE_ID, statement.to_owned(), Vec::new())
+                .await
+                .unwrap();
+            service.apply_mutation(plan).await.unwrap();
+        }
+        let keys =
+            |table: &str| service.primary_key_columns(DEMO_PROFILE_ID, None, table.to_owned());
+        assert_eq!(keys("pk_single").await.unwrap(), vec!["id"]);
+        assert_eq!(keys("pk_pair").await.unwrap(), vec!["a", "b"]);
+        assert!(keys("pk_none").await.unwrap().is_empty());
+        assert!(keys("no_such_table").await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -4276,34 +4398,38 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_relational_url_keeps_user_files_read_only() {
+    fn sqlite_relational_url_opens_a_file_writable_only_when_allowed() {
         let mut profile = sqlite_profile(Uuid::new_v4(), "SQLite file");
         profile.config.file_path = Some("/tmp/redrob-test.sqlite".to_owned());
-
-        assert_eq!(
-            relational_url(&profile, None).unwrap(),
-            "sqlite:///tmp/redrob-test.sqlite?mode=ro"
-        );
         profile.read_only = true;
         assert_eq!(
             relational_url(&profile, None).unwrap(),
             "sqlite:///tmp/redrob-test.sqlite?mode=ro"
         );
-
+        profile.read_only = false;
+        // rw, never rwc: an allowed profile still cannot create a file at a mistyped path.
+        assert_eq!(
+            relational_url(&profile, None).unwrap(),
+            "sqlite:///tmp/redrob-test.sqlite?mode=rw"
+        );
         profile.config.file_path = Some(":memory:".to_owned());
         assert_eq!(relational_url(&profile, None).unwrap(), "sqlite::memory:");
     }
 
     #[tokio::test]
-    async fn saved_sqlite_file_profiles_are_normalized_read_only() {
+    async fn saved_sqlite_file_profiles_keep_the_read_only_they_were_saved_with() {
         let service = service();
-        let mut profile = sqlite_profile(Uuid::new_v4(), "SQLite file");
-        profile.config.file_path = Some("/tmp/redrob-test.sqlite".to_owned());
-
-        let saved = service.save_profile(profile).await.unwrap();
-
-        assert!(saved.read_only);
-        assert!(service.profile(saved.id).await.unwrap().read_only);
+        for read_only in [true, false] {
+            let mut profile = sqlite_profile(Uuid::new_v4(), "SQLite file");
+            profile.config.file_path = Some("/tmp/redrob-test.sqlite".to_owned());
+            profile.read_only = read_only;
+            let saved = service.save_profile(profile).await.unwrap();
+            assert_eq!(saved.read_only, read_only);
+            assert_eq!(
+                service.profile(saved.id).await.unwrap().read_only,
+                read_only
+            );
+        }
     }
 
     #[tokio::test]
