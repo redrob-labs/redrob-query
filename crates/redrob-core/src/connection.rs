@@ -692,12 +692,10 @@ impl DataService {
                 "custom profiles cannot be marked built-in".to_owned(),
             ));
         }
+        // A SQLite file used to be forced read-only here. It now follows the profile's own read_only,
+        // which the desktop sets only when the person ticks "Allow edits"; relational_url opens the
+        // file mode=ro otherwise, and never mode=rwc, so a mistyped path cannot create a file.
         profile.normalize();
-        if profile.kind == DatabaseKind::SQLite
-            && profile.config.file_path.as_deref() != Some(":memory:")
-        {
-            profile.read_only = true;
-        }
         profile.validate()?;
         if profile.id.is_nil() || profile.id == DEMO_PROFILE_ID || profile.id == AI_SECRET_ID {
             return Err(DataError::InvalidProfile(
@@ -1320,7 +1318,10 @@ fn relational_url(profile: &ConnectionProfile, secret: Option<&str>) -> Result<S
         return Ok(if path == ":memory:" {
             "sqlite::memory:".to_owned()
         } else {
-            format!("sqlite://{path}?mode=ro")
+            format!(
+                "sqlite://{path}?mode={}",
+                if profile.read_only { "ro" } else { "rw" }
+            )
         });
     }
     Ok(server_url(profile, secret)?.to_string())
@@ -4376,34 +4377,38 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_relational_url_keeps_user_files_read_only() {
+    fn sqlite_relational_url_opens_a_file_writable_only_when_allowed() {
         let mut profile = sqlite_profile(Uuid::new_v4(), "SQLite file");
         profile.config.file_path = Some("/tmp/redrob-test.sqlite".to_owned());
-
-        assert_eq!(
-            relational_url(&profile, None).unwrap(),
-            "sqlite:///tmp/redrob-test.sqlite?mode=ro"
-        );
         profile.read_only = true;
         assert_eq!(
             relational_url(&profile, None).unwrap(),
             "sqlite:///tmp/redrob-test.sqlite?mode=ro"
         );
-
+        profile.read_only = false;
+        // rw, never rwc: an allowed profile still cannot create a file at a mistyped path.
+        assert_eq!(
+            relational_url(&profile, None).unwrap(),
+            "sqlite:///tmp/redrob-test.sqlite?mode=rw"
+        );
         profile.config.file_path = Some(":memory:".to_owned());
         assert_eq!(relational_url(&profile, None).unwrap(), "sqlite::memory:");
     }
 
     #[tokio::test]
-    async fn saved_sqlite_file_profiles_are_normalized_read_only() {
+    async fn saved_sqlite_file_profiles_keep_the_read_only_they_were_saved_with() {
         let service = service();
-        let mut profile = sqlite_profile(Uuid::new_v4(), "SQLite file");
-        profile.config.file_path = Some("/tmp/redrob-test.sqlite".to_owned());
-
-        let saved = service.save_profile(profile).await.unwrap();
-
-        assert!(saved.read_only);
-        assert!(service.profile(saved.id).await.unwrap().read_only);
+        for read_only in [true, false] {
+            let mut profile = sqlite_profile(Uuid::new_v4(), "SQLite file");
+            profile.config.file_path = Some("/tmp/redrob-test.sqlite".to_owned());
+            profile.read_only = read_only;
+            let saved = service.save_profile(profile).await.unwrap();
+            assert_eq!(saved.read_only, read_only);
+            assert_eq!(
+                service.profile(saved.id).await.unwrap().read_only,
+                read_only
+            );
+        }
     }
 
     #[tokio::test]
