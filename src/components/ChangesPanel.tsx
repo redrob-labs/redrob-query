@@ -18,7 +18,11 @@ export function ChangesPanel() {
       <div className="changes-heading"><span className="changes-icon"><Icon name="compare" /></span><div><h2>Staged changes</h2><p>{mutations.length ? `Review ${mutations.length} pending cell edit${mutations.length === 1 ? '' : 's'}` : 'Your edited cells will appear here'}</p></div><button className="panel-close" aria-label="Close changes panel" onClick={() => setUi({ changesOpen: false })}><Icon name="close" /></button></div>
       <div className="changes-list">
         {!mutations.length ? <div className="changes-empty"><Icon name="check" size={24} /><span>No pending changes</span></div> : mutations.map((mutation) => <div className="change-card" key={mutation.id}>
-          {mutation.kind === 'delete' ? <>
+          {mutation.kind === 'insert' ? <>
+            <div><strong>{mutation.table}</strong><span>New row</span></div>
+            <div className="value-diff is-insert"><Icon name="plus" /> {(mutation.values ?? []).map((item) => `${item.column} = ${display(item.value)}`).join(', ')}</div>
+            <button aria-label="Discard the new row" onClick={() => discard(mutation.id)}><Icon name="close" /></button>
+          </> : mutation.kind === 'delete' ? <>
             <div><strong>{mutation.table}</strong><span>{mutation.primaryKey} {mutation.rowKey}</span></div>
             <div className="value-diff is-delete"><Icon name="trash" /> Delete this row</div>
             <button aria-label={`Keep row ${mutation.rowKey}`} onClick={() => discard(mutation.id)}><Icon name="close" /></button>

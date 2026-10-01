@@ -663,3 +663,11 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 /* A row staged for deletion: struck through and dimmed until the change set is applied or discarded. */
 .grid-row.is-deleted > div[role="cell"] { text-decoration: line-through; color: var(--ink-muted); }
 .value-diff.is-delete { color: var(--status-danger); gap: 6px; }
+
+/* The new-row form: one labelled field per column. */
+.new-row-fields { display: grid; gap: 10px; }
+.new-row-fields label { display: grid; gap: 4px; }
+.new-row-fields label span { color: var(--ink-muted); font-size: 11px; }
+.new-row-fields input { min-height: 30px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--surface-base); color: var(--ink-primary); }
+.new-row-error { margin: 0; color: var(--status-danger); }
+.value-diff.is-insert { color: var(--status-success); gap: 6px; }

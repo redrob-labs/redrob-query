@@ -362,7 +362,11 @@ export class DemoBridge implements DataBridge {
     const validated = mutations.map((mutation) => {
       if (!expectedTables.includes(mutation.table)) throw new Error('Mutation target does not belong to this demo connection.');
       if (mutation.primaryKey !== 'id') throw new Error('Mutation primary key does not match the demo table schema.');
-      if (mutation.kind !== 'delete' && mutation.column === 'id') throw new Error('Primary keys cannot be edited.');
+      if (mutation.kind === 'update' || !mutation.kind) { if (mutation.column === 'id') throw new Error('Primary keys cannot be edited.'); }
+      if (mutation.kind === 'insert') {
+        const sourceRows = mutation.table === 'public.orders' ? fixture.orderRows : fixture.customerRows;
+        return { row: Object.fromEntries((mutation.values ?? []).map((item) => [item.column, item.value])), mutation, sourceRows };
+      }
       const identity = `${mutation.table}:${mutation.rowKey}:${mutation.column}`;
       if (seen.has(identity)) throw new Error('The mutation batch contains duplicate cell changes.');
       seen.add(identity);
@@ -378,6 +382,7 @@ export class DemoBridge implements DataBridge {
     });
     validated.forEach(({ row, mutation, sourceRows }) => {
       if (mutation.kind === 'delete') sourceRows.splice(sourceRows.indexOf(row), 1);
+      else if (mutation.kind === 'insert') sourceRows.push({ ...Object.fromEntries(Object.keys(sourceRows[0] ?? {}).map((key) => [key, null])), id: row.id ?? `demo_${sourceRows.length + 1}`, ...row });
       else row[mutation.column] = structuredClone(mutation.nextValue);
     });
     return { applied: validated.length, message: `${validated.length} change${validated.length === 1 ? '' : 's'} applied in demo memory` };
@@ -637,14 +642,15 @@ export class TauriBridge implements DataBridge {
     const [first] = mutations;
     const rows = new Map<string, { key: WireValue; changes: { column: string; value: WireValue }[] }>();
     const deletes = mutations.filter((mutation) => mutation.kind === 'delete').map((mutation) => toWireValue(mutation.keyValue ?? mutation.rowKey, mutation.keyWireType));
-    for (const mutation of mutations.filter((item) => item.kind !== 'delete')) {
+    const inserts = mutations.filter((mutation) => mutation.kind === 'insert').map((mutation) => ({ values: (mutation.values ?? []).map((item) => ({ column: item.column, value: toWireValue(item.value, item.wireType) })) }));
+    for (const mutation of mutations.filter((item) => item.kind !== 'delete' && item.kind !== 'insert')) {
       const row = rows.get(mutation.rowKey) ?? { key: toWireValue(mutation.keyValue ?? mutation.rowKey, mutation.keyWireType), changes: [] };
       row.changes.push({ column: mutation.column, value: toWireValue(mutation.nextValue, mutation.wireType) });
       rows.set(mutation.rowKey, row);
     }
     const result = await invoke<{ rowsAffected: number }>('apply_cell_edits', {
       connectionId: first.connectionId,
-      edits: { schema: first.schema ?? null, table: first.table, primaryKey: first.primaryKey, rows: [...rows.values()], deletes },
+      edits: { schema: first.schema ?? null, table: first.table, primaryKey: first.primaryKey, rows: [...rows.values()], inserts, deletes },
     });
     return { applied: mutations.length, message: `Saved ${mutations.length} change${mutations.length === 1 ? '' : 's'} in ${result.rowsAffected} row${result.rowsAffected === 1 ? '' : 's'}.` };
   }
