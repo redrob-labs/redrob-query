@@ -114,6 +114,57 @@ for (const problem of findInkOnGroundCollisions(
   failures.push(problem);
 }
 
+// 6. A button with a visible label and no icon. The first audit found letters standing in for icons
+//    ('i', '‹', '›', '×') and action buttons with none, and nothing failed. Dialog footers and the
+//    command-bar trigger stay text-only on purpose, so they are named here rather than exempted by a
+//    pattern that would also wave through the next bare button. Menu items are checked too: an
+//    `items` entry with a `label` must carry an `icon`.
+// A JSX opening tag ends at the first `>` outside any `{...}`: `onClick={() => x}` contains one.
+function openingTagEnd(tag) {
+  let depth = 0;
+  for (let i = 0; i < tag.length; i++) {
+    if (tag[i] === "{") depth++;
+    else if (tag[i] === "}") depth--;
+    else if (tag[i] === ">" && depth === 0) return i;
+  }
+  return tag.length;
+}
+// Drop every brace-balanced `{...}` expression, nested ones included, leaving the literal text.
+function stripExpressions(text) {
+  let out = "";
+  let depth = 0;
+  for (const ch of text) {
+    if (ch === "{") depth++;
+    else if (ch === "}") depth = Math.max(0, depth - 1);
+    else if (depth === 0) out += ch;
+  }
+  return out;
+}
+const TEXT_ONLY_BUTTONS = new Set([
+  "Cancel", // dialog footers: AiSettingsModal, Navigator
+  "Discard all", // ChangesPanel footer, beside its own staged list
+  "Search or run a command ⌘ K", // the command-bar trigger, which is a field, not an action
+]);
+for (const file of files.filter((f) => f.endsWith(".tsx") && !f.includes(".test."))) {
+  const source = readFileSync(file, "utf8");
+  for (const m of source.matchAll(/<button\b[\s\S]*?<\/button>/g)) {
+    const body = m[0];
+    if (/<Icon\b|<Loader\b|<NodeIcon\b/.test(body)) continue;
+    const inner = body.slice(openingTagEnd(body) + 1, -"</button>".length);
+    const visible = stripExpressions(inner)
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!/[A-Za-z\u2039\u203a\u00d7]/.test(visible) || TEXT_ONLY_BUTTONS.has(visible)) continue;
+    const line = source.slice(0, m.index).split("\n").length;
+    failures.push(`${rel(file)}:${line} button "${visible.slice(0, 40)}" has no icon -- add one from @redrob-labs/ui`);
+  }
+  for (const m of source.matchAll(/\{\s*id:\s*'[^']+',\s*label:\s*'([^']+)'(?![^}]*\bicon:)[^}]*\}/g)) {
+    const line = source.slice(0, m.index).split("\n").length;
+    failures.push(`${rel(file)}:${line} menu item "${m[1]}" has no icon`);
+  }
+}
+
 if (failures.length) {
   console.error(`design system guard: ${failures.length} problem(s)\n`);
   for (const f of failures) console.error("  " + f);
