@@ -44,12 +44,15 @@ const js = (body, ...args) => wd('POST', `/session/${session}/execute/sync`, { s
 
 /** Click the element with this data-testid; false when it is not on screen or disabled. */
 const click = (id) => js("const el = document.querySelector('[data-testid=\"' + arguments[0] + '\"]'); if (!el || el.disabled) return false; el.click(); return true;", id);
-/** Click a button, tab or menu item whose visible text or accessible name contains `label`. */
+/** Click the button or menu item whose accessible name or visible text is exactly `label`. Exact on
+ * purpose: "Connect" must not hit "Connection actions", which a contains-match did on the first run. */
 const clickLabel = (label) => js(
   `const want = arguments[0];
    const els = [...document.querySelectorAll('button, [role=menuitem], [role=tab]')];
-   const el = els.find((e) => !e.disabled && ((e.getAttribute('aria-label') ?? '').includes(want) || (e.textContent ?? '').trim().includes(want)));
+   const el = els.find((e) => !e.disabled && (e.getAttribute('aria-label') === want || (e.textContent ?? '').trim() === want));
    if (!el) return false; el.click(); return true;`, label);
+/** True when some element's visible text includes `fragment`. */
+const shows = (fragment) => js("return (document.body.innerText ?? '').includes(arguments[0]);", fragment);
 /** Type into a React-controlled field: set through the native setter, then fire `input`. */
 const fill = (id, value) => js(
   `const el = document.querySelector('[data-testid="' + arguments[0] + '"]');
@@ -91,8 +94,10 @@ try {
   await until('the file field', () => fill('connection-file', DB));
   await shot('1-connection');
   await until('Save to accept a click', () => click('save-connection'));
-  await until('the connection in the sidebar', () => clickLabel('E2E people'));
-  await clickLabel('Connect').catch(() => false);
+  // The saved connection becomes the active one; connect it from the sidebar's actions menu.
+  await until('the new connection to be active', () => shows('E2E people'));
+  await until('the connection actions menu', async () => (await clickLabel('Connection actions')) && clickLabel('Connect'));
+  await until('the connection to connect', () => shows('E2E people · connected'));
 
   // 2. "Query this table" on people writes and opens the SELECT.
   // SQLite puts tables under a schema node; open collapsed nodes until the table's menu is there.
