@@ -27,7 +27,8 @@ const desktopBridge = (): DataBridge => ({
   testConnection: vi.fn(),
   loadMetadata: vi.fn(async () => [{ id: 'desktop-db', parentId: null, name: 'desktop_app', kind: 'database' as const }]),
   executeQuery: vi.fn(),
-  applyMutations: vi.fn(),
+  applyTableChange: vi.fn(async () => undefined),
+    applyMutations: vi.fn(),
   saveAiKey: vi.fn(),
   askAi: vi.fn(),
 });

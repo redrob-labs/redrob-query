@@ -14,6 +14,7 @@ import type {
   QueryResult,
   QueryTab,
   ToastMessage,
+  TableChange,
 } from '../domain/types';
 import { clearWorkspace, loadWorkspace, loadWorkspacePersistencePreference, MAX_HISTORY_ENTRIES, MAX_PINNED_TABLES, saveWorkspace, setWorkspacePersistence, type PinnedTable } from './workspacePersistence';
 
@@ -95,6 +96,8 @@ interface WorkspaceState {
    * time the connections panel is collapsed.
    */
   structureTarget: { table: string; schema?: string } | null;
+  /** The New table / Add column form: open for a new table, or for a column on one table. */
+  tableChangeTarget: { mode: 'create' } | { mode: 'add-column'; table: string; schema?: string } | null;
   connectionModalOpen: boolean;
   connectionModalProfileId: string | null;
   commandPaletteOpen: boolean;
@@ -117,6 +120,7 @@ interface WorkspaceState {
   setTabLanguage(language: QueryLanguage): void;
   closeTab(id: string): void;
   togglePin(table: string, schema?: string): void;
+  applyTableChange(change: TableChange): Promise<boolean>;
   closeOtherTabs(id: string): void;
   closeTabsToRight(id: string): void;
   duplicateTab(id: string): void;
@@ -136,7 +140,7 @@ interface WorkspaceState {
   useGeneratedQuery(query: string): void;
   addConnection(profile: ConnectionProfile): Promise<void>;
   notify(tone: ToastMessage['tone'], title: string, detail?: string): void;
-  setUi(values: Partial<Pick<WorkspaceState, 'aiOpen' | 'aiSettingsOpen' | 'aiWidth' | 'navigatorOpen' | 'changesOpen' | 'pluginViewId' | 'structureTarget' | 'connectionModalOpen' | 'connectionModalProfileId' | 'commandPaletteOpen'>>): void;
+  setUi(values: Partial<Pick<WorkspaceState, 'aiOpen' | 'aiSettingsOpen' | 'aiWidth' | 'navigatorOpen' | 'changesOpen' | 'pluginViewId' | 'structureTarget' | 'tableChangeTarget' | 'connectionModalOpen' | 'connectionModalProfileId' | 'commandPaletteOpen'>>): void;
   dismissToast(id: string): void;
 }
 
@@ -199,7 +203,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
       result: null, resultRevision: 0,
       pageSize: 50, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle',
       aiMessages: [welcomeMessage(bridge.mode)], aiStatus: 'idle', aiOpen: true, aiSettingsOpen: false, aiWidth: 330,
-      navigatorOpen: true, navigatorSearchRequest: 0, changesOpen: false, pluginViewId: null, structureTarget: null, connectionModalOpen: false, connectionModalProfileId: null,
+      navigatorOpen: true, navigatorSearchRequest: 0, changesOpen: false, pluginViewId: null, structureTarget: null, tableChangeTarget: null, connectionModalOpen: false, connectionModalProfileId: null,
       commandPaletteOpen: false, toasts: [],
 
       async initialize() {
@@ -389,6 +393,19 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const compatibleLanguage: QueryLanguage = connection.kind === 'mongodb' ? 'mql' : 'sql';
         if (language !== compatibleLanguage) return;
         set((current) => ({ tabs: current.tabs.map((tab) => tab.id === current.activeTabId ? { ...tab, language, dirty: true } : tab) })); persist();
+      },
+      // Run the form's change, then reload the object tree so the new table or column shows.
+      async applyTableChange(change) {
+        const connectionId = get().activeConnectionId; if (!connectionId) return false;
+        try {
+          await bridge.applyTableChange(connectionId, change);
+          get().notify('success', change.kind === 'create_table' ? 'Table created' : 'Column added', change.kind === 'create_table' ? change.table : `${change.table}.${change.column.name}`);
+          await get().loadNode(null, true);
+          return true;
+        } catch (error) {
+          get().notify('error', change.kind === 'create_table' ? 'Could not create the table' : 'Could not add the column', asMessage(error));
+          return false;
+        }
       },
       togglePin(table, schema) {
         const state = get(); const connectionId = state.activeConnectionId; if (!connectionId) return;

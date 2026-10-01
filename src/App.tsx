@@ -1,3 +1,4 @@
+import { TableChangeModal } from './components/TableChangeModal';
 import { useEffect, useMemo } from 'react';
 import { Loader, Mark } from '@redrob-labs/ui';
 import symbolDark from './assets/brand/redrob-symbol-solid-white.png';
@@ -84,7 +85,7 @@ function Workspace() {
         {aiOpen ? <AiPanel /> : null}
       </div>
       <StatusBar />
-      <ConnectionModal />
+      <ConnectionModal /><TableChangeModal />
       <AiSettingsModal />
       <CommandPalette />
       <div className="toast-stack" aria-live="polite">{toasts.map((toast) => <button key={toast.id} className={clsx('toast', toast.tone)} onClick={() => dismissToast(toast.id)}>{toast.tone === 'success' ? <Icon name="circleCheck" /> : toast.tone === 'error' ? <Icon name="circleX" /> : <Icon name="info" />}<span><strong>{toast.title}</strong>{toast.detail ? <small>{toast.detail}</small> : null}</span></button>)}</div>

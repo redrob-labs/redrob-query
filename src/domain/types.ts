@@ -155,3 +155,10 @@ export interface ToastMessage {
   title: string;
   detail?: string;
 }
+
+/** The column types the New table / Add column form offers; each maps to one type per engine. */
+export type ColumnType = 'text' | 'integer' | 'decimal' | 'boolean' | 'date' | 'timestamp';
+export interface ColumnSpec { name: string; columnType: ColumnType; nullable: boolean; primaryKey: boolean }
+export type TableChange =
+  | { kind: 'create_table'; schema?: string; table: string; columns: ColumnSpec[] }
+  | { kind: 'add_column'; schema?: string; table: string; column: ColumnSpec };

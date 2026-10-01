@@ -177,7 +177,20 @@ try {
      return cell.getAttribute('contenteditable') !== 'true' && add.disabled;`);
   if (!locked) throw new Error('the key-less table offered editing');
   await shot('7-no-key');
-  console.log(`e2e: SQLite connection -> Query this table -> Run -> edit name -> Apply -> Run -> "${NEW_NAME}" -> delete row 2 -> Apply -> Run -> 1 row -> add "Cy" -> Apply -> Run -> 2 rows -> key-less notes: read-only, reason shown`);
+
+  // 8. Create a table from the form, then add a column to it from its row menu.
+  await until('New table to accept a click', () => clickLabel('New table'));
+  await until('the table name field', () => fill('table-change-table', 'pets'));
+  await until('the key column name', () => fill('table-change-column-0', 'id'));
+  await until('the second column name', () => fill('table-change-column-1', 'name'));
+  await until('Create table to accept a click', () => click('table-change-submit'));
+  await until('the pets table in the tree', async () => (await clickLabel('Actions for pets')) && clickLabel('Add column'));
+  await until('the added column name', () => fill('table-change-column-0', 'born'));
+  await until('the date type', () => js("const el = document.querySelector('[data-testid=table-change-type-0]'); if (!el) return false; const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; set.call(el, 'date'); el.dispatchEvent(new Event('change', { bubbles: true })); return el.value === 'date';"));
+  await until('Add column to accept a click', () => click('table-change-submit'));
+  await until('the column to be added', () => shows('Column added'));
+  await shot('8-ddl');
+  console.log(`e2e: SQLite connection -> Query this table -> Run -> edit name -> Apply -> Run -> "${NEW_NAME}" -> delete row 2 -> Apply -> Run -> 1 row -> add "Cy" -> Apply -> Run -> 2 rows -> key-less notes: read-only, reason shown -> New table pets -> Add column born`);
 } catch (error) {
   failed = true;
   console.error(`e2e failed: ${error.message}`);

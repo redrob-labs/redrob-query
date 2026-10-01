@@ -79,6 +79,9 @@ jobs:
           rows=$(sqlite3 "$RUNNER_TEMP/people.db" "SELECT count(*) FROM people")
           echo "row 1: $name / added: $added / rows: $rows"
           test "$name" = "Ann Lee-Kim" && test "$rows" = "2" && test "$added" = "2:Cy:Free"
+          pets=$(sqlite3 "$RUNNER_TEMP/people.db" "SELECT group_concat(name || ' ' || type || ' ' || pk, ', ') FROM pragma_table_info('pets')")
+          echo "pets: $pets"
+          test "$pets" = "id INTEGER 1, name TEXT 0, born DATE 0"
 
       - name: Keep the screenshots and driver log
         if: always()
