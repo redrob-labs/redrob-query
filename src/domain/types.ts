@@ -90,8 +90,10 @@ export interface QueryResult {
 
 export interface CellMutation {
   id: string;
-  /** 'delete' removes the whole row (column is empty); otherwise one cell changes. */
-  kind?: 'update' | 'delete';
+  /** 'delete' removes the whole row and 'insert' adds one (column is empty for both); otherwise one cell changes. */
+  kind?: 'update' | 'delete' | 'insert';
+  /** For an insert: the columns filled in, with each column's engine type. Columns left out take the table default. */
+  values?: { column: string; value: CellValue; wireType?: string }[];
   connectionId: string;
   table: string;
   primaryKey: string;

@@ -75,9 +75,10 @@ jobs:
       - name: The changes are in the database file
         run: |
           name=$(sqlite3 "$RUNNER_TEMP/people.db" "SELECT name FROM people WHERE id = 1")
+          added=$(sqlite3 "$RUNNER_TEMP/people.db" "SELECT id || ':' || name || ':' || plan FROM people WHERE id <> 1")
           rows=$(sqlite3 "$RUNNER_TEMP/people.db" "SELECT count(*) FROM people")
-          echo "row 1: $name / rows: $rows"
-          test "$name" = "Ann Lee-Kim" && test "$rows" = "1"
+          echo "row 1: $name / added: $added / rows: $rows"
+          test "$name" = "Ann Lee-Kim" && test "$rows" = "2" && test "$added" = "2:Cy:Free"
 
       - name: Keep the screenshots and driver log
         if: always()

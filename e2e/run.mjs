@@ -148,7 +148,23 @@ try {
   await until('Run to accept a click', () => click('run-query'));
   await until('row 2 gone after a fresh run', async () => (await cell('name, result row 1')) === NEW_NAME && (await cell('name, result row 2')) === null);
   await shot('5-deleted');
-  console.log(`e2e: SQLite connection -> Query this table -> Run -> edit name -> Apply -> Run -> "${NEW_NAME}" -> delete row 2 -> Apply -> Run -> 1 row`);
+
+  // 6. Add a row, leaving the key for the database to assign, Apply, and read the table again.
+  await until('Add row to accept a click', () => click('add-row'));
+  await until('the new-row name field', () => fill('new-row-name', 'Cy'));
+  await until('the new-row plan field', () => fill('new-row-plan', 'Free'));
+  await until('Stage new row to accept a click', () => click('stage-new-row'));
+  await until('the staged new row', () => shows('name = Cy'));
+  await until('Apply to accept a click', () => click('apply-changes'));
+  await until('the staged new row to clear', async () => {
+    const failure = await js("const t = document.body.innerText ?? ''; const i = t.indexOf('Could not apply changes'); return i < 0 ? null : t.slice(i, i + 300);");
+    if (failure) throw Object.assign(new Error(`Apply failed: ${failure}`), { fatal: true });
+    return !(await shows('name = Cy'));
+  });
+  await until('Run to accept a click', () => click('run-query'));
+  await until('the new row after a fresh run', async () => (await cell('name, result row 2')) === 'Cy');
+  await shot('6-inserted');
+  console.log(`e2e: SQLite connection -> Query this table -> Run -> edit name -> Apply -> Run -> "${NEW_NAME}" -> delete row 2 -> Apply -> Run -> 1 row -> add "Cy" -> Apply -> Run -> 2 rows`);
 } catch (error) {
   failed = true;
   console.error(`e2e failed: ${error.message}`);

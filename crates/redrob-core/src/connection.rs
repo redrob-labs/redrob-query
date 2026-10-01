@@ -3751,6 +3751,9 @@ mod tests {
     // session and disappears with it, so a run leaves nothing behind on the shared server.
     #[tokio::test]
     #[ignore = "requires REDROB_TEST_POSTGRES_URL and an external PostgreSQL server"]
+    // One scenario on one server session: edit, roll back, delete, insert. Split up, each part would
+    // need its own temporary table and pool, and the reading order is the point.
+    #[allow(clippy::too_many_lines)]
     async fn live_postgres_cell_edits_commit_together_or_not_at_all() {
         use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
         let url = std::env::var("REDROB_TEST_POSTGRES_URL")
@@ -3778,6 +3781,7 @@ mod tests {
             }],
         };
         let set = |rows| CellEditSet {
+            inserts: Vec::new(),
             deletes: Vec::new(),
             schema: None,
             table: "redrob_cell_edits".to_owned(),
@@ -3839,10 +3843,40 @@ mod tests {
         let updates = build_row_updates(DatabaseKind::PostgreSql, &deletes).unwrap();
         apply_postgres_row_updates(&pool, &updates).await.unwrap();
         assert_eq!(read().await, vec![owned("Ann Lee", "Free")]);
+
+        // An insert in the same change set; this table has no auto key, so the key is given.
+        let inserts = CellEditSet {
+            inserts: vec![crate::cell_edits::RowInsert {
+                values: vec![
+                    CellChange {
+                        column: "id".to_owned(),
+                        value: DataValue::Integer("3".to_owned()),
+                    },
+                    CellChange {
+                        column: "name".to_owned(),
+                        value: text("Cy"),
+                    },
+                    CellChange {
+                        column: "plan".to_owned(),
+                        value: text("Free"),
+                    },
+                ],
+            }],
+            ..set(vec![])
+        };
+        let updates = build_row_updates(DatabaseKind::PostgreSql, &inserts).unwrap();
+        apply_postgres_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Cy", "Free")]
+        );
     }
 
     #[tokio::test]
     #[ignore = "requires REDROB_TEST_MYSQL_URL and an external MySQL server"]
+    // One scenario on one server session: edit, roll back, delete, insert. Split up, each part would
+    // need its own temporary table and pool, and the reading order is the point.
+    #[allow(clippy::too_many_lines)]
     async fn live_mysql_cell_edits_commit_together_or_not_at_all() {
         use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
         let url = std::env::var("REDROB_TEST_MYSQL_URL")
@@ -3870,6 +3904,7 @@ mod tests {
             }],
         };
         let set = |rows| CellEditSet {
+            inserts: Vec::new(),
             deletes: Vec::new(),
             schema: None,
             table: "redrob_cell_edits".to_owned(),
@@ -3929,6 +3964,33 @@ mod tests {
         let updates = build_row_updates(DatabaseKind::MySql, &deletes).unwrap();
         apply_mysql_row_updates(&pool, &updates).await.unwrap();
         assert_eq!(read().await, vec![owned("Ann Lee", "Free")]);
+
+        // An insert in the same change set; this table has no auto key, so the key is given.
+        let inserts = CellEditSet {
+            inserts: vec![crate::cell_edits::RowInsert {
+                values: vec![
+                    CellChange {
+                        column: "id".to_owned(),
+                        value: DataValue::Integer("3".to_owned()),
+                    },
+                    CellChange {
+                        column: "name".to_owned(),
+                        value: text("Cy"),
+                    },
+                    CellChange {
+                        column: "plan".to_owned(),
+                        value: text("Free"),
+                    },
+                ],
+            }],
+            ..set(vec![])
+        };
+        let updates = build_row_updates(DatabaseKind::MySql, &inserts).unwrap();
+        apply_mysql_row_updates(&pool, &updates).await.unwrap();
+        assert_eq!(
+            read().await,
+            vec![owned("Ann Lee", "Free"), owned("Cy", "Free")]
+        );
     }
 
     #[tokio::test]
@@ -4083,6 +4145,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sqlite_inserts_get_their_key_and_roll_back_with_the_set() {
+        use crate::cell_edits::{CellChange, CellEditSet, RowEdit, RowInsert};
+        let service = service();
+        for statement in [
+            "CREATE TABLE added (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            "INSERT INTO added VALUES (1, 'Ann')",
+        ] {
+            let plan = service
+                .prepare_mutation(DEMO_PROFILE_ID, statement.to_owned(), Vec::new())
+                .await
+                .unwrap();
+            service.apply_mutation(plan).await.unwrap();
+        }
+        let text = |v: &str| DataValue::Text(v.to_owned());
+        let named = |v: &str| RowInsert {
+            values: vec![CellChange {
+                column: "name".to_owned(),
+                value: text(v),
+            }],
+        };
+        let set = |rows: Vec<RowEdit>, inserts: Vec<RowInsert>| CellEditSet {
+            schema: None,
+            table: "added".to_owned(),
+            primary_key: "id".to_owned(),
+            rows,
+            inserts,
+            deletes: Vec::new(),
+        };
+        let rows = || async {
+            service
+                .execute_query(query("SELECT id, name FROM added ORDER BY id"))
+                .await
+                .unwrap()
+                .rows
+        };
+
+        // The key is left out: SQLite assigns it.
+        service
+            .apply_cell_edits(DEMO_PROFILE_ID, set(vec![], vec![named("Bo")]))
+            .await
+            .unwrap();
+        assert_eq!(
+            rows().await,
+            vec![
+                vec![DataValue::Integer("1".to_owned()), text("Ann")],
+                vec![DataValue::Integer("2".to_owned()), text("Bo")]
+            ]
+        );
+
+        // The second insert breaks NOT NULL: the edit before it and the first insert are undone too.
+        let edit = RowEdit {
+            key: DataValue::Integer("1".to_owned()),
+            changes: vec![CellChange {
+                column: "name".to_owned(),
+                value: text("Changed"),
+            }],
+        };
+        let broken = RowInsert {
+            values: vec![CellChange {
+                column: "name".to_owned(),
+                value: DataValue::Null,
+            }],
+        };
+        assert!(
+            service
+                .apply_cell_edits(DEMO_PROFILE_ID, set(vec![edit], vec![named("Cy"), broken]))
+                .await
+                .is_err()
+        );
+        assert_eq!(rows().await.len(), 2);
+        assert_eq!(rows().await[0][1], text("Ann"));
+    }
+
+    #[tokio::test]
     async fn sqlite_deletes_apply_with_edits_or_not_at_all() {
         use crate::cell_edits::{CellChange, CellEditSet, RowEdit};
         let service = service();
@@ -4098,6 +4234,7 @@ mod tests {
         }
         let key = |v: &str| DataValue::Integer(v.to_owned());
         let set = |rows: Vec<RowEdit>, deletes: Vec<DataValue>| CellEditSet {
+            inserts: Vec::new(),
             schema: None,
             table: "gone".to_owned(),
             primary_key: "id".to_owned(),
@@ -4158,6 +4295,7 @@ mod tests {
             }],
         };
         let set = |rows| CellEditSet {
+            inserts: Vec::new(),
             deletes: Vec::new(),
             schema: None,
             table: "people".to_owned(),

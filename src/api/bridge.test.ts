@@ -245,6 +245,15 @@ describe('TauriBridge wire adapter', () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
+  it('sends a staged new row as typed values, leaving out what was not filled in', async () => {
+    invokeMock.mockResolvedValueOnce({ rowsAffected: 1, elapsedMs: 2, committed: true });
+    const bridge = new TauriBridge();
+    await bridge.applyMutations([{ id: 'new-1', kind: 'insert', connectionId: 'connection-1', table: 'people', primaryKey: 'id', rowKey: 'new-1', column: '', previousValue: null, nextValue: null,
+      values: [{ column: 'name', value: 'Cy', wireType: 'text' }, { column: 'mrr', value: '9.50', wireType: 'decimal' }] }]);
+    expect(invokeMock.mock.calls[0][1].edits).toEqual({ schema: null, table: 'people', primaryKey: 'id', rows: [],
+      inserts: [{ values: [{ column: 'name', value: { type: 'text', value: 'Cy' } }, { column: 'mrr', value: { type: 'decimal', value: '9.50' } }] }], deletes: [] });
+  });
+
   it('sends a staged row delete as a typed key, apart from the cell edits', async () => {
     invokeMock.mockResolvedValueOnce({ rowsAffected: 2, elapsedMs: 3, committed: true });
     const bridge = new TauriBridge();
@@ -255,7 +264,7 @@ describe('TauriBridge wire adapter', () => {
     ]);
     expect(invokeMock.mock.calls[0][1].edits).toEqual({ schema: null, table: 'people', primaryKey: 'id',
       rows: [{ key: { type: 'integer', value: '1' }, changes: [{ column: 'name', value: { type: 'text', value: 'Ann Lee' } }] }],
-      deletes: [{ type: 'integer', value: '2' }] });
+      inserts: [], deletes: [{ type: 'integer', value: '2' }] });
   });
 
   it('sends staged edits as one typed change set, grouped by row', async () => {
@@ -272,7 +281,7 @@ describe('TauriBridge wire adapter', () => {
       edits: { schema: 'public', table: 'customers', primaryKey: 'id', rows: [
         { key: { type: 'integer', value: '7' }, changes: [{ column: 'email', value: { type: 'text', value: 'a@example.test' } }, { column: 'mrr', value: { type: 'decimal', value: '12.50' } }] },
         { key: { type: 'integer', value: '8' }, changes: [{ column: 'active', value: { type: 'null' } }] },
-      ], deletes: [] },
+      ], inserts: [], deletes: [] },
     });
     expect(result.message).toBe('Saved 3 changes in 2 rows.');
   });
