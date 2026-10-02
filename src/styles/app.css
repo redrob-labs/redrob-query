@@ -227,6 +227,8 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .grid-footer { flex: 0 0 27px; display: flex; align-items: center; gap: 16px; padding: 0 8px; border-top: 1px solid var(--line); color: var(--ink-muted); font-size: 9px; }
 .grid-hint { margin: 0 auto; color: var(--ink-muted); }
 .pagination { display: flex; gap: 2px; }
+.footer-action { height: 20px; display: flex; align-items: center; gap: 4px; padding: 0 6px; border-radius: 3px; background: transparent; color: var(--ink-secondary); white-space: nowrap; }
+.footer-action:hover { background: var(--surface-raised); color: var(--ink-primary); }
 .pagination button { width: 20px; height: 20px; border-radius: 3px; background: var(--surface-base); color: var(--ink-muted); }
 .pagination .active { background: var(--surface-sunken); color: var(--ink-primary); }
 
