@@ -29,6 +29,9 @@ export interface DataBridge {
   testConnection(draft: ConnectionDraft): Promise<ConnectionStatus>;
   loadMetadata(connectionId: string, parentId?: string | null): Promise<MetadataNode[]>;
   executeQuery(request: QueryRequest): Promise<QueryResult>;
+  /** The statements of an all-read-only SQL batch, or null to run the text as one query. Optional: a
+   * bridge without it runs every query whole, as before batches existed. */
+  splitReadOnlyBatch?(query: string): Promise<string[] | null>;
   applyMutations(mutations: CellMutation[]): Promise<MutationResult>;
   applyTableChange(connectionId: string, change: TableChange): Promise<void>;
   saveAiKey(secret: string): Promise<void>;
@@ -247,6 +250,21 @@ export class DemoBridge implements DataBridge {
     const profile = this.connections.find((item) => item.id === connectionId);
     if (!profile) throw new Error('Connection not found.');
     return structuredClone(metadataForProfile(profile).filter((node) => node.parentId === parentId));
+  }
+
+  // The demo has no core, so it splits on semicolons outside quotes and accepts the same SELECT/CTE
+  // statements its runner does. The desktop app asks the core instead.
+  async splitReadOnlyBatch(query: string): Promise<string[] | null> {
+    const statements: string[] = []; let current = ''; let quote: string | null = null;
+    for (const character of query) {
+      if (quote) { current += character; if (character === quote) quote = null; continue; }
+      if (character === "'" || character === '"') { quote = character; current += character; continue; }
+      if (character === ';') { if (current.trim()) statements.push(current.trim()); current = ''; continue; }
+      current += character;
+    }
+    if (current.trim()) statements.push(current.trim());
+    const readOnly = statements.every((statement) => /^(select|with)\b/i.test(statement));
+    return statements.length && readOnly ? statements : null;
   }
 
   async executeQuery(request: QueryRequest): Promise<QueryResult> {
@@ -599,6 +617,12 @@ export class TauriBridge implements DataBridge {
       dataType: node.dataType,
       childCount: node.hasChildren ? 1 : 0,
     }));
+  }
+
+  // The core splits (query::read_only_statements), so the rule for what is one statement and what is
+  // read-only lives in one place, next to the gate that enforces it.
+  async splitReadOnlyBatch(query: string): Promise<string[] | null> {
+    return invoke<string[] | null>('split_read_only_batch', { query });
   }
 
   async executeQuery(request: QueryRequest): Promise<QueryResult> {

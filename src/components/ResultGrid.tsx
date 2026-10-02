@@ -18,6 +18,8 @@ const compareCells = (left: CellValue, right: CellValue) => { if (left === right
 
 export function ResultGrid() {
   const result = useWorkspace((state) => state.result);
+  const batch = useWorkspace((state) => state.batch);
+  const selectBatchResult = useWorkspace((state) => state.selectBatchResult);
   const resultRevision = useWorkspace((state) => state.resultRevision);
   const status = useWorkspace((state) => state.queryStatus);
   const mode = useWorkspace((state) => state.bridge.mode);
@@ -85,7 +87,17 @@ export function ResultGrid() {
   const pageNumber = Math.floor(pageOffset / pageSize) + 1;
   return (
     <section className="results-shell" aria-label="Query results" data-testid="results-panel">
-      <div className="results-tabs"><button className={clsx('result-tab', activeView === 'results' && 'is-active')} onClick={() => setActiveView('results')}><Icon name="layout" /> Results {result ? <span>{result.rowCount}</span> : null}</button><button className={clsx('result-tab', activeView === 'messages' && 'is-active')} onClick={() => setActiveView('messages')} disabled={!result}><Icon name="info" /> Messages</button><div className="toolbar-spacer" /></div>
+      <div className="results-tabs"><button className={clsx('result-tab', activeView === 'results' && 'is-active')} onClick={() => setActiveView('results')}><Icon name="layout" /> Results {result ? <span>{result.rowCount}</span> : null}</button><button className={clsx('result-tab', activeView === 'messages' && 'is-active')} onClick={() => setActiveView('messages')} disabled={!result}><Icon name="info" /> Messages</button>{batch && batch.results.length > 1 ? <Menu
+        label={<span data-testid="result-picker">Result {batch.index + 1} of {batch.results.length}</span>}
+        variant="ghost" size="sm" align="left" className="result-picker"
+        items={batch.results.map((item, index) => ({
+          id: `result-${index}`,
+          label: `Result ${index + 1} · ${item.rowCount} rows · ${batch.statements[index].replace(/\s+/g, ' ').slice(0, 48)}`,
+          icon: <Icon name={index === batch.index ? 'check' : 'layout'} />,
+          // Staged edits belong to the shown result; switching would strand them.
+          disabled: index === batch.index || mutations.length > 0,
+          onSelect: () => selectBatchResult(index),
+        }))} /> : null}<div className="toolbar-spacer" /></div>
       {status === 'idle' ? activeConnectionId ? <div className="result-empty"><span className="empty-illustration"><Icon name="columns" size={24} /></span><h2>Ready when you are</h2><p>Run the query above to explore {mode === 'demo' ? 'the sample dataset' : 'your active connection'}.</p><button className="secondary-button" onClick={() => void runQuery()}><Icon name="play" /> Run query</button></div> : <div className="result-empty"><span className="empty-illustration"><Icon name="columns" size={24} /></span><h2>Select a connection</h2><p>Choose and connect a saved profile before loading metadata or running a query.</p></div> : null}
       {status === 'loading' ? <div className="result-loading"><div className="loading-grid">{Array.from({ length: 8 }, (_, row) => <div key={row}>{Array.from({ length: 5 }, (_, col) => <span key={col} />)}</div>)}</div><p><Loader size="md" label="Loading rows" /> {mode === 'demo' ? 'Executing against demo workspace…' : 'Executing against active connection…'}</p></div> : null}
       {status === 'error' ? <div className="result-empty error"><span className="empty-illustration"><Icon name="warning" size={24} /></span><h2>Query couldn’t run</h2><p>{error}</p><button className="secondary-button" onClick={() => void runQuery()}><Icon name="refresh" /> Try again</button></div> : null}

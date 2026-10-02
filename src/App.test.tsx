@@ -81,6 +81,21 @@ describe('Redrob Query workspace', () => {
     expect(screen.queryByText('Read-only guard')).not.toBeInTheDocument();
   });
 
+  it('shows each statement of a read-only batch behind a result picker', async () => {
+    const user = await renderWorkspace();
+    const editor = screen.getByTestId('monaco-editor');
+    await user.clear(editor);
+    await user.type(editor, 'SELECT * FROM public.customers LIMIT 5; SELECT * FROM public.orders LIMIT 3');
+    await user.click(screen.getByTestId('run-query'));
+    await waitFor(() => expect(screen.getByTestId('result-picker')).toHaveTextContent('Result 1 of 2'));
+    expect(screen.getByRole('columnheader', { name: /email/ })).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('result-picker'));
+    await user.click(await screen.findByRole('menuitem', { name: /Result 2 · .*public\.orders/ }));
+    await waitFor(() => expect(screen.getByTestId('result-picker')).toHaveTextContent('Result 2 of 2'));
+    expect(screen.queryByRole('columnheader', { name: /email/ })).not.toBeInTheDocument();
+  });
+
   it('tests and saves a connection from the connection manager', async () => {
     const user = await renderWorkspace();
     await user.click(screen.getByTestId('open-connection-modal'));

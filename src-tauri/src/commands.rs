@@ -89,6 +89,17 @@ pub async fn execute_query(
     service.execute_query(request).await.map_err(message)
 }
 
+/// The statements of a batch the editor may run one by one, each through `execute_query` and its own
+/// single-statement gate. `None` unless every statement is read-only (`query::read_only_statements`),
+/// so a batch never widens what may run -- it only lets the grid show each statement's result.
+#[tauri::command]
+// Tauri deserialises command arguments into owned values; a borrowed `&str` is not an argument type it
+// can produce, so the String is taken by value.
+#[allow(clippy::needless_pass_by_value)]
+pub fn split_read_only_batch(query: String) -> Option<Vec<String>> {
+    redrob_core::query::read_only_statements(&query)
+}
+
 /// The primary-key columns of a table, so the grid knows whether a result can be edited and how a
 /// row is identified. Empty when the table has none: such a result stays read-only.
 #[tauri::command]

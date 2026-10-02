@@ -72,6 +72,8 @@ interface WorkspaceState {
   localPersistenceStatus: 'disabled' | 'saved' | 'error';
   localPersistenceMessage: string | null;
   result: QueryResult | null;
+  /** A run of several read-only statements: one result each. `result` is the one shown. */
+  batch: { statements: string[]; results: QueryResult[]; index: number } | null;
   resultRevision: number;
   pageSize: 25 | 50 | 100 | 250;
   pageOffset: number;
@@ -114,6 +116,9 @@ interface WorkspaceState {
   openConnectionModal(profileId?: string): void;
   updateQuery(query: string): void;
   runQuery(queryOverride?: string, offsetOverride?: number): Promise<void>;
+  pageBatchResult(offset: number): Promise<void>;
+  /** Shows another statement's result from the last batch. Refused while edits are staged on this one. */
+  selectBatchResult(index: number): void;
   nextPage(): Promise<void>;
   previousPage(): Promise<void>;
   setPageSize(size: 25 | 50 | 100 | 250): Promise<void>;
@@ -190,7 +195,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         tabs: removeProfile ? state.tabs.filter((tab) => tab.connectionId !== connectionId) : state.tabs,
         activeTabId: removeProfile && wasActive ? '' : state.activeTabId,
         queryHistory: removeProfile ? state.queryHistory.filter((entry) => entry.connectionId !== connectionId) : state.queryHistory, pinnedTables: removeProfile ? state.pinnedTables.filter((pin) => pin.connectionId !== connectionId) : state.pinnedTables, savedQueries: removeProfile ? state.savedQueries.filter((entry) => entry.connectionId !== connectionId) : state.savedQueries,
-        result: wasActive ? null : state.result,
+        result: wasActive ? null : state.result, batch: wasActive ? null : state.batch,
         pageOffset: wasActive ? 0 : state.pageOffset,
         queryStatus: wasActive ? 'idle' : state.queryStatus,
         queryError: wasActive ? null : state.queryError,
@@ -205,7 +210,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
       bridge, initialized: false, startupWarnings: [], connections: [], activeConnectionId: null,
       metadata: {}, expandedNodes: new Set(), tabs: [], activeTabId: '', queryHistory: [], pinnedTables: [], savedQueries: [],
       localPersistenceEnabled: false, localPersistenceStatus: 'disabled', localPersistenceMessage: null,
-      result: null, resultRevision: 0,
+      result: null, batch: null, resultRevision: 0,
       pageSize: 50, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle',
       aiMessages: [welcomeMessage(bridge.mode)], aiStatus: 'idle', aiOpen: true, aiSettingsOpen: false, aiWidth: 330,
       navigatorOpen: true, navigatorSearchRequest: 0, changesOpen: false, pluginViewId: null, structureTarget: null, tableChangeTarget: null, connectionModalOpen: false, connectionModalProfileId: null,
@@ -277,7 +282,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const tab = existingTab ?? makeStarterTab(connection, nextTabId());
         set((state) => ({
           activeConnectionId: id, metadata: {}, expandedNodes: new Set(), tabs: existingTab ? state.tabs : [...state.tabs, tab], activeTabId: tab.id,
-          result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false,
+          result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false,
           aiMessages: [welcomeMessage(bridge.mode)], aiStatus: 'idle',
         }));
         persist();
@@ -348,7 +353,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         queryGeneration += 1; mutationGeneration += 1;
         set((state) => ({
           tabs: state.tabs.map((tab) => tab.id === state.activeTabId ? { ...tab, query, dirty: true } : tab),
-          result: null, pageOffset: 0, queryStatus: 'idle', queryError: null,
+          result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null,
           mutations: [], mutationStatus: 'idle', changesOpen: false,
         }));
         persist();
@@ -366,11 +371,37 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         mutationGeneration += 1;
         set({ queryStatus: 'loading', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false });
         try {
+          // Several statements: each runs on its own through the same single-statement gate, and the
+          // grid offers a picker. Only an all-read-only batch splits (the core decides, not this code);
+          // anything else goes to executeQuery whole and is refused there as before.
+          const statements = offset === 0 && tab.language === 'sql' && bridge.splitReadOnlyBatch ? await bridge.splitReadOnlyBatch(query) : null;
+          if (statements && statements.length > 1) {
+            const results: QueryResult[] = [];
+            for (const [index, statement] of statements.entries()) {
+              try {
+                const page = await bridge.executeQuery({ connectionId, query: statement, language: tab.language, limit: state.pageSize, offset: 0 });
+                results.push({ ...page, offset: page.offset ?? 0, limit: page.limit ?? state.pageSize });
+              } catch (error) {
+                throw new Error(`Statement ${index + 1} of ${statements.length}: ${asMessage(error)}`);
+              }
+              if (queryGeneration !== generation) return;
+            }
+            if (queryGeneration !== generation || get().activeConnectionId !== connectionId || get().activeTabId !== tab.id) return;
+            const historyEntry: QueryHistoryEntry = { id: `history-${Date.now()}-${Math.random().toString(16).slice(2)}`, connectionId, name: tab.name, language: tab.language, query, executedAt: Date.now() };
+            set((current) => ({
+              result: results[0], batch: { statements, results, index: 0 }, resultRevision: current.resultRevision + 1,
+              pageOffset: 0, queryStatus: 'success',
+              tabs: current.tabs.map((item) => item.id === tab.id ? { ...item, dirty: false, query } : item),
+              queryHistory: [historyEntry, ...current.queryHistory].slice(0, MAX_HISTORY_ENTRIES),
+            }));
+            persist();
+            return;
+          }
           const result = await bridge.executeQuery({ connectionId, query, language: tab.language, limit: state.pageSize, offset });
           if (queryGeneration !== generation || get().activeConnectionId !== connectionId || get().activeTabId !== tab.id) return;
           const historyEntry: QueryHistoryEntry | null = offset === 0 ? { id: `history-${Date.now()}-${Math.random().toString(16).slice(2)}`, connectionId, name: tab.name, language: tab.language, query, executedAt: Date.now() } : null;
           set((current) => ({
-            result: { ...result, offset: result.offset ?? offset, limit: result.limit ?? current.pageSize }, resultRevision: current.resultRevision + 1,
+            result: { ...result, offset: result.offset ?? offset, limit: result.limit ?? current.pageSize }, batch: null, resultRevision: current.resultRevision + 1,
             pageOffset: result.offset ?? offset, queryStatus: 'success',
             tabs: current.tabs.map((item) => item.id === tab.id ? { ...item, dirty: false, query } : item),
             queryHistory: historyEntry ? [historyEntry, ...current.queryHistory].slice(0, MAX_HISTORY_ENTRIES) : current.queryHistory,
@@ -378,12 +409,36 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           persist();
         } catch (error) {
           if (queryGeneration !== generation || get().activeConnectionId !== connectionId || get().activeTabId !== tab.id) return;
-          set({ result: null, pageOffset: offset, queryStatus: 'error', queryError: asMessage(error) });
+          set({ result: null, batch: null, pageOffset: offset, queryStatus: 'error', queryError: asMessage(error) });
         }
       },
-      async nextPage() { const next = get().result?.nextOffset; if (next !== null && next !== undefined) await get().runQuery(undefined, next); },
-      async previousPage() { if (get().pageOffset > 0) await get().runQuery(undefined, Math.max(0, get().pageOffset - get().pageSize)); },
-      async setPageSize(pageSize) { set({ pageSize, pageOffset: 0 }); if (get().result) await get().runQuery(undefined, 0); },
+      async nextPage() { const next = get().result?.nextOffset; if (next === null || next === undefined) return; if (get().batch) await get().pageBatchResult(next); else await get().runQuery(undefined, next); },
+      async previousPage() { if (get().pageOffset <= 0) return; const offset = Math.max(0, get().pageOffset - get().pageSize); if (get().batch) await get().pageBatchResult(offset); else await get().runQuery(undefined, offset); },
+      async setPageSize(pageSize) { set({ pageSize, pageOffset: 0 }); if (!get().result) return; if (get().batch) await get().pageBatchResult(0); else await get().runQuery(undefined, 0); },
+      // Pages one statement of a batch without touching the tab's text, which still holds the batch.
+      async pageBatchResult(offset) {
+        const state = get(); const batch = state.batch; const tab = state.tabs.find((item) => item.id === state.activeTabId); const connectionId = state.activeConnectionId;
+        if (!batch || !tab || !connectionId) return;
+        const generation = ++queryGeneration; mutationGeneration += 1;
+        set({ queryStatus: 'loading', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false });
+        try {
+          const page = await bridge.executeQuery({ connectionId, query: batch.statements[batch.index], language: tab.language, limit: get().pageSize, offset });
+          if (queryGeneration !== generation || get().batch !== batch) return;
+          const result: QueryResult = { ...page, offset: page.offset ?? offset, limit: page.limit ?? get().pageSize };
+          set((current) => ({ result, batch: { ...batch, results: batch.results.map((item, index) => index === batch.index ? result : item) }, pageOffset: result.offset ?? offset, queryStatus: 'success', resultRevision: current.resultRevision + 1 }));
+        } catch (error) {
+          if (queryGeneration !== generation) return;
+          set({ queryStatus: 'error', queryError: asMessage(error) });
+        }
+      },
+      selectBatchResult(index) {
+        const state = get(); const batch = state.batch;
+        if (!batch || index < 0 || index >= batch.results.length || index === batch.index || state.mutations.length) return;
+        // Keep what the shown result became (edits applied in place) before switching away from it.
+        const results = batch.results.map((item, position) => position === batch.index && state.result ? state.result : item);
+        queryGeneration += 1; mutationGeneration += 1;
+        set((current) => ({ batch: { ...batch, results, index }, result: results[index], pageOffset: results[index].offset ?? 0, queryStatus: 'success', queryError: null, mutationStatus: 'idle', changesOpen: false, resultRevision: current.resultRevision + 1 }));
+      },
 
       newTab(language) {
         const state = get(); const connection = state.connections.find((item) => item.id === state.activeConnectionId); if (!connection) return;
@@ -391,7 +446,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const connectionTabs = state.tabs.filter((tab) => tab.connectionId === connection.id);
         const nextTab: QueryTab = { id, connectionId: connection.id, name: `Untitled ${connectionTabs.length + 1}`, language: language === compatibleLanguage ? language : compatibleLanguage, query: starter.query, dirty: false };
         queryGeneration += 1; mutationGeneration += 1;
-        set({ tabs: [...state.tabs, nextTab], activeTabId: id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+        set({ tabs: [...state.tabs, nextTab], activeTabId: id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
       },
       setTabLanguage(language) {
         const state = get(); const connection = state.connections.find((item) => item.id === state.activeConnectionId); if (!connection) return;
@@ -423,7 +478,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const connectionTabs = state.tabs.filter((tab) => tab.connectionId === target.connectionId); if (connectionTabs.length === 1) return;
         const tabs = state.tabs.filter((tab) => tab.id !== id); if (state.activeTabId !== id) { set({ tabs }); persist(); return; }
         const next = tabs.filter((tab) => tab.connectionId === target.connectionId).at(-1)!; queryGeneration += 1; mutationGeneration += 1;
-        set({ tabs, activeTabId: next.id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+        set({ tabs, activeTabId: next.id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
       },
       // The tab menu (Beekeeper's CoreTabHeader). Each acts within the tab's own connection, the only
       // tabs the strip shows, and keeps the chosen tab: a connection never ends up with no tab.
@@ -433,7 +488,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         if (tabs.length === state.tabs.length) return;
         if (state.activeTabId === id) { set({ tabs }); persist(); return; }
         queryGeneration += 1; mutationGeneration += 1;
-        set({ tabs, activeTabId: id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+        set({ tabs, activeTabId: id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
       },
       closeTabsToRight(id) {
         const state = get(); const target = state.tabs.find((tab) => tab.id === id); if (!target) return;
@@ -442,20 +497,20 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const tabs = state.tabs.filter((tab) => !doomed.has(tab.id));
         if (!doomed.has(state.activeTabId ?? '')) { set({ tabs }); persist(); return; }
         queryGeneration += 1; mutationGeneration += 1;
-        set({ tabs, activeTabId: id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+        set({ tabs, activeTabId: id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
       },
       duplicateTab(id) {
         const state = get(); const index = state.tabs.findIndex((tab) => tab.id === id); if (index < 0) return;
         const source = state.tabs[index]; const copy: QueryTab = { ...source, id: nextTabId(), name: `${source.name} copy`, dirty: true };
         const tabs = [...state.tabs.slice(0, index + 1), copy, ...state.tabs.slice(index + 1)];
         queryGeneration += 1; mutationGeneration += 1;
-        set({ tabs, activeTabId: copy.id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+        set({ tabs, activeTabId: copy.id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
       },
       setActiveTab(activeTabId) {
         const state = get(); const tab = state.tabs.find((item) => item.id === activeTabId);
         if (!tab || tab.connectionId !== state.activeConnectionId || activeTabId === state.activeTabId) return;
         queryGeneration += 1; mutationGeneration += 1;
-        set({ activeTabId, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false });
+        set({ activeTabId, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false });
       },
       restoreHistory(id) {
         const state = get();
@@ -466,7 +521,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         queryGeneration += 1; mutationGeneration += 1;
         set((current) => ({
           tabs: current.tabs.map((tab) => tab.id === current.activeTabId ? { ...tab, query: entry.query, language: entry.language, name: entry.name, dirty: true } : tab),
-          result: null, pageOffset: 0, queryStatus: 'idle', queryError: null,
+          result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null,
           mutations: [], mutationStatus: 'idle', changesOpen: false,
         }));
         persist();
@@ -493,7 +548,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         if (open) { get().setActiveTab(open.id); return; }
         const tab: QueryTab = { id: nextTabId(), connectionId: entry.connectionId, name: entry.name, language: entry.language, query: entry.query, dirty: false };
         queryGeneration += 1; mutationGeneration += 1;
-        set({ tabs: [...state.tabs, tab], activeTabId: tab.id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false });
+        set({ tabs: [...state.tabs, tab], activeTabId: tab.id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false });
         persist();
       },
       deleteSavedQuery(id) { set((state) => ({ savedQueries: state.savedQueries.filter((entry) => entry.id !== id) })); persist(); },
