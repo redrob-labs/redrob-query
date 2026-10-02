@@ -35,6 +35,7 @@ function Workspace() {
   const setUi = useWorkspace((state) => state.setUi);
   const runQuery = useWorkspace((state) => state.runQuery);
   const newTab = useWorkspace((state) => state.newTab);
+  const saveActiveQuery = useWorkspace((state) => state.saveActiveQuery);
   const toasts = useWorkspace((state) => state.toasts);
   const dismissToast = useWorkspace((state) => state.dismissToast);
 
@@ -43,13 +44,14 @@ function Workspace() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (matches(event, 'palette')) { event.preventDefault(); setUi({ commandPaletteOpen: true }); }
       if (matches(event, 'runQuery')) { event.preventDefault(); void runQuery(); }
+      if (matches(event, 'saveQuery')) { event.preventDefault(); saveActiveQuery(); }
       if (matches(event, 'newQuery')) { event.preventDefault(); newTab(); }
       if (matches(event, 'askAi')) { event.preventDefault(); setUi({ aiOpen: true }); }
       if (event.key === 'Escape') setUi({ connectionModalOpen: false, connectionModalProfileId: null, commandPaletteOpen: false, aiSettingsOpen: false });
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [newTab, runQuery, setUi]);
+  }, [newTab, runQuery, saveActiveQuery, setUi]);
 
   useEffect(() => {
     if (!toasts.length) return;

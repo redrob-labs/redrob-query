@@ -160,8 +160,11 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .query-toolbar { display: flex; align-items: center; gap: 3px; padding: 0 7px; background: var(--surface-base); border-bottom: 1px solid var(--border-subtle); }
 .run-button { height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 7px 0 9px; border-radius: 5px; background: var(--accent); color: var(--ink-on-brand); font-weight: 650; box-shadow: var(--shadow-sm); }
 .run-button:hover { background: var(--action-primary); }
-.run-button kbd { margin-left: 3px; padding: 1px 4px; border: 0; background: var(--surface-material); color: var(--ink-brand); }
-.toolbar-select, .ask-ai-button { height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; background: transparent; color: var(--ink-secondary); }
+.run-button kbd { margin-left: 3px; padding: 1px 4px; border: 0; background: var(--surface-material); color: var(--ink-brand); white-space: nowrap; }
+.toolbar-select, .ask-ai-button { height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; background: transparent; color: var(--ink-secondary); white-space: nowrap; flex-shrink: 0; }
+/* The connection label is the one toolbar item that may be long; it gives way first, with an ellipsis,
+   instead of wrapping to two lines in a 27px-high bar. */
+.query-toolbar .connection-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: block; line-height: 27px; }
 .toolbar-select:hover, .ask-ai-button:hover { background: var(--surface-raised); color: var(--ink-primary); }
 .toolbar-separator { width: 1px; height: 18px; margin: 0 3px; background: var(--surface-sunken); }
 .ask-ai-button { color: var(--action-primary); background: var(--surface-material); }

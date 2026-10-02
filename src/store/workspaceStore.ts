@@ -16,7 +16,7 @@ import type {
   ToastMessage,
   TableChange,
 } from '../domain/types';
-import { clearWorkspace, loadWorkspace, loadWorkspacePersistencePreference, MAX_HISTORY_ENTRIES, MAX_PINNED_TABLES, saveWorkspace, setWorkspacePersistence, type PinnedTable } from './workspacePersistence';
+import { clearWorkspace, loadWorkspace, loadWorkspacePersistencePreference, MAX_HISTORY_ENTRIES, MAX_PINNED_TABLES, MAX_SAVED_QUERIES, saveWorkspace, setWorkspacePersistence, type PinnedTable, type SavedQuery } from './workspacePersistence';
 
 const postgresStarter = `SELECT
   id,
@@ -67,6 +67,7 @@ interface WorkspaceState {
   queryHistory: QueryHistoryEntry[];
   /** Tables and views pinned to the top of the sidebar, saved with the workspace. */
   pinnedTables: PinnedTable[];
+  savedQueries: SavedQuery[];
   localPersistenceEnabled: boolean;
   localPersistenceStatus: 'disabled' | 'saved' | 'error';
   localPersistenceMessage: string | null;
@@ -127,6 +128,10 @@ interface WorkspaceState {
   setActiveTab(id: string): void;
   restoreHistory(id: string): void;
   clearHistory(connectionId: string): void;
+  // Saved queries: keep the active tab under its name, reopen one in a new tab, delete one.
+  saveActiveQuery(): void;
+  openSavedQuery(id: string): void;
+  deleteSavedQuery(id: string): void;
   clearLocalWorkspace(): void;
   enableLocalWorkspace(): void;
   focusNavigatorSearch(): void;
@@ -171,7 +176,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
     const persist = () => {
       const state = get();
       if (bridge.mode !== 'desktop' || !state.localPersistenceEnabled) return;
-      const saved = saveWorkspace(state.tabs, state.queryHistory, state.pinnedTables);
+      const saved = saveWorkspace(state.tabs, state.queryHistory, state.pinnedTables, state.savedQueries);
       set({ localPersistenceStatus: saved.ok ? 'saved' : 'error', localPersistenceMessage: saved.message ?? null });
     };
     const clearProfile = (connectionId: string, removeProfile = false) => {
@@ -184,7 +189,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         expandedNodes: wasActive ? new Set() : state.expandedNodes,
         tabs: removeProfile ? state.tabs.filter((tab) => tab.connectionId !== connectionId) : state.tabs,
         activeTabId: removeProfile && wasActive ? '' : state.activeTabId,
-        queryHistory: removeProfile ? state.queryHistory.filter((entry) => entry.connectionId !== connectionId) : state.queryHistory, pinnedTables: removeProfile ? state.pinnedTables.filter((pin) => pin.connectionId !== connectionId) : state.pinnedTables,
+        queryHistory: removeProfile ? state.queryHistory.filter((entry) => entry.connectionId !== connectionId) : state.queryHistory, pinnedTables: removeProfile ? state.pinnedTables.filter((pin) => pin.connectionId !== connectionId) : state.pinnedTables, savedQueries: removeProfile ? state.savedQueries.filter((entry) => entry.connectionId !== connectionId) : state.savedQueries,
         result: wasActive ? null : state.result,
         pageOffset: wasActive ? 0 : state.pageOffset,
         queryStatus: wasActive ? 'idle' : state.queryStatus,
@@ -198,7 +203,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
     };
     return {
       bridge, initialized: false, startupWarnings: [], connections: [], activeConnectionId: null,
-      metadata: {}, expandedNodes: new Set(), tabs: [], activeTabId: '', queryHistory: [], pinnedTables: [],
+      metadata: {}, expandedNodes: new Set(), tabs: [], activeTabId: '', queryHistory: [], pinnedTables: [], savedQueries: [],
       localPersistenceEnabled: false, localPersistenceStatus: 'disabled', localPersistenceMessage: null,
       result: null, resultRevision: 0,
       pageSize: 50, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle',
@@ -216,7 +221,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           const profileWarnings = await warningRequest;
           const preference = bridge.mode === 'desktop' ? loadWorkspacePersistencePreference() : { ok: true, enabled: false };
           const disabledCleanup = bridge.mode === 'desktop' && preference.ok && !preference.enabled ? clearWorkspace() : { ok: true };
-          const restored = bridge.mode === 'desktop' && preference.enabled ? loadWorkspace(connections) : { tabs: [], history: [], pins: [] };
+          const restored = bridge.mode === 'desktop' && preference.enabled ? loadWorkspace(connections) : { tabs: [], history: [], pins: [], saved: [] };
           const startupWarnings = [...profileWarnings, ...(preference.message ? [preference.message] : []), ...(disabledCleanup.message ? [disabledCleanup.message] : []), ...(restored.warning ? [restored.warning] : [])];
           const persistenceError = preference.ok ? disabledCleanup.ok ? restored.storageError : disabledCleanup.message : preference.message;
           const restoredSequence = restored.tabs.reduce((max, tab) => Math.max(max, Number(tab.id.match(/^query-(\d+)$/)?.[1] ?? 0)), 0);
@@ -224,7 +229,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           const activeConnection = bridge.mode === 'demo' ? connections.find((item) => item.state === 'connected') : undefined;
           const starter = activeConnection ? makeStarterTab(activeConnection, nextTabId()) : null;
           set({
-            connections, startupWarnings, tabs: starter ? [starter] : restored.tabs, queryHistory: restored.history, pinnedTables: restored.pins,
+            connections, startupWarnings, tabs: starter ? [starter] : restored.tabs, queryHistory: restored.history, pinnedTables: restored.pins, savedQueries: restored.saved,
             localPersistenceEnabled: Boolean(preference.enabled && !persistenceError),
             localPersistenceStatus: persistenceError ? 'error' : preference.enabled ? 'saved' : 'disabled',
             localPersistenceMessage: persistenceError ?? null,
@@ -467,6 +472,31 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         persist();
       },
       clearHistory(connectionId) { set((state) => ({ queryHistory: state.queryHistory.filter((entry) => entry.connectionId !== connectionId) })); persist(); },
+      // Saving keys on the tab's name within its connection: saving again under the same name updates
+      // that entry instead of piling up copies, which is what "Save" means in an editor.
+      saveActiveQuery() {
+        const state = get(); const tab = state.tabs.find((item) => item.id === state.activeTabId);
+        if (!tab || !tab.query.trim()) return;
+        const existing = state.savedQueries.find((entry) => entry.connectionId === tab.connectionId && entry.name === tab.name);
+        const entry: SavedQuery = { id: existing?.id ?? `saved-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, connectionId: tab.connectionId, name: tab.name, language: tab.language, query: tab.query, savedAt: Date.now() };
+        const others = state.savedQueries.filter((item) => item.id !== entry.id);
+        if (!existing && others.length >= MAX_SAVED_QUERIES) { get().notify('error', 'Could not save the query', `A connection can keep at most ${MAX_SAVED_QUERIES} saved queries. Delete one first.`); return; }
+        set({ savedQueries: [entry, ...others], tabs: state.tabs.map((item) => item.id === tab.id ? { ...item, dirty: false } : item) });
+        persist();
+        get().notify('success', existing ? 'Saved query updated' : 'Query saved', tab.name);
+      },
+      openSavedQuery(id) {
+        const state = get(); const entry = state.savedQueries.find((item) => item.id === id);
+        if (!entry || entry.connectionId !== state.activeConnectionId) return;
+        // Already open under the same name: switch to it rather than open a duplicate.
+        const open = state.tabs.find((tab) => tab.connectionId === entry.connectionId && tab.name === entry.name && tab.query === entry.query);
+        if (open) { get().setActiveTab(open.id); return; }
+        const tab: QueryTab = { id: nextTabId(), connectionId: entry.connectionId, name: entry.name, language: entry.language, query: entry.query, dirty: false };
+        queryGeneration += 1; mutationGeneration += 1;
+        set({ tabs: [...state.tabs, tab], activeTabId: tab.id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false });
+        persist();
+      },
+      deleteSavedQuery(id) { set((state) => ({ savedQueries: state.savedQueries.filter((entry) => entry.id !== id) })); persist(); },
       clearLocalWorkspace() {
         const disabled = setWorkspacePersistence(false);
         set({ queryHistory: [], localPersistenceEnabled: false, localPersistenceStatus: disabled.ok ? 'disabled' : 'error', localPersistenceMessage: disabled.message ?? null });
