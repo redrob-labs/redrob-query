@@ -14,6 +14,10 @@
 // Needs: tauri-driver on WEBDRIVER_URL (default http://127.0.0.1:4444), the debug app at APP, and
 // REDROB_E2E_DB pointing at a SQLite file with a `people` table (see e2e/seed.sql). Screenshots go
 // to SHOTS (default e2e/screenshots).
+//
+// Step names, cited from docs/compatibility.md as `e2e:e2e/run.mjs::<name>` (the matrix guard checks
+// that this file contains the name): edit_cell_apply, delete_row_apply, insert_row_apply,
+// no_primary_key_read_only, create_table_add_column.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -115,7 +119,7 @@ try {
   if (before !== 'Ann') throw new Error(`row 1 name before the edit is ${JSON.stringify(before)}, not "Ann"`);
   await shot('2-result');
 
-  // 3. Edit the cell in place, as a double-click and typing would, then leave it.
+  // 3. Edit the cell in place, as a double-click and typing would, then leave it. [edit_cell_apply]
   await until('the name cell to be editable', () => js(
     `const el = document.querySelector('[role=cell][aria-label="name, result row 1"]');
      if (!el || el.getAttribute('contenteditable') !== 'true') return false;
@@ -136,7 +140,7 @@ try {
   await until('the new name after a fresh run', async () => (await cell('name, result row 1')) === NEW_NAME);
   await shot('4-applied');
 
-  // 5. Delete row 2 from its menu, Apply, and read the table again.
+  // 5. Delete row 2 from its menu, Apply, and read the table again. [delete_row_apply]
   await until("row 2's menu and Delete row", async () => (await clickLabel('Row 2 actions')) && clickLabel('Delete row'));
   await until('the staged delete', () => shows('Delete this row'));
   await until('Apply to accept a click', () => click('apply-changes'));
@@ -149,7 +153,7 @@ try {
   await until('row 2 gone after a fresh run', async () => (await cell('name, result row 1')) === NEW_NAME && (await cell('name, result row 2')) === null);
   await shot('5-deleted');
 
-  // 6. Add a row, leaving the key for the database to assign, Apply, and read the table again.
+  // 6. Add a row, leaving the key for the database to assign, Apply, and read the table again. [insert_row_apply]
   await until('Add row to accept a click', () => click('add-row'));
   await until('the new-row name field', () => fill('new-row-name', 'Cy'));
   await until('the new-row plan field', () => fill('new-row-plan', 'Free'));
@@ -165,7 +169,7 @@ try {
   await until('the new row after a fresh run', async () => (await cell('name, result row 2')) === 'Cy');
   await shot('6-inserted');
 
-  // 7. A table without a primary key: Query this table works, but nothing can be edited, and the
+  // 7. [no_primary_key_read_only] A table without a primary key: Query this table works, but nothing can be edited, and the
   //    grid says why.
   await until('the notes table and its menu', async () => (await clickLabel('Actions for notes')) && clickLabel('Query this table'));
   await until('Run to accept a click', () => click('run-query'));
@@ -178,7 +182,7 @@ try {
   if (!locked) throw new Error('the key-less table offered editing');
   await shot('7-no-key');
 
-  // 8. Create a table from the form, then add a column to it from its row menu.
+  // 8. Create a table from the form, then add a column to it from its row menu. [create_table_add_column]
   await until('New table to accept a click', () => clickLabel('New table'));
   await until('the table name field', () => fill('table-change-table', 'pets'));
   await until('the key column name', () => fill('table-change-column-0', 'id'));
