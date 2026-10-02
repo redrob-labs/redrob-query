@@ -2,7 +2,7 @@
 
 **English** · [한국어](./README.ko.md)
 
-Redrob Query is a JVM-free, AI-assisted database workspace built with Rust 1.94, Tauri 2, React 19, and TypeScript. Version 0.1 provides a guarded read-only desktop workspace for PostgreSQL, MySQL, SQLite, and MongoDB, plus an interactive browser demo backed only by deterministic in-memory sample data.
+Redrob Query is a JVM-free, AI-assisted database workspace built with Rust 1.94, Tauri 2, React 19, and TypeScript. It is a desktop workspace for PostgreSQL, MySQL, SQLite, and MongoDB that reads by default and edits only where you allow it, plus an interactive browser demo backed only by deterministic in-memory sample data.
 
 The workflow is informed by DBeaver Community, but Redrob Query is a clean implementation. It includes no DBeaver source code or branding and no Eclipse RCP, OSGi, JDBC, Java, or JVM runtime.
 
@@ -11,18 +11,19 @@ The workflow is informed by DBeaver Community, but Redrob Query is a clean imple
 | Area | Capability |
 |---|---|
 | Profiles | Create, test, edit, connect, disconnect, and remove user profiles; built-in profiles are immutable |
-| PostgreSQL | Identity-verifying TLS, metadata, bounded read-only SQL, native scalar decoding |
-| MySQL | Identity-verifying TLS, metadata, bounded read-only SQL, unsigned/decimal/temporal/BIT decoding |
-| SQLite | Read-only file profiles using `mode=ro`, metadata, and guarded single-statement reads; native demo uses `:memory:` |
+| PostgreSQL | Identity-verifying TLS, metadata, bounded SQL reads, native scalar decoding, reviewed edits |
+| MySQL | Identity-verifying TLS, metadata, bounded SQL reads, unsigned/decimal/temporal/BIT decoding, reviewed edits |
+| SQLite | File profiles that open read-only (`mode=ro`) unless edits are allowed, metadata, guarded reads, reviewed edits; native demo uses `:memory:` |
 | MongoDB | Standard/SRV profiles, separate `authSource`, collections, bounded 25-document field sampling, strict `find`/`aggregate`/explain JSON |
-| Results | 25/50/100/250-row paging, typed virtualized rows, current-page sort/filter, column visibility, execution messages, and visible CSV export |
-| Query workspace | Connection-owned SQL/MQL tabs, engine starters, local desktop restoration, bounded execution history, formatting, and shortcuts |
+| Results | 25/50/100/250-row paging, typed virtualized rows, current-page sort/filter, column visibility, column and row menus, a details panel, execution messages, and visible CSV export |
+| Editing | Off per connection until "Allow edits" is ticked. Edit cells, add and delete rows, create a table or add a column; every change is staged, reviewed and applied in one transaction that rolls back unless each statement changes exactly one row. A result that cannot be edited says why |
+| Query workspace | Connection-owned SQL/MQL tabs, engine starters, saved queries (Save / Ctrl+S), several read-only statements in one run with a result picker, pinned tables, local desktop restoration, bounded execution history, formatting, and shortcuts |
 | Redrob AI | Engine-aware SQL/MQL generation and explanation through model `auto` |
 | Browser demo | Sample PostgreSQL/MySQL/SQLite/Mongo workflows, local AI responses, and atomic in-memory relational edit review |
 
 SQL Server is not supported in this release: it is absent from the connection UI and rejected by both profile and AI validation paths.
 
-Desktop query results are intentionally read-only. Mutation commands are not registered with Tauri, and persistent desktop profiles are read-only. Browser-demo edits validate the entire batch, including previous values, before atomically changing a per-profile in-memory fixture; reload discards them.
+Desktop connections are read-only until you tick "Allow edits" on the connection. Even then nothing is written until you review the staged changes and press Apply: cell edits become `UPDATE … WHERE <primary key> = ?` with bound values, rows are inserted and deleted the same way, and the whole set runs in one transaction that is undone if any statement does not change exactly one row. Only a plain read of one table with a single-column primary key in the result can be edited. Browser-demo edits change a per-profile in-memory fixture; reload discards them.
 
 ## Architecture
 
@@ -119,7 +120,7 @@ An explicitly run live test fails when its required URL is absent. Use non-produ
 
 - Non-secret profile metadata is stored in plaintext `connections.json`; passwords and the Redrob key use the OS keyring.
 - A secret-free fsynced journal, staged keyring entry, and exclusive profile lock make updates recoverable and fail closed under unsafe recovery or concurrent ownership.
-- Desktop relational reads accept one conservatively classified read-only statement. PostgreSQL/MySQL add read-only transactions; SQLite file profiles open with `mode=ro` and use a fail-closed PRAGMA allowlist.
+- Typed queries are reads only: each run accepts read-only statements (several only when every one is read-only, each executed on its own), with PostgreSQL/MySQL read-only transactions and a fail-closed SQLite PRAGMA allowlist. Writes happen only through reviewed edits on a connection that allows them.
 - Mongo requests are strict and bounded; aggregate `$out` and `$merge` are rejected recursively. Metadata merges top-level type/presence/nullability hints from at most 25 documents and is not a complete schema.
 - Enabled PostgreSQL/MySQL TLS verifies certificate identity with public trust roots. Private/self-signed CA configuration is unavailable.
 - Desktop AI sends the prompt and optional active query to Redrob. Result rows and credentials are not attached, but sensitive literals manually included in either text are transmitted.
@@ -128,7 +129,7 @@ Read the complete [security model and limitations](docs/SECURITY.md).
 
 ## Current boundaries
 
-- No desktop/native result mutation; browser-demo editing is sample-only and in-memory.
+- No free-form write SQL: changes go through the reviewed edit and table forms only. Tables need a single-column primary key to be edited; MongoDB results are not editable.
 - Paging is server/bridge bounded, while sorting and filtering apply only to the currently loaded page.
 - No custom CA/client-certificate UI, SSH tunnel, cloud-auth plugin, script runner, ER diagram, administration suite, data-transfer pipeline, compare/migration tooling, driver marketplace, or SQL Server connector.
 - Mongo sampled metadata is a bounded hint, not authoritative collection schema inference.
