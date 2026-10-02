@@ -44,6 +44,44 @@ const controllableBridge = (mode: DataBridge['mode'] = 'demo') => {
 };
 
 describe('workspace state flows', () => {
+  it('runs a read-only batch one statement at a time and pages only the shown result', async () => {
+    const bridge = controllableBridge('desktop');
+    const pageOf = (query: string, offset: number): QueryResult => ({
+      columns: [{ key: 'q', label: 'q', dataType: 'string' }], rows: [{ q: `${query}@${offset}` }], rowCount: 1, durationMs: 1,
+      offset, limit: 50, nextOffset: offset === 0 ? 50 : null,
+    });
+    bridge.executeQuery = vi.fn(async (request) => pageOf(request.query, request.offset ?? 0));
+    bridge.splitReadOnlyBatch = vi.fn(async (query: string) => query.includes('DELETE') ? null : query.split(';').map((part) => part.trim()).filter(Boolean));
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    const batchText = 'SELECT 1; SELECT 2';
+    store.getState().updateQuery(batchText);
+    await store.getState().runQuery();
+
+    // Each statement went through executeQuery on its own; nothing ran the batch whole.
+    expect(vi.mocked(bridge.executeQuery).mock.calls.map(([request]) => request.query)).toEqual(['SELECT 1', 'SELECT 2']);
+    expect(store.getState().batch?.results).toHaveLength(2);
+    expect(store.getState().result?.rows[0].q).toBe('SELECT 1@0');
+
+    store.getState().selectBatchResult(1);
+    expect(store.getState().result?.rows[0].q).toBe('SELECT 2@0');
+    await store.getState().nextPage();
+    expect(vi.mocked(bridge.executeQuery).mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ query: 'SELECT 2', offset: 50 }));
+    expect(store.getState().result?.rows[0].q).toBe('SELECT 2@50');
+    // Paging a statement leaves the tab holding the whole batch.
+    expect(store.getState().tabs.find((tab) => tab.id === store.getState().activeTabId)?.query).toBe(batchText);
+    // Switching back keeps the other result where it was.
+    store.getState().selectBatchResult(0);
+    expect(store.getState().result?.rows[0].q).toBe('SELECT 1@0');
+
+    // A batch the core refuses to split runs whole, and is refused there as before.
+    vi.mocked(bridge.executeQuery).mockClear();
+    store.getState().updateQuery('SELECT 1; DELETE FROM customers');
+    await store.getState().runQuery();
+    expect(vi.mocked(bridge.executeQuery).mock.calls.map(([request]) => request.query)).toEqual(['SELECT 1; DELETE FROM customers']);
+    expect(store.getState().batch).toBeNull();
+  });
   it('lists desktop connections without selecting one or loading metadata', async () => {
     const bridge = controllableBridge('desktop');
     const store = createWorkspaceStore(bridge);
