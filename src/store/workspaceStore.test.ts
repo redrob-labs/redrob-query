@@ -402,6 +402,44 @@ describe('workspace state flows', () => {
 
 
 describe('release workspace contracts', () => {
+  it('saves the active query, updates it under the same name, reopens and deletes it', async () => {
+    const saved = [
+      { id: 'kept', connectionId: postgres.id, name: 'Kept', language: 'sql', query: 'SELECT 1', savedAt: 5 },
+      { id: 'kept', connectionId: postgres.id, name: 'Duplicate id', language: 'sql', query: 'SELECT 2', savedAt: 6 },
+      { id: 'gone-connection', connectionId: 'gone', name: 'x', language: 'sql', query: 'SELECT 3', savedAt: 7 },
+      { id: 'empty', connectionId: postgres.id, name: 'Empty', language: 'sql', query: '', savedAt: 8 },
+      { id: 'wrong-language', connectionId: postgres.id, name: 'Mongo', language: 'mql', query: 'db.x.find()', savedAt: 9 },
+    ];
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify({ version: 1, tabs: [], history: [], saved }));
+    const store = createWorkspaceStore(controllableBridge('desktop'));
+    await store.getState().initialize();
+    expect(store.getState().savedQueries.map((entry) => entry.id)).toEqual(['kept']);
+
+    await store.getState().setActiveConnection(postgres.id);
+    const tab = store.getState().tabs.find((item) => item.id === store.getState().activeTabId)!;
+    store.getState().updateQuery('SELECT 42');
+    store.getState().saveActiveQuery();
+    const stored = () => JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY) ?? '{}').saved as Array<{ name: string; query: string }>;
+    expect(stored().map(({ name, query }) => ({ name, query }))).toEqual([{ name: tab.name, query: 'SELECT 42' }, { name: 'Kept', query: 'SELECT 1' }]);
+
+    // Saving again under the same name updates that entry rather than adding a copy.
+    store.getState().updateQuery('SELECT 43');
+    store.getState().saveActiveQuery();
+    expect(stored().filter((entry) => entry.name === tab.name)).toEqual([expect.objectContaining({ query: 'SELECT 43' })]);
+
+    const tabCount = store.getState().tabs.length;
+    store.getState().openSavedQuery('kept');
+    const opened = store.getState().tabs.find((item) => item.id === store.getState().activeTabId)!;
+    expect(store.getState().tabs).toHaveLength(tabCount + 1);
+    expect(opened).toEqual(expect.objectContaining({ name: 'Kept', query: 'SELECT 1', dirty: false }));
+    // Opening it again switches to that tab instead of opening a duplicate.
+    store.getState().openSavedQuery('kept');
+    expect(store.getState().tabs).toHaveLength(tabCount + 1);
+
+    store.getState().deleteSavedQuery('kept');
+    expect(stored().map((entry) => entry.name)).toEqual([tab.name]);
+  });
+
   it('restores pinned tables, drops invalid ones, and saves a new pin', async () => {
     const pins = [{ connectionId: postgres.id, schema: 'public', table: 'customers' }, { connectionId: postgres.id, schema: 'public', table: 'customers' }, { connectionId: 'gone', table: 'x' }, { connectionId: postgres.id, table: '' }];
     localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify({ version: 1, tabs: [], history: [], pins }));

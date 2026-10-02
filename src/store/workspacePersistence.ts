@@ -8,6 +8,11 @@ export const MAX_PINNED_TABLES = 100;
 
 /** A table or view the person pinned to the top of the sidebar, per connection. */
 export interface PinnedTable { connectionId: string; schema?: string; table: string }
+export const MAX_SAVED_QUERIES = 200;
+
+/** A query the person chose to keep under a name, per connection. Unlike history it is never evicted
+ * by running other queries; it stays until it is deleted. */
+export interface SavedQuery { id: string; connectionId: string; name: string; language: QueryLanguage; query: string; savedAt: number }
 export const MAX_PERSISTED_QUERY_CHARACTERS = 200_000;
 export const MAX_WORKSPACE_CHARACTERS = 1_500_000;
 
@@ -17,10 +22,13 @@ interface WorkspaceSnapshot {
   history: QueryHistoryEntry[];
   /** Optional: a workspace saved before pins existed has none. */
   pins?: PinnedTable[];
+  /** Optional: a workspace saved before saved queries existed has none. */
+  saved?: SavedQuery[];
 }
 
 export interface LoadedWorkspace extends Pick<WorkspaceSnapshot, 'tabs' | 'history'> {
   pins: PinnedTable[];
+  saved: SavedQuery[];
   warning?: string;
   storageError?: string;
 }
@@ -75,7 +83,7 @@ const clearedWarning = (description: string): Pick<LoadedWorkspace, 'warning' | 
 };
 
 export const loadWorkspace = (profiles: ConnectionProfile[]): LoadedWorkspace => {
-  const empty: LoadedWorkspace = { tabs: [], history: [], pins: [] };
+  const empty: LoadedWorkspace = { tabs: [], history: [], pins: [], saved: [] };
   const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
   let raw: string | null;
   try { raw = localStorage.getItem(WORKSPACE_STORAGE_KEY); } catch { return { ...empty, warning: 'Local query workspace storage is unavailable.', storageError: 'Local query workspace storage is unavailable.' }; }
@@ -132,14 +140,33 @@ export const loadWorkspace = (profiles: ConnectionProfile[]): LoadedWorkspace =>
       return [{ connectionId: profile.id, table, ...(schema ? { schema } : {}) }];
     }).slice(0, MAX_PINNED_TABLES);
 
-    return { tabs, history, pins, ...(discarded ? { warning: 'Some invalid local query workspace entries were not restored.' } : {}) };
+    const savedIds = new Set<string>();
+    const saved = (Array.isArray(parsed.saved) ? parsed.saved : []).flatMap((candidate) => {
+      const profile = candidate && typeof candidate === 'object' ? profilesById.get(candidate.connectionId) : undefined;
+      const id = candidate && typeof candidate === 'object' ? cleanLabel(candidate.id, 100) : '';
+      if (!profile || !id || savedIds.has(id) || candidate.language !== expectedLanguage(profile.kind) || !validHistoryQuery(candidate.query)) {
+        discarded = true;
+        return [];
+      }
+      savedIds.add(id);
+      return [{
+        id,
+        connectionId: profile.id,
+        name: cleanLabel(candidate.name, 100) || 'Saved query',
+        language: candidate.language,
+        query: candidate.query,
+        savedAt: Number.isFinite(Number(candidate.savedAt)) ? Number(candidate.savedAt) : 0,
+      }];
+    }).slice(0, MAX_SAVED_QUERIES);
+
+    return { tabs, history, pins, saved, ...(discarded ? { warning: 'Some invalid local query workspace entries were not restored.' } : {}) };
   } catch {
     return { ...empty, ...clearedWarning('Unreadable') };
   }
 };
 
-export const saveWorkspace = (tabs: QueryTab[], history: QueryHistoryEntry[], pins: PinnedTable[] = []): WorkspaceSaveResult => {
-  if (tabs.some((entry) => !validDraftQuery(entry.query)) || history.some((entry) => !validHistoryQuery(entry.query))) {
+export const saveWorkspace = (tabs: QueryTab[], history: QueryHistoryEntry[], pins: PinnedTable[] = [], saved: SavedQuery[] = []): WorkspaceSaveResult => {
+  if (tabs.some((entry) => !validDraftQuery(entry.query)) || history.some((entry) => !validHistoryQuery(entry.query)) || saved.some((entry) => !validHistoryQuery(entry.query))) {
     const cleared = clearWorkspace();
     return { ok: false, message: cleared.ok
       ? `A tab draft or history query is invalid or exceeds the ${MAX_PERSISTED_QUERY_CHARACTERS.toLocaleString()} character local-save limit. Stored workspace data was cleared; the current workspace remains in memory only.`
@@ -150,6 +177,7 @@ export const saveWorkspace = (tabs: QueryTab[], history: QueryHistoryEntry[], pi
     tabs: tabs.slice(-MAX_PERSISTED_TABS).map(({ id, connectionId, name, language, query, dirty }) => ({ id, connectionId, name, language, query, dirty })),
     history: history.slice(0, MAX_HISTORY_ENTRIES).map(({ id, connectionId, name, language, query, executedAt }) => ({ id, connectionId, name, language, query, executedAt })),
     pins: pins.slice(0, MAX_PINNED_TABLES).map(({ connectionId, schema, table }) => ({ connectionId, table, ...(schema ? { schema } : {}) })),
+    saved: saved.slice(0, MAX_SAVED_QUERIES).map(({ id, connectionId, name, language, query, savedAt }) => ({ id, connectionId, name, language, query, savedAt })),
   };
   try {
     const serialized = JSON.stringify(snapshot);

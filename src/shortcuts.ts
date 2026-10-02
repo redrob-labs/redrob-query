@@ -13,6 +13,7 @@ export interface Shortcut {
 export const SHORTCUTS = {
   palette: { key: 'k', mod: true },
   runQuery: { key: 'Enter', mod: true },
+  saveQuery: { key: 's', mod: true },
   newQuery: { key: 'n', mod: true },
   askAi: { key: 'i', mod: true },
   editCell: { key: 'Enter', shift: true },
