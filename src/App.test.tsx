@@ -72,7 +72,9 @@ describe('Redrob Query workspace', () => {
     expect(screen.getByText('Ready when you are')).toBeInTheDocument();
     await user.click(screen.getByTestId('run-query'));
     expect(screen.getByText('Executing against demo workspace…')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/50 rows in 36 ms/)).toBeInTheDocument());
+    // Range, more-available and elapsed time read as one line in the footer, beside its download.
+    await waitFor(() => expect(screen.getByTestId('result-summary')).toHaveTextContent('Showing 1–50 · more available · 36 ms'));
+    expect(screen.getByTestId('download-results')).toHaveTextContent('CSV');
     expect(screen.getByRole('columnheader', { name: /email/ })).toBeInTheDocument();
     expect(screen.queryByText('Query couldn’t run')).not.toBeInTheDocument();
     expect(screen.getByText('Writes require review')).toBeInTheDocument();
