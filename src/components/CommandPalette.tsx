@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import type { IconName } from '@redrob-labs/ui';
 import { Icon } from '../ui/Icon';
 import { useWorkspace } from '../store/WorkspaceProvider';
+import { formatShortcut } from '../shortcuts';
 
 const commandList = [
-  { id: 'run', label: 'Run current query', group: 'Query', hint: '⌘ ↵', icon: 'play' },
-  { id: 'new-query', label: 'Create new query', group: 'Query', hint: '⌘ N', icon: 'filePlus' },
+  { id: 'run', label: 'Run current query', group: 'Query', hint: formatShortcut('runQuery'), icon: 'play' },
+  { id: 'new-query', label: 'Create new query', group: 'Query', hint: formatShortcut('newQuery'), icon: 'filePlus' },
   { id: 'connect', label: 'Add a database connection', group: 'Workspace', hint: '', icon: 'database' },
-  { id: 'ai', label: 'Ask Redrob AI', group: 'AI', hint: '⌘ I', icon: 'sparkle' },
+  { id: 'ai', label: 'Ask Redrob AI', group: 'AI', hint: formatShortcut('askAi'), icon: 'sparkle' },
   { id: 'changes', label: 'Review staged changes', group: 'Data', hint: '', icon: 'compare' },
 ] as const satisfies readonly { id: string; label: string; group: string; hint: string; icon: IconName }[];
 

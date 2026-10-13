@@ -26,6 +26,28 @@ pub fn is_single_read_only_statement(sql: &str) -> bool {
     )
 }
 
+/// The most statements one run may hold. Each is executed and paged on its own.
+pub const MAX_BATCH_STATEMENTS: usize = 20;
+
+/// Splits a batch into its statements when EVERY one is read-only, for a caller that runs them one at a
+/// time and shows each result. `None` when any statement is not read-only, when there are none, or when
+/// there are more than [`MAX_BATCH_STATEMENTS`]: a batch is not a way around the single-statement gate,
+/// and each returned statement still passes [`is_single_read_only_statement`] on its own.
+#[must_use]
+pub fn read_only_statements(sql: &str) -> Option<Vec<String>> {
+    let statements = split_statements(sql);
+    if statements.is_empty() || statements.len() > MAX_BATCH_STATEMENTS {
+        return None;
+    }
+    statements
+        .iter()
+        .all(|statement| {
+            classify_statement(statement) == QueryClassification::ReadOnly
+                && is_single_read_only_statement(statement)
+        })
+        .then_some(statements)
+}
+
 #[must_use]
 pub const fn risk_for(classification: QueryClassification) -> MutationRisk {
     match classification {
@@ -410,6 +432,34 @@ mod tests {
         assert_eq!(
             classify_sql(r"SELECT '\'; DELETE FROM customers; -- '"),
             QueryClassification::Destructive
+        );
+    }
+
+    #[test]
+    fn read_only_statements_splits_only_an_all_read_only_batch() {
+        let split =
+            read_only_statements("SELECT 1; SELECT 'a;b' AS x;\n-- note\nSHOW TABLES").unwrap();
+        assert_eq!(split.len(), 3);
+        assert!(split[1].contains("'a;b'"));
+        // One mutation anywhere refuses the whole batch.
+        assert_eq!(
+            read_only_statements("SELECT 1; DELETE FROM customers"),
+            None
+        );
+        assert_eq!(read_only_statements("SELECT 1; UPDATE t SET a = 1"), None);
+        // The backslash-quote bypass is not split into a harmless-looking pair.
+        assert_eq!(
+            read_only_statements(r"SELECT '\'; DELETE FROM customers; -- '"),
+            None
+        );
+        assert_eq!(read_only_statements(""), None);
+        assert_eq!(
+            read_only_statements(&"SELECT 1;".repeat(MAX_BATCH_STATEMENTS + 1)),
+            None
+        );
+        assert_eq!(
+            read_only_statements(&"SELECT 1;".repeat(MAX_BATCH_STATEMENTS)).map(|s| s.len()),
+            Some(MAX_BATCH_STATEMENTS)
         );
     }
 }

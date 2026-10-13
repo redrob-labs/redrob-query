@@ -35,6 +35,7 @@ const controllableBridge = (mode: DataBridge['mode'] = 'demo') => {
     testConnection: vi.fn(),
     loadMetadata: vi.fn(async (connectionId: string) => connectionId === postgres.id ? pgRoot : mongoRoot),
     executeQuery: vi.fn(async (request) => result(request.connectionId)),
+    applyTableChange: vi.fn(async () => undefined),
     applyMutations: vi.fn(),
     saveAiKey: vi.fn(),
     askAi: vi.fn(),
@@ -43,6 +44,44 @@ const controllableBridge = (mode: DataBridge['mode'] = 'demo') => {
 };
 
 describe('workspace state flows', () => {
+  it('runs a read-only batch one statement at a time and pages only the shown result', async () => {
+    const bridge = controllableBridge('desktop');
+    const pageOf = (query: string, offset: number): QueryResult => ({
+      columns: [{ key: 'q', label: 'q', dataType: 'string' }], rows: [{ q: `${query}@${offset}` }], rowCount: 1, durationMs: 1,
+      offset, limit: 50, nextOffset: offset === 0 ? 50 : null,
+    });
+    bridge.executeQuery = vi.fn(async (request) => pageOf(request.query, request.offset ?? 0));
+    bridge.splitReadOnlyBatch = vi.fn(async (query: string) => query.includes('DELETE') ? null : query.split(';').map((part) => part.trim()).filter(Boolean));
+    const store = createWorkspaceStore(bridge);
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    const batchText = 'SELECT 1; SELECT 2';
+    store.getState().updateQuery(batchText);
+    await store.getState().runQuery();
+
+    // Each statement went through executeQuery on its own; nothing ran the batch whole.
+    expect(vi.mocked(bridge.executeQuery).mock.calls.map(([request]) => request.query)).toEqual(['SELECT 1', 'SELECT 2']);
+    expect(store.getState().batch?.results).toHaveLength(2);
+    expect(store.getState().result?.rows[0].q).toBe('SELECT 1@0');
+
+    store.getState().selectBatchResult(1);
+    expect(store.getState().result?.rows[0].q).toBe('SELECT 2@0');
+    await store.getState().nextPage();
+    expect(vi.mocked(bridge.executeQuery).mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ query: 'SELECT 2', offset: 50 }));
+    expect(store.getState().result?.rows[0].q).toBe('SELECT 2@50');
+    // Paging a statement leaves the tab holding the whole batch.
+    expect(store.getState().tabs.find((tab) => tab.id === store.getState().activeTabId)?.query).toBe(batchText);
+    // Switching back keeps the other result where it was.
+    store.getState().selectBatchResult(0);
+    expect(store.getState().result?.rows[0].q).toBe('SELECT 1@0');
+
+    // A batch the core refuses to split runs whole, and is refused there as before.
+    vi.mocked(bridge.executeQuery).mockClear();
+    store.getState().updateQuery('SELECT 1; DELETE FROM customers');
+    await store.getState().runQuery();
+    expect(vi.mocked(bridge.executeQuery).mock.calls.map(([request]) => request.query)).toEqual(['SELECT 1; DELETE FROM customers']);
+    expect(store.getState().batch).toBeNull();
+  });
   it('lists desktop connections without selecting one or loading metadata', async () => {
     const bridge = controllableBridge('desktop');
     const store = createWorkspaceStore(bridge);
@@ -59,6 +98,28 @@ describe('workspace state flows', () => {
       activeTabId: '',
       metadata: {},
     }));
+  });
+
+  it('closes other tabs, closes tabs to the right and duplicates, within one connection', async () => {
+    const store = createWorkspaceStore(controllableBridge('desktop'));
+    await store.getState().initialize();
+    await store.getState().setActiveConnection(postgres.id);
+    store.getState().newTab(); store.getState().newTab(); store.getState().newTab();
+    const names = () => store.getState().tabs.map((tab) => tab.name);
+    const [first, second] = store.getState().tabs;
+    expect(names()).toEqual(['Customer overview', 'Untitled 2', 'Untitled 3', 'Untitled 4']);
+
+    store.getState().duplicateTab(second.id);
+    expect(names()).toEqual(['Customer overview', 'Untitled 2', 'Untitled 2 copy', 'Untitled 3', 'Untitled 4']);
+    expect(store.getState().tabs.find((tab) => tab.id === store.getState().activeTabId)?.name).toBe('Untitled 2 copy');
+
+    store.getState().closeTabsToRight(second.id);
+    expect(names()).toEqual(['Customer overview', 'Untitled 2']);
+    expect(store.getState().activeTabId).toBe(second.id);
+
+    store.getState().closeOtherTabs(first.id);
+    expect(names()).toEqual(['Customer overview']);
+    expect(store.getState().activeTabId).toBe(first.id);
   });
 
   it('loads metadata and a starter tab when the first desktop connection is explicitly selected', async () => {
@@ -379,6 +440,61 @@ describe('workspace state flows', () => {
 
 
 describe('release workspace contracts', () => {
+  it('saves the active query, updates it under the same name, reopens and deletes it', async () => {
+    const saved = [
+      { id: 'kept', connectionId: postgres.id, name: 'Kept', language: 'sql', query: 'SELECT 1', savedAt: 5 },
+      { id: 'kept', connectionId: postgres.id, name: 'Duplicate id', language: 'sql', query: 'SELECT 2', savedAt: 6 },
+      { id: 'gone-connection', connectionId: 'gone', name: 'x', language: 'sql', query: 'SELECT 3', savedAt: 7 },
+      { id: 'empty', connectionId: postgres.id, name: 'Empty', language: 'sql', query: '', savedAt: 8 },
+      { id: 'wrong-language', connectionId: postgres.id, name: 'Mongo', language: 'mql', query: 'db.x.find()', savedAt: 9 },
+    ];
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify({ version: 1, tabs: [], history: [], saved }));
+    const store = createWorkspaceStore(controllableBridge('desktop'));
+    await store.getState().initialize();
+    expect(store.getState().savedQueries.map((entry) => entry.id)).toEqual(['kept']);
+
+    await store.getState().setActiveConnection(postgres.id);
+    const tab = store.getState().tabs.find((item) => item.id === store.getState().activeTabId)!;
+    store.getState().updateQuery('SELECT 42');
+    store.getState().saveActiveQuery();
+    const stored = () => JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY) ?? '{}').saved as Array<{ name: string; query: string }>;
+    expect(stored().map(({ name, query }) => ({ name, query }))).toEqual([{ name: tab.name, query: 'SELECT 42' }, { name: 'Kept', query: 'SELECT 1' }]);
+
+    // Saving again under the same name updates that entry rather than adding a copy.
+    store.getState().updateQuery('SELECT 43');
+    store.getState().saveActiveQuery();
+    expect(stored().filter((entry) => entry.name === tab.name)).toEqual([expect.objectContaining({ query: 'SELECT 43' })]);
+
+    const tabCount = store.getState().tabs.length;
+    store.getState().openSavedQuery('kept');
+    const opened = store.getState().tabs.find((item) => item.id === store.getState().activeTabId)!;
+    expect(store.getState().tabs).toHaveLength(tabCount + 1);
+    expect(opened).toEqual(expect.objectContaining({ name: 'Kept', query: 'SELECT 1', dirty: false }));
+    // Opening it again switches to that tab instead of opening a duplicate.
+    store.getState().openSavedQuery('kept');
+    expect(store.getState().tabs).toHaveLength(tabCount + 1);
+
+    store.getState().deleteSavedQuery('kept');
+    expect(stored().map((entry) => entry.name)).toEqual([tab.name]);
+  });
+
+  it('restores pinned tables, drops invalid ones, and saves a new pin', async () => {
+    const pins = [{ connectionId: postgres.id, schema: 'public', table: 'customers' }, { connectionId: postgres.id, schema: 'public', table: 'customers' }, { connectionId: 'gone', table: 'x' }, { connectionId: postgres.id, table: '' }];
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify({ version: 1, tabs: [], history: [], pins }));
+    const store = createWorkspaceStore(controllableBridge('desktop'));
+    await store.getState().initialize();
+    expect(store.getState().pinnedTables).toEqual([{ connectionId: postgres.id, schema: 'public', table: 'customers' }]);
+
+    await store.getState().setActiveConnection(postgres.id);
+    store.getState().togglePin('orders', 'public');
+    expect(JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY) ?? '{}').pins).toEqual([
+      { connectionId: postgres.id, schema: 'public', table: 'customers' },
+      { connectionId: postgres.id, schema: 'public', table: 'orders' },
+    ]);
+    store.getState().togglePin('customers', 'public');
+    expect(store.getState().pinnedTables.map((pin) => pin.table)).toEqual(['orders']);
+  });
+
   it('restores bounded desktop query-only state without selecting, connecting, or running', async () => {
     const tabs = Array.from({ length: 35 }, (_, index) => ({ id: `saved-${index}`, connectionId: postgres.id, name: `Saved ${index}`, language: 'sql', query: `SELECT ${index}`, dirty: true, credentials: 'must-not-restore' }));
     const history = Array.from({ length: 55 }, (_, index) => ({ id: `history-${index}`, connectionId: postgres.id, name: 'Saved', language: 'sql', query: `SELECT ${index}`, executedAt: index, rows: [{ secret: true }], aiPrompt: 'private' }));

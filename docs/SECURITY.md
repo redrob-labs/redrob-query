@@ -76,7 +76,7 @@ The renderer-facing request permits only:
 
 Rust constructs the system instruction, model, temperature, endpoint, and message shape. Unknown fields—including renderer-provided message arrays, result rows, credentials, model, or endpoint—are rejected or omitted. SQL Server context is rejected. Responses are capped at 2 MiB. The API key is used as the HTTPS bearer credential and is not inserted into messages.
 
-Database result rows and credentials are not automatically attached. Anything manually typed or pasted into the prompt or active query is sent. A nonempty `REDROB_API_KEY` environment value takes precedence over the keyring value.
+Database result rows and credentials are not automatically attached. Anything manually typed or pasted into the prompt or active query is sent. A nonempty `REDROB_API_KEY` environment value takes precedence over the keyring value; with neither, the Redrob Launcher shared account file (`account.json`, see redrob-launcher `docs/shared-account.md`) is read, never written, and its key is spent at the `apiBaseUrl` it names. The key is never logged or shown; the settings surface shows only the account and key names.
 
 ## Error handling
 

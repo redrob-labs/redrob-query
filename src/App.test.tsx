@@ -27,7 +27,8 @@ const desktopBridge = (): DataBridge => ({
   testConnection: vi.fn(),
   loadMetadata: vi.fn(async () => [{ id: 'desktop-db', parentId: null, name: 'desktop_app', kind: 'database' as const }]),
   executeQuery: vi.fn(),
-  applyMutations: vi.fn(),
+  applyTableChange: vi.fn(async () => undefined),
+    applyMutations: vi.fn(),
   saveAiKey: vi.fn(),
   askAi: vi.fn(),
 });
@@ -71,11 +72,28 @@ describe('Redrob Query workspace', () => {
     expect(screen.getByText('Ready when you are')).toBeInTheDocument();
     await user.click(screen.getByTestId('run-query'));
     expect(screen.getByText('Executing against demo workspace…')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/50 rows in 36 ms/)).toBeInTheDocument());
+    // Range, more-available and elapsed time read as one line in the footer, beside its download.
+    await waitFor(() => expect(screen.getByTestId('result-summary')).toHaveTextContent('Showing 1–50 · more available · 36 ms'));
+    expect(screen.getByTestId('download-results')).toHaveTextContent('CSV');
     expect(screen.getByRole('columnheader', { name: /email/ })).toBeInTheDocument();
     expect(screen.queryByText('Query couldn’t run')).not.toBeInTheDocument();
     expect(screen.getByText('Writes require review')).toBeInTheDocument();
     expect(screen.queryByText('Read-only guard')).not.toBeInTheDocument();
+  });
+
+  it('shows each statement of a read-only batch behind a result picker', async () => {
+    const user = await renderWorkspace();
+    const editor = screen.getByTestId('monaco-editor');
+    await user.clear(editor);
+    await user.type(editor, 'SELECT * FROM public.customers LIMIT 5; SELECT * FROM public.orders LIMIT 3');
+    await user.click(screen.getByTestId('run-query'));
+    await waitFor(() => expect(screen.getByTestId('result-picker')).toHaveTextContent('Result 1 of 2'));
+    expect(screen.getByRole('columnheader', { name: /email/ })).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('result-picker'));
+    await user.click(await screen.findByRole('menuitem', { name: /Result 2 · .*public\.orders/ }));
+    await waitFor(() => expect(screen.getByTestId('result-picker')).toHaveTextContent('Result 2 of 2'));
+    expect(screen.queryByRole('columnheader', { name: /email/ })).not.toBeInTheDocument();
   });
 
   it('tests and saves a connection from the connection manager', async () => {
@@ -147,6 +165,31 @@ describe('Redrob Query workspace', () => {
     expect(document.body).not.toHaveTextContent(secret);
   });
 
+  it('says when the desktop key comes from Redrob Launcher, read fresh on every open', async () => {
+    const user = userEvent.setup();
+    const bridge = desktopBridge();
+    const aiKeyStatus = vi.fn()
+      .mockResolvedValueOnce({ source: 'launcher', accountName: 'Acme', apiKeyName: 'Redrob Launcher' })
+      .mockResolvedValueOnce({ source: 'none' });
+    bridge.aiKeyStatus = aiKeyStatus;
+    render(<App bridge={bridge} />);
+    await screen.findByTestId('desktop-banner');
+
+    await user.click(screen.getByTestId('open-ai-settings-header'));
+    const launcher = await screen.findByTestId('ai-key-launcher');
+    expect(launcher).toHaveTextContent('Signed in with Redrob Launcher');
+    expect(launcher).toHaveTextContent('Workspace: Acme');
+    expect(launcher).toHaveTextContent('Sign out in Redrob Launcher');
+    // Only the names are shown; the dialog has no disconnect for a key it does not own.
+    expect(screen.queryByRole('button', { name: /disconnect|clear/i })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('close-ai-settings'));
+
+    // Signed out in the launcher between two opens: the second read says so.
+    await user.click(screen.getByTestId('open-ai-settings-header'));
+    await waitFor(() => expect(aiKeyStatus).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('ai-key-launcher')).not.toBeInTheDocument();
+  });
+
   it('generates a revenue query with AI and places it in the editor', async () => {
     const user = await renderWorkspace();
     const input = screen.getByTestId('ai-input');
@@ -200,7 +243,7 @@ describe('Redrob Query workspace', () => {
 
   it('opens the command palette with the keyboard shortcut', async () => {
     const user = await renderWorkspace();
-    await user.keyboard('{Meta>}k{/Meta}');
+    await user.keyboard('{Control>}k{/Control}');
     expect(screen.getByTestId('command-palette')).toBeInTheDocument();
     expect(screen.getByText('Run current query')).toBeInTheDocument();
   });

@@ -15,6 +15,8 @@ export interface ConnectionProfile {
   filePath?: string;
   srv?: boolean;
   tls: boolean;
+  /** Writes are refused unless this is explicitly false. Saved profiles default to read-only. */
+  readOnly?: boolean;
   authSource?: string;
   state: ConnectionState;
   builtIn?: boolean;
@@ -65,6 +67,8 @@ export interface ResultColumn {
   dataType: DataType;
   nullable?: boolean;
   primaryKey?: boolean;
+  /** The engine's value type for this column (desktop only), so an edit is written back as that type, not as text. */
+  wireType?: string;
 }
 
 export interface QueryResult {
@@ -77,7 +81,10 @@ export interface QueryResult {
   nextOffset?: number | null;
   truncated?: boolean;
   message?: string;
+  /** Why the result cannot be edited, when it cannot (desktop). */
+  readOnlyReason?: string;
   editSource?: {
+    schema?: string;
     table: string;
     primaryKey: string;
   };
@@ -85,6 +92,10 @@ export interface QueryResult {
 
 export interface CellMutation {
   id: string;
+  /** 'delete' removes the whole row and 'insert' adds one (column is empty for both); otherwise one cell changes. */
+  kind?: 'update' | 'delete' | 'insert';
+  /** For an insert: the columns filled in, with each column's engine type. Columns left out take the table default. */
+  values?: { column: string; value: CellValue; wireType?: string }[];
   connectionId: string;
   table: string;
   primaryKey: string;
@@ -92,6 +103,11 @@ export interface CellMutation {
   column: string;
   previousValue: CellValue;
   nextValue: CellValue;
+  schema?: string;
+  /** The key value as typed, and the engine types to write key and value back as. */
+  keyValue?: CellValue;
+  keyWireType?: string;
+  wireType?: string;
 }
 
 export interface MutationResult {
@@ -139,3 +155,10 @@ export interface ToastMessage {
   title: string;
   detail?: string;
 }
+
+/** The column types the New table / Add column form offers; each maps to one type per engine. */
+export type ColumnType = 'text' | 'integer' | 'decimal' | 'boolean' | 'date' | 'timestamp';
+export interface ColumnSpec { name: string; columnType: ColumnType; nullable: boolean; primaryKey: boolean }
+export type TableChange =
+  | { kind: 'create_table'; schema?: string; table: string; columns: ColumnSpec[] }
+  | { kind: 'add_column'; schema?: string; table: string; column: ColumnSpec };

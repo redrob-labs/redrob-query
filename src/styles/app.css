@@ -111,6 +111,12 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .tree-toolbar .icon-button { width: 25px; height: 25px; }
 .schema-tree { flex: 1; padding: 5px 0; overflow: auto; }
 .tree-node { width: 100%; min-height: 26px; display: grid; grid-template-columns: 14px 16px minmax(0, 1fr) auto; align-items: center; gap: 4px; padding-right: 9px; color: var(--ink-secondary); text-align: left; background: transparent; border-left: 2px solid transparent; }
+.tree-row { position: relative; }
+.tree-row-menu { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); opacity: 0; }
+.tree-row:hover .tree-row-menu, .tree-row:focus-within .tree-row-menu { opacity: 1; }
+/* The open menu panel must paint over the rows that follow; each row is its own stacking context
+   (the button is transformed), so raise the row that holds focus. */
+.tree-row:focus-within { z-index: 5; }
 .tree-node:hover { background: var(--surface-base); color: var(--ink-primary); }
 .tree-node[aria-expanded="true"] { color: var(--ink-primary); }
 .tree-chevron { display: grid; place-items: center; color: var(--ink-muted); }
@@ -129,7 +135,7 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 
 .main-workspace { min-width: 450px; flex: 1; display: grid; grid-template-rows: minmax(260px, 43%) minmax(0, 57%); overflow: hidden; background: var(--surface-0); }
 .query-editor-shell { min-height: 0; display: grid; grid-template-rows: 35px 38px minmax(0, 1fr); border-bottom: 1px solid var(--border-subtle); }
-.query-tabs { display: flex; align-items: stretch; background: var(--surface-base); border-bottom: 1px solid var(--line); overflow: hidden; }
+.query-tabs { display: flex; align-items: stretch; background: var(--surface-base); border-bottom: 1px solid var(--line); overflow-x: clip; overflow-y: visible; }
 .query-tab { position: relative; min-width: 145px; max-width: 200px; display: flex; align-items: center; border-right: 1px solid var(--line-soft); background: var(--surface-base); color: var(--ink-muted); }
 .query-tab.is-active { background: var(--surface-base); color: var(--ink-primary); }
 .query-tab.is-active::before { content: ''; position: absolute; z-index: 1; inset: 0 0 auto; height: 2px; background: var(--accent); }
@@ -140,14 +146,25 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .tab-close { width: 17px; height: 17px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 3px; opacity: 0; }
 .query-tab:hover .tab-close { opacity: 1; }
 .tab-close:hover { background: var(--surface-sunken); }
+/* The tab menu shows on hover or focus, like the close button; an open panel stacks above the editor. */
+.query-tab { position: relative; }
+.tab-menu { opacity: 0; }
+.query-tab:hover .tab-menu, .query-tab.is-active .tab-menu, .tab-menu:focus-within { opacity: 1; }
+.query-tab:focus-within { z-index: 5; }
+/* Clip sideways only: the strip still hides tabs past its width, and the open menu can drop below it. */
+.tab-menu .rr-btn { padding: 0 3px; min-width: 0; }
+.tab-menu .rr-btn__icon { display: none; }
 .query-tabs > .icon-button { align-self: center; margin-left: 3px; }
 .drag-spacer, .toolbar-spacer, .status-spacer { flex: 1; }
 .saved-state { align-self: center; display: flex; align-items: center; gap: 4px; margin-right: 10px; color: var(--ink-muted); font-size: 9px; }
 .query-toolbar { display: flex; align-items: center; gap: 3px; padding: 0 7px; background: var(--surface-base); border-bottom: 1px solid var(--border-subtle); }
 .run-button { height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 7px 0 9px; border-radius: 5px; background: var(--accent); color: var(--ink-on-brand); font-weight: 650; box-shadow: var(--shadow-sm); }
 .run-button:hover { background: var(--action-primary); }
-.run-button kbd { margin-left: 3px; padding: 1px 4px; border: 0; background: var(--surface-material); color: var(--ink-brand); }
-.toolbar-select, .ask-ai-button { height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; background: transparent; color: var(--ink-secondary); }
+.run-button kbd { margin-left: 3px; padding: 1px 4px; border: 0; background: var(--surface-material); color: var(--ink-brand); white-space: nowrap; }
+.toolbar-select, .ask-ai-button { height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; background: transparent; color: var(--ink-secondary); white-space: nowrap; flex-shrink: 0; }
+/* The connection label is the one toolbar item that may be long; it gives way first, with an ellipsis,
+   instead of wrapping to two lines in a 27px-high bar. */
+.query-toolbar .connection-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: block; line-height: 27px; }
 .toolbar-select:hover, .ask-ai-button:hover { background: var(--surface-raised); color: var(--ink-primary); }
 .toolbar-separator { width: 1px; height: 18px; margin: 0 3px; background: var(--surface-sunken); }
 .ask-ai-button { color: var(--action-primary); background: var(--surface-material); }
@@ -189,14 +206,15 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .grid-toolbar > button:not(.icon-button), .page-size { height: 24px; display: flex; align-items: center; gap: 5px; padding: 0 7px; border-radius: 4px; background: transparent; color: var(--ink-muted); }
 .grid-toolbar > button:hover { background: var(--surface-raised); color: var(--ink-primary); }
 .grid-toolbar .changes-pill { border: 1px solid var(--border-strong); background: var(--surface-material) !important; color: var(--amber) !important; }
-.data-grid { flex: 1; min-height: 0; position: relative; overflow: auto; color: var(--ink-secondary); font-family: var(--font-mono); font-size: 10px; }
+/* isolation: the sticky header's z-index stays inside the grid, so no overlay (modal, drawer) has it drawn across. */
+.data-grid { isolation: isolate; flex: 1; min-height: 0; position: relative; overflow: auto; color: var(--ink-secondary); font-family: var(--font-mono); font-size: 10px; }
 .grid-header { position: sticky; top: 0; z-index: 3; min-width: max-content; height: 29px; display: grid; background: var(--surface-base); border-bottom: 1px solid var(--border-subtle); }
 .grid-header > div { min-width: 0; display: flex; align-items: center; gap: 5px; padding: 0 8px; overflow: hidden; border-right: 1px solid var(--border-subtle); color: var(--ink-secondary); font-family: var(--font-sans); font-size: 9px; font-weight: 650; }
 .grid-header svg { color: var(--ink-muted); }
 .grid-header .pk { margin-left: auto; padding: 1px 3px; border-radius: 3px; background: var(--surface-material); color: var(--amber); font-size: 7px; }
 .sort-icon { margin-left: auto; }
 .grid-body { position: relative; min-width: max-content; }
-.grid-row { position: absolute; left: 0; top: 29px; width: max-content; height: 34px; display: grid; border-bottom: 1px solid var(--border-subtle); }
+.grid-row { position: absolute; left: 0; top: 0; width: max-content; height: 34px; display: grid; border-bottom: 1px solid var(--border-subtle); }
 .grid-row:hover { background: var(--surface-base); }
 .grid-row > div { min-width: 0; height: 34px; display: flex; align-items: center; padding: 0 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-right: 1px solid var(--border-subtle); }
 .grid-row .row-number, .grid-header .row-number { justify-content: flex-end; color: var(--ink-muted); background: var(--surface-base); }
@@ -209,6 +227,8 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .grid-footer { flex: 0 0 27px; display: flex; align-items: center; gap: 16px; padding: 0 8px; border-top: 1px solid var(--line); color: var(--ink-muted); font-size: 9px; }
 .grid-hint { margin: 0 auto; color: var(--ink-muted); }
 .pagination { display: flex; gap: 2px; }
+.footer-action { height: 20px; display: flex; align-items: center; gap: 4px; padding: 0 6px; border-radius: 3px; background: transparent; color: var(--ink-secondary); white-space: nowrap; }
+.footer-action:hover { background: var(--surface-raised); color: var(--ink-primary); }
 .pagination button { width: 20px; height: 20px; border-radius: 3px; background: var(--surface-base); color: var(--ink-muted); }
 .pagination .active { background: var(--surface-sunken); color: var(--ink-primary); }
 
@@ -418,6 +438,28 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
 .grid-header > div { padding: 0; }
 .column-sort { width: 100%; height: 100%; display: flex; align-items: center; gap: 5px; padding: 0 8px; background: transparent; color: inherit; text-align: left; }
 .column-sort:hover { background: var(--surface-raised); color: var(--ink-primary); }
+/* The column menu sits beside the sort button, shown on hover or focus; an open one stacks over the rows. */
+/* The cell lets the open menu out; the sort button clips the label instead. */
+.grid-header [role="columnheader"] { position: relative; display: flex; align-items: center; overflow: visible; }
+.grid-header .column-sort { min-width: 0; overflow: hidden; }
+.column-menu { opacity: 0; }
+.grid-header [role="columnheader"]:hover .column-menu, .column-menu:focus-within { opacity: 1; }
+.grid-header [role="columnheader"]:focus-within { z-index: 5; }
+.column-menu .rr-btn { padding: 0 3px; min-width: 0; }
+.column-menu .rr-btn__icon { display: none; }
+/* The row menu sits in the row-number cell beside the number; the number hides while it shows. */
+.grid-row .row-number { position: relative; overflow: visible; gap: 2px; }
+.row-menu { position: absolute; inset: 0 auto 0 0; display: flex; align-items: center; opacity: 0; }
+.grid-row:hover .row-menu, .row-menu:focus-within { opacity: 1; }
+.grid-row:hover .row-number > span, .grid-row .row-number:focus-within > span { visibility: hidden; }
+.grid-row:focus-within { z-index: 2; }
+.row-menu .rr-btn { padding: 0 3px; min-width: 0; }
+.row-menu .rr-btn__icon { display: none; }
+.row-details { display: grid; gap: 12px; margin: 0; }
+.row-details > div { display: grid; gap: 3px; }
+.row-details dt { color: var(--ink-muted); font-size: 11px; }
+.row-details dd { margin: 0; color: var(--ink-primary); font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.row-details dd.null { color: var(--ink-muted); font-style: italic; }
 .column-sort .pk { margin-left: auto; }
 .sort-placeholder { margin-left: auto; width: 11px; }
 .page-size { width: auto !important; border: 0 !important; background: transparent !important; }
@@ -620,3 +662,24 @@ kbd { padding: 2px 5px; border: 1px solid var(--border-subtle); border-bottom-co
   font-size: 11px;
   color: var(--ink-muted);
 }
+/* The row drawer is portalled to the body; it must sit over the sticky grid header and the AI panel. */
+.rr-drawer-scrim { z-index: 60; }
+
+/* A row staged for deletion: struck through and dimmed until the change set is applied or discarded. */
+.grid-row.is-deleted > div[role="cell"] { text-decoration: line-through; color: var(--ink-muted); }
+.value-diff.is-delete { color: var(--status-danger); gap: 6px; }
+
+/* The new-row form: one labelled field per column. */
+.new-row-fields { display: grid; gap: 10px; }
+.new-row-fields label { display: grid; gap: 4px; }
+.new-row-fields label span { color: var(--ink-muted); font-size: 11px; }
+.new-row-fields input { min-height: 30px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--surface-base); color: var(--ink-primary); }
+.new-row-error { margin: 0; color: var(--status-danger); }
+.value-diff.is-insert { color: var(--status-success); gap: 6px; }
+
+/* The New table / Add column form. */
+.table-change-form { display: grid; gap: 12px; }
+.table-change-names, .table-change-column { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; align-items: end; }
+.table-change-form label:not(.checkbox-label) { display: grid; gap: 4px; }
+.table-change-form label span { color: var(--ink-muted); font-size: 11px; }
+.table-change-form input:not([type=checkbox]), .table-change-form select { min-height: 30px; padding: 0 8px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--surface-base); color: var(--ink-primary); }

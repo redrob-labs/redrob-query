@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { Loader } from '@redrob-labs/ui';
 import { Icon } from '../ui/Icon';
 import { useWorkspace } from '../store/WorkspaceProvider';
+import type { AiKeyStatus } from '../api/bridge';
 
 type Feedback = { tone: 'success' | 'error'; message: string } | null;
 
@@ -22,6 +23,17 @@ export function AiSettingsModal() {
   const [key, setKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
+  const [keyStatus, setKeyStatus] = useState<AiKeyStatus | null>(null);
+
+  // Read fresh each time the dialog opens: the person may sign in or out in Redrob Launcher while
+  // this app is open, and the dialog must say what the next AI request would use.
+  useEffect(() => {
+    if (!open || !bridge.aiKeyStatus) return;
+    let cancelled = false;
+    setKeyStatus(null);
+    bridge.aiKeyStatus().then((status) => { if (!cancelled) setKeyStatus(status); }, () => { if (!cancelled) setKeyStatus(null); });
+    return () => { cancelled = true; };
+  }, [open, bridge]);
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
@@ -104,6 +116,15 @@ export function AiSettingsModal() {
         </div>
         <form id="ai-settings-form" className="ai-settings-form" onSubmit={save}>
           <div className="ai-settings-security"><Icon name="shieldCheck" size={24} /><div><strong>Secure by design</strong><p id="ai-settings-description">In the desktop app, your Redrob key is stored in the operating system keychain. It is never added to queries or AI messages.</p></div></div>
+          {keyStatus?.source === 'launcher' ? (
+            <div className="ai-settings-security ai-settings-launcher" data-testid="ai-key-launcher" role="status">
+              <Icon name="check" size={24} />
+              <div>
+                <strong>Signed in with Redrob Launcher</strong>
+                <p>{keyStatus.accountName ? `Workspace: ${keyStatus.accountName}. ` : ''}Sign out in Redrob Launcher. A key saved here is used instead of the shared one.</p>
+              </div>
+            </div>
+          ) : null}
           <label htmlFor="redrob-api-key">Redrob API key</label>
           <input
             ref={inputRef}

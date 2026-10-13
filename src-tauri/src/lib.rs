@@ -26,7 +26,12 @@ pub fn run() {
             commands::disconnect,
             commands::load_metadata,
             commands::execute_query,
+            commands::split_read_only_batch,
+            commands::apply_cell_edits,
+            commands::apply_table_change,
+            commands::primary_key_columns,
             commands::save_ai_secret,
+            commands::ai_key_status,
             commands::ai_chat,
         ])
         .run(tauri::generate_context!())

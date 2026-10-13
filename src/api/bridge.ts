@@ -1,5 +1,6 @@
+import { editableSource } from './editSource';
 import { invoke } from '@tauri-apps/api/core';
-import type {
+import type { TableChange,
   AiRequest,
   AiResponse,
   CellMutation,
@@ -28,9 +29,24 @@ export interface DataBridge {
   testConnection(draft: ConnectionDraft): Promise<ConnectionStatus>;
   loadMetadata(connectionId: string, parentId?: string | null): Promise<MetadataNode[]>;
   executeQuery(request: QueryRequest): Promise<QueryResult>;
+  /** The statements of an all-read-only SQL batch, or null to run the text as one query. Optional: a
+   * bridge without it runs every query whole, as before batches existed. */
+  splitReadOnlyBatch?(query: string): Promise<string[] | null>;
   applyMutations(mutations: CellMutation[]): Promise<MutationResult>;
+  applyTableChange(connectionId: string, change: TableChange): Promise<void>;
   saveAiKey(secret: string): Promise<void>;
+  /** Which key AI requests spend right now. Never the key itself. Optional: a bridge without it
+   * cannot say, and the settings show nothing about the current sign-in. */
+  aiKeyStatus?(): Promise<AiKeyStatus>;
   askAi(request: AiRequest): Promise<AiResponse>;
+}
+
+/** Where the desktop app's Redrob key comes from: its own (`environment`, `keyring`), the computer's
+ * shared one written by Redrob Launcher (`launcher`), or nowhere (`none`). */
+export interface AiKeyStatus {
+  source: 'environment' | 'keyring' | 'launcher' | 'none';
+  accountName?: string;
+  apiKeyName?: string;
 }
 
 const wait = (ms = 180) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -247,6 +263,21 @@ export class DemoBridge implements DataBridge {
     return structuredClone(metadataForProfile(profile).filter((node) => node.parentId === parentId));
   }
 
+  // The demo has no core, so it splits on semicolons outside quotes and accepts the same SELECT/CTE
+  // statements its runner does. The desktop app asks the core instead.
+  async splitReadOnlyBatch(query: string): Promise<string[] | null> {
+    const statements: string[] = []; let current = ''; let quote: string | null = null;
+    for (const character of query) {
+      if (quote) { current += character; if (character === quote) quote = null; continue; }
+      if (character === "'" || character === '"') { quote = character; current += character; continue; }
+      if (character === ';') { if (current.trim()) statements.push(current.trim()); current = ''; continue; }
+      current += character;
+    }
+    if (current.trim()) statements.push(current.trim());
+    const readOnly = statements.every((statement) => /^(select|with)\b/i.test(statement));
+    return statements.length && readOnly ? statements : null;
+  }
+
   async executeQuery(request: QueryRequest): Promise<QueryResult> {
     await wait(340);
     const profile = this.connections.find((item) => item.id === request.connectionId);
@@ -346,6 +377,11 @@ export class DemoBridge implements DataBridge {
     };
   }
 
+  async applyTableChange(_connectionId: string, _change: TableChange): Promise<void> {
+    await wait(80);
+    throw new Error('Creating tables needs a desktop connection; the browser demo has fixed sample tables.');
+  }
+
   async applyMutations(mutations: CellMutation[]): Promise<MutationResult> {
     await wait(260);
     if (!mutations.length) throw new Error('There are no staged changes to apply.');
@@ -361,20 +397,29 @@ export class DemoBridge implements DataBridge {
     const validated = mutations.map((mutation) => {
       if (!expectedTables.includes(mutation.table)) throw new Error('Mutation target does not belong to this demo connection.');
       if (mutation.primaryKey !== 'id') throw new Error('Mutation primary key does not match the demo table schema.');
-      if (mutation.column === 'id') throw new Error('Primary keys cannot be edited.');
+      if (mutation.kind === 'update' || !mutation.kind) { if (mutation.column === 'id') throw new Error('Primary keys cannot be edited.'); }
+      if (mutation.kind === 'insert') {
+        const sourceRows = mutation.table === 'public.orders' ? fixture.orderRows : fixture.customerRows;
+        return { row: Object.fromEntries((mutation.values ?? []).map((item) => [item.column, item.value])), mutation, sourceRows };
+      }
       const identity = `${mutation.table}:${mutation.rowKey}:${mutation.column}`;
       if (seen.has(identity)) throw new Error('The mutation batch contains duplicate cell changes.');
       seen.add(identity);
       const sourceRows = mutation.table === 'public.orders' ? fixture.orderRows : fixture.customerRows;
       const row = sourceRows.find((item) => String(item.id) === mutation.rowKey);
       if (!row) throw new Error(`Row ${mutation.rowKey} no longer exists.`);
+      if (mutation.kind === 'delete') return { row, mutation, sourceRows };
       if (!(mutation.column in row)) throw new Error(`Column ${mutation.column} does not exist.`);
       if (!deepEqual(row[mutation.column], mutation.previousValue)) {
         throw new Error(`Cell ${mutation.column} changed since it was loaded.`);
       }
-      return { row, mutation };
+      return { row, mutation, sourceRows };
     });
-    validated.forEach(({ row, mutation }) => { row[mutation.column] = structuredClone(mutation.nextValue); });
+    validated.forEach(({ row, mutation, sourceRows }) => {
+      if (mutation.kind === 'delete') sourceRows.splice(sourceRows.indexOf(row), 1);
+      else if (mutation.kind === 'insert') sourceRows.push({ ...Object.fromEntries(Object.keys(sourceRows[0] ?? {}).map((key) => [key, null])), id: row.id ?? `demo_${sourceRows.length + 1}`, ...row });
+      else row[mutation.column] = structuredClone(mutation.nextValue);
+    });
     return { applied: validated.length, message: `${validated.length} change${validated.length === 1 ? '' : 's'} applied in demo memory` };
   }
 
@@ -460,7 +505,8 @@ const toWireProfile = (draft: ConnectionDraft): Omit<WireProfile, 'id'> & { id?:
     tls: draft.tls,
     options: draft.kind === 'mongodb' && draft.authSource ? { authSource: draft.authSource } : {},
   },
-  readOnly: true,
+  // Read-only unless the person ticked "Allow edits": the core refuses every write to such a profile.
+  readOnly: draft.readOnly ?? true,
   builtIn: false,
 });
 const fromWireProfile = (profile: WireProfile): ConnectionProfile => ({
@@ -478,7 +524,19 @@ const fromWireProfile = (profile: WireProfile): ConnectionProfile => ({
   state: 'disconnected',
   builtIn: Boolean(profile.builtIn),
   isDemo: Boolean(profile.builtIn),
+  readOnly: profile.readOnly ?? true,
 });
+// Back to the engine's type: a decimal, date or uuid reaches the grid as text and must not be written
+// back as text. Without a known type, the JavaScript type decides.
+const toWireValue = (value: CellValue, wireType?: string): WireValue => {
+  if (value === null) return { type: 'null' };
+  if (typeof value === 'boolean') return { type: 'boolean', value };
+  if (typeof value === 'object') return { type: wireType === 'bson' ? 'bson' : 'json', value };
+  if (wireType === 'float') return { type: 'float', value: Number(value) };
+  if (wireType && wireType !== 'boolean' && wireType !== 'json' && wireType !== 'bson') return { type: wireType, value: String(value) };
+  if (typeof value === 'number') return Number.isInteger(value) ? { type: 'integer', value: String(value) } : { type: 'float', value };
+  return { type: 'text', value };
+};
 const fromWireValue = (cell: WireValue): CellValue => {
   if (cell.type === 'null') return null;
   if (cell.type === 'boolean') return Boolean(cell.value);
@@ -572,6 +630,12 @@ export class TauriBridge implements DataBridge {
     }));
   }
 
+  // The core splits (query::read_only_statements), so the rule for what is one statement and what is
+  // read-only lives in one place, next to the gate that enforces it.
+  async splitReadOnlyBatch(query: string): Promise<string[] | null> {
+    return invoke<string[] | null>('split_read_only_batch', { query });
+  }
+
   async executeQuery(request: QueryRequest): Promise<QueryResult> {
     const page = await invoke<WireResult>('execute_query', { request: {
       connectionId: request.connectionId,
@@ -580,8 +644,11 @@ export class TauriBridge implements DataBridge {
       parameters: [], limit: request.limit ?? 500, offset: request.offset ?? 0, timeoutMs: 30000,
     } });
     const keys = page.columns.map((column, index) => page.columns.findIndex((item) => item.name === column.name) === index ? column.name : `${column.name}_${index + 1}`);
+    const wireTypes = page.columns.map((_, index) => page.rows.map((row) => row[index]?.type).find((type) => type && type !== 'null'));
+    const { editSource, readOnlyReason } = await this.findEditSource(request, page.columns.map((column) => column.name));
     return {
-      columns: page.columns.map((column, index) => ({ key: keys[index], label: column.name, dataType: toDataType(column.dataType), nullable: column.nullable ?? undefined })),
+      ...(editSource ? { editSource } : { readOnlyReason }),
+      columns: page.columns.map((column, index) => ({ key: keys[index], label: column.name, dataType: toDataType(column.dataType), nullable: column.nullable ?? undefined, wireType: wireTypes[index], primaryKey: editSource?.primaryKey === keys[index] || undefined })),
       rows: page.rows.map((row) => Object.fromEntries(keys.map((key, index) => [key, fromWireValue(row[index] ?? { type: 'null' })]))),
       rowCount: page.stats.rowsReturned,
       durationMs: page.stats.elapsedMs,
@@ -593,12 +660,58 @@ export class TauriBridge implements DataBridge {
     };
   }
 
-  async applyMutations(_mutations: CellMutation[]): Promise<MutationResult> {
-    throw new Error('Desktop preview is read-only. Staged editing is available only in the browser demo.');
+  // A result is editable only when its SQL plainly reads one table (see editSource.ts) and that table
+  // has a single-column primary key that the result includes. Anything else stays read-only.
+  // Either the source a result can be written back to, or the plain reason it cannot -- shown under
+  // the grid, so a person knows what would make it editable rather than guessing.
+  private async findEditSource(request: QueryRequest, columnNames: string[]): Promise<{ editSource?: QueryResult['editSource']; readOnlyReason?: string }> {
+    const profile = this.profiles.get(request.connectionId);
+    const kind = profile?.kind;
+    if (!kind) return { readOnlyReason: 'Read-only · the connection is not known' };
+    if (request.language !== 'sql') return { readOnlyReason: 'Read-only · MongoDB results cannot be edited here' };
+    if (kind === 'sqlserver') return { readOnlyReason: 'Read-only · SQL Server editing is not supported' };
+    if ((profile as { readOnly?: boolean }).readOnly !== false) return { readOnlyReason: 'Read-only connection · turn on "Allow edits" in its settings to edit' };
+    const source = editableSource(request.query, kind);
+    if (!source) return { readOnlyReason: 'Read-only · only a plain SELECT from one table, without aliases or joins, can be edited' };
+    try {
+      const keys = await invoke<string[]>('primary_key_columns', { connectionId: request.connectionId, schema: source.schema ?? null, table: source.table });
+      if (keys.length === 0) return { readOnlyReason: `Read-only · ${source.table} has no primary key, so a row cannot be identified` };
+      if (keys.length > 1) return { readOnlyReason: `Read-only · ${source.table} has a key of ${keys.length} columns; only single-column keys can be edited` };
+      if (!columnNames.includes(keys[0])) return { readOnlyReason: `Read-only · include the key column ${keys[0]} in the SELECT to edit` };
+      return { editSource: { ...source, primaryKey: keys[0] } };
+    } catch {
+      return { readOnlyReason: 'Read-only · the table key could not be looked up' };
+    }
+  }
+
+  async applyTableChange(connectionId: string, change: TableChange): Promise<void> {
+    await invoke<void>('apply_table_change', { connectionId, change: { ...change, schema: change.schema || null } });
+  }
+
+  async applyMutations(mutations: CellMutation[]): Promise<MutationResult> {
+    if (!mutations.length) return { applied: 0, message: 'No staged changes.' };
+    const [first] = mutations;
+    const rows = new Map<string, { key: WireValue; changes: { column: string; value: WireValue }[] }>();
+    const deletes = mutations.filter((mutation) => mutation.kind === 'delete').map((mutation) => toWireValue(mutation.keyValue ?? mutation.rowKey, mutation.keyWireType));
+    const inserts = mutations.filter((mutation) => mutation.kind === 'insert').map((mutation) => ({ values: (mutation.values ?? []).map((item) => ({ column: item.column, value: toWireValue(item.value, item.wireType) })) }));
+    for (const mutation of mutations.filter((item) => item.kind !== 'delete' && item.kind !== 'insert')) {
+      const row = rows.get(mutation.rowKey) ?? { key: toWireValue(mutation.keyValue ?? mutation.rowKey, mutation.keyWireType), changes: [] };
+      row.changes.push({ column: mutation.column, value: toWireValue(mutation.nextValue, mutation.wireType) });
+      rows.set(mutation.rowKey, row);
+    }
+    const result = await invoke<{ rowsAffected: number }>('apply_cell_edits', {
+      connectionId: first.connectionId,
+      edits: { schema: first.schema ?? null, table: first.table, primaryKey: first.primaryKey, rows: [...rows.values()], inserts, deletes },
+    });
+    return { applied: mutations.length, message: `Saved ${mutations.length} change${mutations.length === 1 ? '' : 's'} in ${result.rowsAffected} row${result.rowsAffected === 1 ? '' : 's'}.` };
   }
 
   async saveAiKey(secret: string): Promise<void> {
     await invoke<void>('save_ai_secret', { secret });
+  }
+
+  async aiKeyStatus(): Promise<AiKeyStatus> {
+    return invoke<AiKeyStatus>('ai_key_status');
   }
 
   async askAi(request: AiRequest): Promise<AiResponse> {

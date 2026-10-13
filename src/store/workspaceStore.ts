@@ -14,8 +14,9 @@ import type {
   QueryResult,
   QueryTab,
   ToastMessage,
+  TableChange,
 } from '../domain/types';
-import { clearWorkspace, loadWorkspace, loadWorkspacePersistencePreference, MAX_HISTORY_ENTRIES, saveWorkspace, setWorkspacePersistence } from './workspacePersistence';
+import { clearWorkspace, loadWorkspace, loadWorkspacePersistencePreference, MAX_HISTORY_ENTRIES, MAX_PINNED_TABLES, MAX_SAVED_QUERIES, saveWorkspace, setWorkspacePersistence, type PinnedTable, type SavedQuery } from './workspacePersistence';
 
 const postgresStarter = `SELECT
   id,
@@ -64,10 +65,15 @@ interface WorkspaceState {
   tabs: QueryTab[];
   activeTabId: string;
   queryHistory: QueryHistoryEntry[];
+  /** Tables and views pinned to the top of the sidebar, saved with the workspace. */
+  pinnedTables: PinnedTable[];
+  savedQueries: SavedQuery[];
   localPersistenceEnabled: boolean;
   localPersistenceStatus: 'disabled' | 'saved' | 'error';
   localPersistenceMessage: string | null;
   result: QueryResult | null;
+  /** A run of several read-only statements: one result each. `result` is the one shown. */
+  batch: { statements: string[]; results: QueryResult[]; index: number } | null;
   resultRevision: number;
   pageSize: 25 | 50 | 100 | 250;
   pageOffset: number;
@@ -93,6 +99,8 @@ interface WorkspaceState {
    * time the connections panel is collapsed.
    */
   structureTarget: { table: string; schema?: string } | null;
+  /** The New table / Add column form: open for a new table, or for a column on one table. */
+  tableChangeTarget: { mode: 'create' } | { mode: 'add-column'; table: string; schema?: string } | null;
   connectionModalOpen: boolean;
   connectionModalProfileId: string | null;
   commandPaletteOpen: boolean;
@@ -108,19 +116,33 @@ interface WorkspaceState {
   openConnectionModal(profileId?: string): void;
   updateQuery(query: string): void;
   runQuery(queryOverride?: string, offsetOverride?: number): Promise<void>;
+  pageBatchResult(offset: number): Promise<void>;
+  /** Shows another statement's result from the last batch. Refused while edits are staged on this one. */
+  selectBatchResult(index: number): void;
   nextPage(): Promise<void>;
   previousPage(): Promise<void>;
   setPageSize(size: 25 | 50 | 100 | 250): Promise<void>;
   newTab(language?: QueryLanguage): void;
   setTabLanguage(language: QueryLanguage): void;
   closeTab(id: string): void;
+  togglePin(table: string, schema?: string): void;
+  applyTableChange(change: TableChange): Promise<boolean>;
+  closeOtherTabs(id: string): void;
+  closeTabsToRight(id: string): void;
+  duplicateTab(id: string): void;
   setActiveTab(id: string): void;
   restoreHistory(id: string): void;
   clearHistory(connectionId: string): void;
+  // Saved queries: keep the active tab under its name, reopen one in a new tab, delete one.
+  saveActiveQuery(): void;
+  openSavedQuery(id: string): void;
+  deleteSavedQuery(id: string): void;
   clearLocalWorkspace(): void;
   enableLocalWorkspace(): void;
   focusNavigatorSearch(): void;
   stageCell(rowIndex: number, column: string, value: CellValue): void;
+  stageDelete(rowIndex: number): void;
+  stageInsert(values: Record<string, CellValue>): void;
   discardMutation(id: string): void;
   discardAllMutations(): void;
   applyMutations(): Promise<void>;
@@ -128,7 +150,7 @@ interface WorkspaceState {
   useGeneratedQuery(query: string): void;
   addConnection(profile: ConnectionProfile): Promise<void>;
   notify(tone: ToastMessage['tone'], title: string, detail?: string): void;
-  setUi(values: Partial<Pick<WorkspaceState, 'aiOpen' | 'aiSettingsOpen' | 'aiWidth' | 'navigatorOpen' | 'changesOpen' | 'pluginViewId' | 'structureTarget' | 'connectionModalOpen' | 'connectionModalProfileId' | 'commandPaletteOpen'>>): void;
+  setUi(values: Partial<Pick<WorkspaceState, 'aiOpen' | 'aiSettingsOpen' | 'aiWidth' | 'navigatorOpen' | 'changesOpen' | 'pluginViewId' | 'structureTarget' | 'tableChangeTarget' | 'connectionModalOpen' | 'connectionModalProfileId' | 'commandPaletteOpen'>>): void;
   dismissToast(id: string): void;
 }
 
@@ -141,6 +163,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
   let tabSequence = 0;
   let metadataGeneration = 0;
   let queryGeneration = 0;
+  let insertSequence = 0;
   let mutationGeneration = 0;
   let aiGeneration = 0;
   const lifecycleRequests = new Map<string, number>();
@@ -158,7 +181,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
     const persist = () => {
       const state = get();
       if (bridge.mode !== 'desktop' || !state.localPersistenceEnabled) return;
-      const saved = saveWorkspace(state.tabs, state.queryHistory);
+      const saved = saveWorkspace(state.tabs, state.queryHistory, state.pinnedTables, state.savedQueries);
       set({ localPersistenceStatus: saved.ok ? 'saved' : 'error', localPersistenceMessage: saved.message ?? null });
     };
     const clearProfile = (connectionId: string, removeProfile = false) => {
@@ -171,8 +194,8 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         expandedNodes: wasActive ? new Set() : state.expandedNodes,
         tabs: removeProfile ? state.tabs.filter((tab) => tab.connectionId !== connectionId) : state.tabs,
         activeTabId: removeProfile && wasActive ? '' : state.activeTabId,
-        queryHistory: removeProfile ? state.queryHistory.filter((entry) => entry.connectionId !== connectionId) : state.queryHistory,
-        result: wasActive ? null : state.result,
+        queryHistory: removeProfile ? state.queryHistory.filter((entry) => entry.connectionId !== connectionId) : state.queryHistory, pinnedTables: removeProfile ? state.pinnedTables.filter((pin) => pin.connectionId !== connectionId) : state.pinnedTables, savedQueries: removeProfile ? state.savedQueries.filter((entry) => entry.connectionId !== connectionId) : state.savedQueries,
+        result: wasActive ? null : state.result, batch: wasActive ? null : state.batch,
         pageOffset: wasActive ? 0 : state.pageOffset,
         queryStatus: wasActive ? 'idle' : state.queryStatus,
         queryError: wasActive ? null : state.queryError,
@@ -185,12 +208,12 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
     };
     return {
       bridge, initialized: false, startupWarnings: [], connections: [], activeConnectionId: null,
-      metadata: {}, expandedNodes: new Set(), tabs: [], activeTabId: '', queryHistory: [],
+      metadata: {}, expandedNodes: new Set(), tabs: [], activeTabId: '', queryHistory: [], pinnedTables: [], savedQueries: [],
       localPersistenceEnabled: false, localPersistenceStatus: 'disabled', localPersistenceMessage: null,
-      result: null, resultRevision: 0,
+      result: null, batch: null, resultRevision: 0,
       pageSize: 50, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle',
       aiMessages: [welcomeMessage(bridge.mode)], aiStatus: 'idle', aiOpen: true, aiSettingsOpen: false, aiWidth: 330,
-      navigatorOpen: true, navigatorSearchRequest: 0, changesOpen: false, pluginViewId: null, structureTarget: null, connectionModalOpen: false, connectionModalProfileId: null,
+      navigatorOpen: true, navigatorSearchRequest: 0, changesOpen: false, pluginViewId: null, structureTarget: null, tableChangeTarget: null, connectionModalOpen: false, connectionModalProfileId: null,
       commandPaletteOpen: false, toasts: [],
 
       async initialize() {
@@ -203,7 +226,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           const profileWarnings = await warningRequest;
           const preference = bridge.mode === 'desktop' ? loadWorkspacePersistencePreference() : { ok: true, enabled: false };
           const disabledCleanup = bridge.mode === 'desktop' && preference.ok && !preference.enabled ? clearWorkspace() : { ok: true };
-          const restored = bridge.mode === 'desktop' && preference.enabled ? loadWorkspace(connections) : { tabs: [], history: [] };
+          const restored = bridge.mode === 'desktop' && preference.enabled ? loadWorkspace(connections) : { tabs: [], history: [], pins: [], saved: [] };
           const startupWarnings = [...profileWarnings, ...(preference.message ? [preference.message] : []), ...(disabledCleanup.message ? [disabledCleanup.message] : []), ...(restored.warning ? [restored.warning] : [])];
           const persistenceError = preference.ok ? disabledCleanup.ok ? restored.storageError : disabledCleanup.message : preference.message;
           const restoredSequence = restored.tabs.reduce((max, tab) => Math.max(max, Number(tab.id.match(/^query-(\d+)$/)?.[1] ?? 0)), 0);
@@ -211,7 +234,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           const activeConnection = bridge.mode === 'demo' ? connections.find((item) => item.state === 'connected') : undefined;
           const starter = activeConnection ? makeStarterTab(activeConnection, nextTabId()) : null;
           set({
-            connections, startupWarnings, tabs: starter ? [starter] : restored.tabs, queryHistory: restored.history,
+            connections, startupWarnings, tabs: starter ? [starter] : restored.tabs, queryHistory: restored.history, pinnedTables: restored.pins, savedQueries: restored.saved,
             localPersistenceEnabled: Boolean(preference.enabled && !persistenceError),
             localPersistenceStatus: persistenceError ? 'error' : preference.enabled ? 'saved' : 'disabled',
             localPersistenceMessage: persistenceError ?? null,
@@ -259,7 +282,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const tab = existingTab ?? makeStarterTab(connection, nextTabId());
         set((state) => ({
           activeConnectionId: id, metadata: {}, expandedNodes: new Set(), tabs: existingTab ? state.tabs : [...state.tabs, tab], activeTabId: tab.id,
-          result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false,
+          result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false,
           aiMessages: [welcomeMessage(bridge.mode)], aiStatus: 'idle',
         }));
         persist();
@@ -330,7 +353,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         queryGeneration += 1; mutationGeneration += 1;
         set((state) => ({
           tabs: state.tabs.map((tab) => tab.id === state.activeTabId ? { ...tab, query, dirty: true } : tab),
-          result: null, pageOffset: 0, queryStatus: 'idle', queryError: null,
+          result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null,
           mutations: [], mutationStatus: 'idle', changesOpen: false,
         }));
         persist();
@@ -348,11 +371,37 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         mutationGeneration += 1;
         set({ queryStatus: 'loading', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false });
         try {
+          // Several statements: each runs on its own through the same single-statement gate, and the
+          // grid offers a picker. Only an all-read-only batch splits (the core decides, not this code);
+          // anything else goes to executeQuery whole and is refused there as before.
+          const statements = offset === 0 && tab.language === 'sql' && bridge.splitReadOnlyBatch ? await bridge.splitReadOnlyBatch(query) : null;
+          if (statements && statements.length > 1) {
+            const results: QueryResult[] = [];
+            for (const [index, statement] of statements.entries()) {
+              try {
+                const page = await bridge.executeQuery({ connectionId, query: statement, language: tab.language, limit: state.pageSize, offset: 0 });
+                results.push({ ...page, offset: page.offset ?? 0, limit: page.limit ?? state.pageSize });
+              } catch (error) {
+                throw new Error(`Statement ${index + 1} of ${statements.length}: ${asMessage(error)}`);
+              }
+              if (queryGeneration !== generation) return;
+            }
+            if (queryGeneration !== generation || get().activeConnectionId !== connectionId || get().activeTabId !== tab.id) return;
+            const historyEntry: QueryHistoryEntry = { id: `history-${Date.now()}-${Math.random().toString(16).slice(2)}`, connectionId, name: tab.name, language: tab.language, query, executedAt: Date.now() };
+            set((current) => ({
+              result: results[0], batch: { statements, results, index: 0 }, resultRevision: current.resultRevision + 1,
+              pageOffset: 0, queryStatus: 'success',
+              tabs: current.tabs.map((item) => item.id === tab.id ? { ...item, dirty: false, query } : item),
+              queryHistory: [historyEntry, ...current.queryHistory].slice(0, MAX_HISTORY_ENTRIES),
+            }));
+            persist();
+            return;
+          }
           const result = await bridge.executeQuery({ connectionId, query, language: tab.language, limit: state.pageSize, offset });
           if (queryGeneration !== generation || get().activeConnectionId !== connectionId || get().activeTabId !== tab.id) return;
           const historyEntry: QueryHistoryEntry | null = offset === 0 ? { id: `history-${Date.now()}-${Math.random().toString(16).slice(2)}`, connectionId, name: tab.name, language: tab.language, query, executedAt: Date.now() } : null;
           set((current) => ({
-            result: { ...result, offset: result.offset ?? offset, limit: result.limit ?? current.pageSize }, resultRevision: current.resultRevision + 1,
+            result: { ...result, offset: result.offset ?? offset, limit: result.limit ?? current.pageSize }, batch: null, resultRevision: current.resultRevision + 1,
             pageOffset: result.offset ?? offset, queryStatus: 'success',
             tabs: current.tabs.map((item) => item.id === tab.id ? { ...item, dirty: false, query } : item),
             queryHistory: historyEntry ? [historyEntry, ...current.queryHistory].slice(0, MAX_HISTORY_ENTRIES) : current.queryHistory,
@@ -360,12 +409,36 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           persist();
         } catch (error) {
           if (queryGeneration !== generation || get().activeConnectionId !== connectionId || get().activeTabId !== tab.id) return;
-          set({ result: null, pageOffset: offset, queryStatus: 'error', queryError: asMessage(error) });
+          set({ result: null, batch: null, pageOffset: offset, queryStatus: 'error', queryError: asMessage(error) });
         }
       },
-      async nextPage() { const next = get().result?.nextOffset; if (next !== null && next !== undefined) await get().runQuery(undefined, next); },
-      async previousPage() { if (get().pageOffset > 0) await get().runQuery(undefined, Math.max(0, get().pageOffset - get().pageSize)); },
-      async setPageSize(pageSize) { set({ pageSize, pageOffset: 0 }); if (get().result) await get().runQuery(undefined, 0); },
+      async nextPage() { const next = get().result?.nextOffset; if (next === null || next === undefined) return; if (get().batch) await get().pageBatchResult(next); else await get().runQuery(undefined, next); },
+      async previousPage() { if (get().pageOffset <= 0) return; const offset = Math.max(0, get().pageOffset - get().pageSize); if (get().batch) await get().pageBatchResult(offset); else await get().runQuery(undefined, offset); },
+      async setPageSize(pageSize) { set({ pageSize, pageOffset: 0 }); if (!get().result) return; if (get().batch) await get().pageBatchResult(0); else await get().runQuery(undefined, 0); },
+      // Pages one statement of a batch without touching the tab's text, which still holds the batch.
+      async pageBatchResult(offset) {
+        const state = get(); const batch = state.batch; const tab = state.tabs.find((item) => item.id === state.activeTabId); const connectionId = state.activeConnectionId;
+        if (!batch || !tab || !connectionId) return;
+        const generation = ++queryGeneration; mutationGeneration += 1;
+        set({ queryStatus: 'loading', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false });
+        try {
+          const page = await bridge.executeQuery({ connectionId, query: batch.statements[batch.index], language: tab.language, limit: get().pageSize, offset });
+          if (queryGeneration !== generation || get().batch !== batch) return;
+          const result: QueryResult = { ...page, offset: page.offset ?? offset, limit: page.limit ?? get().pageSize };
+          set((current) => ({ result, batch: { ...batch, results: batch.results.map((item, index) => index === batch.index ? result : item) }, pageOffset: result.offset ?? offset, queryStatus: 'success', resultRevision: current.resultRevision + 1 }));
+        } catch (error) {
+          if (queryGeneration !== generation) return;
+          set({ queryStatus: 'error', queryError: asMessage(error) });
+        }
+      },
+      selectBatchResult(index) {
+        const state = get(); const batch = state.batch;
+        if (!batch || index < 0 || index >= batch.results.length || index === batch.index || state.mutations.length) return;
+        // Keep what the shown result became (edits applied in place) before switching away from it.
+        const results = batch.results.map((item, position) => position === batch.index && state.result ? state.result : item);
+        queryGeneration += 1; mutationGeneration += 1;
+        set((current) => ({ batch: { ...batch, results, index }, result: results[index], pageOffset: results[index].offset ?? 0, queryStatus: 'success', queryError: null, mutationStatus: 'idle', changesOpen: false, resultRevision: current.resultRevision + 1 }));
+      },
 
       newTab(language) {
         const state = get(); const connection = state.connections.find((item) => item.id === state.activeConnectionId); if (!connection) return;
@@ -373,7 +446,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         const connectionTabs = state.tabs.filter((tab) => tab.connectionId === connection.id);
         const nextTab: QueryTab = { id, connectionId: connection.id, name: `Untitled ${connectionTabs.length + 1}`, language: language === compatibleLanguage ? language : compatibleLanguage, query: starter.query, dirty: false };
         queryGeneration += 1; mutationGeneration += 1;
-        set({ tabs: [...state.tabs, nextTab], activeTabId: id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+        set({ tabs: [...state.tabs, nextTab], activeTabId: id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
       },
       setTabLanguage(language) {
         const state = get(); const connection = state.connections.find((item) => item.id === state.activeConnectionId); if (!connection) return;
@@ -381,18 +454,63 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         if (language !== compatibleLanguage) return;
         set((current) => ({ tabs: current.tabs.map((tab) => tab.id === current.activeTabId ? { ...tab, language, dirty: true } : tab) })); persist();
       },
+      // Run the form's change, then reload the object tree so the new table or column shows.
+      async applyTableChange(change) {
+        const connectionId = get().activeConnectionId; if (!connectionId) return false;
+        try {
+          await bridge.applyTableChange(connectionId, change);
+          get().notify('success', change.kind === 'create_table' ? 'Table created' : 'Column added', change.kind === 'create_table' ? change.table : `${change.table}.${change.column.name}`);
+          await get().loadNode(null, true);
+          return true;
+        } catch (error) {
+          get().notify('error', change.kind === 'create_table' ? 'Could not create the table' : 'Could not add the column', asMessage(error));
+          return false;
+        }
+      },
+      togglePin(table, schema) {
+        const state = get(); const connectionId = state.activeConnectionId; if (!connectionId) return;
+        const same = (pin: PinnedTable) => pin.connectionId === connectionId && pin.table === table && (pin.schema ?? '') === (schema ?? '');
+        const pinnedTables = state.pinnedTables.some(same) ? state.pinnedTables.filter((pin) => !same(pin)) : [...state.pinnedTables, { connectionId, table, ...(schema ? { schema } : {}) }].slice(0, MAX_PINNED_TABLES);
+        set({ pinnedTables }); persist();
+      },
       closeTab(id) {
         const state = get(); const target = state.tabs.find((tab) => tab.id === id); if (!target) return;
         const connectionTabs = state.tabs.filter((tab) => tab.connectionId === target.connectionId); if (connectionTabs.length === 1) return;
         const tabs = state.tabs.filter((tab) => tab.id !== id); if (state.activeTabId !== id) { set({ tabs }); persist(); return; }
         const next = tabs.filter((tab) => tab.connectionId === target.connectionId).at(-1)!; queryGeneration += 1; mutationGeneration += 1;
-        set({ tabs, activeTabId: next.id, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+        set({ tabs, activeTabId: next.id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+      },
+      // The tab menu (Beekeeper's CoreTabHeader). Each acts within the tab's own connection, the only
+      // tabs the strip shows, and keeps the chosen tab: a connection never ends up with no tab.
+      closeOtherTabs(id) {
+        const state = get(); const target = state.tabs.find((tab) => tab.id === id); if (!target) return;
+        const tabs = state.tabs.filter((tab) => tab.connectionId !== target.connectionId || tab.id === id);
+        if (tabs.length === state.tabs.length) return;
+        if (state.activeTabId === id) { set({ tabs }); persist(); return; }
+        queryGeneration += 1; mutationGeneration += 1;
+        set({ tabs, activeTabId: id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+      },
+      closeTabsToRight(id) {
+        const state = get(); const target = state.tabs.find((tab) => tab.id === id); if (!target) return;
+        const siblings = state.tabs.filter((tab) => tab.connectionId === target.connectionId);
+        const doomed = new Set(siblings.slice(siblings.indexOf(target) + 1).map((tab) => tab.id)); if (!doomed.size) return;
+        const tabs = state.tabs.filter((tab) => !doomed.has(tab.id));
+        if (!doomed.has(state.activeTabId ?? '')) { set({ tabs }); persist(); return; }
+        queryGeneration += 1; mutationGeneration += 1;
+        set({ tabs, activeTabId: id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
+      },
+      duplicateTab(id) {
+        const state = get(); const index = state.tabs.findIndex((tab) => tab.id === id); if (index < 0) return;
+        const source = state.tabs[index]; const copy: QueryTab = { ...source, id: nextTabId(), name: `${source.name} copy`, dirty: true };
+        const tabs = [...state.tabs.slice(0, index + 1), copy, ...state.tabs.slice(index + 1)];
+        queryGeneration += 1; mutationGeneration += 1;
+        set({ tabs, activeTabId: copy.id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false }); persist();
       },
       setActiveTab(activeTabId) {
         const state = get(); const tab = state.tabs.find((item) => item.id === activeTabId);
         if (!tab || tab.connectionId !== state.activeConnectionId || activeTabId === state.activeTabId) return;
         queryGeneration += 1; mutationGeneration += 1;
-        set({ activeTabId, result: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false });
+        set({ activeTabId, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], mutationStatus: 'idle', changesOpen: false });
       },
       restoreHistory(id) {
         const state = get();
@@ -403,12 +521,37 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         queryGeneration += 1; mutationGeneration += 1;
         set((current) => ({
           tabs: current.tabs.map((tab) => tab.id === current.activeTabId ? { ...tab, query: entry.query, language: entry.language, name: entry.name, dirty: true } : tab),
-          result: null, pageOffset: 0, queryStatus: 'idle', queryError: null,
+          result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null,
           mutations: [], mutationStatus: 'idle', changesOpen: false,
         }));
         persist();
       },
       clearHistory(connectionId) { set((state) => ({ queryHistory: state.queryHistory.filter((entry) => entry.connectionId !== connectionId) })); persist(); },
+      // Saving keys on the tab's name within its connection: saving again under the same name updates
+      // that entry instead of piling up copies, which is what "Save" means in an editor.
+      saveActiveQuery() {
+        const state = get(); const tab = state.tabs.find((item) => item.id === state.activeTabId);
+        if (!tab || !tab.query.trim()) return;
+        const existing = state.savedQueries.find((entry) => entry.connectionId === tab.connectionId && entry.name === tab.name);
+        const entry: SavedQuery = { id: existing?.id ?? `saved-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, connectionId: tab.connectionId, name: tab.name, language: tab.language, query: tab.query, savedAt: Date.now() };
+        const others = state.savedQueries.filter((item) => item.id !== entry.id);
+        if (!existing && others.length >= MAX_SAVED_QUERIES) { get().notify('error', 'Could not save the query', `A connection can keep at most ${MAX_SAVED_QUERIES} saved queries. Delete one first.`); return; }
+        set({ savedQueries: [entry, ...others], tabs: state.tabs.map((item) => item.id === tab.id ? { ...item, dirty: false } : item) });
+        persist();
+        get().notify('success', existing ? 'Saved query updated' : 'Query saved', tab.name);
+      },
+      openSavedQuery(id) {
+        const state = get(); const entry = state.savedQueries.find((item) => item.id === id);
+        if (!entry || entry.connectionId !== state.activeConnectionId) return;
+        // Already open under the same name: switch to it rather than open a duplicate.
+        const open = state.tabs.find((tab) => tab.connectionId === entry.connectionId && tab.name === entry.name && tab.query === entry.query);
+        if (open) { get().setActiveTab(open.id); return; }
+        const tab: QueryTab = { id: nextTabId(), connectionId: entry.connectionId, name: entry.name, language: entry.language, query: entry.query, dirty: false };
+        queryGeneration += 1; mutationGeneration += 1;
+        set({ tabs: [...state.tabs, tab], activeTabId: tab.id, result: null, batch: null, pageOffset: 0, queryStatus: 'idle', queryError: null, mutations: [], changesOpen: false });
+        persist();
+      },
+      deleteSavedQuery(id) { set((state) => ({ savedQueries: state.savedQueries.filter((entry) => entry.id !== id) })); persist(); },
       clearLocalWorkspace() {
         const disabled = setWorkspacePersistence(false);
         set({ queryHistory: [], localPersistenceEnabled: false, localPersistenceStatus: disabled.ok ? 'disabled' : 'error', localPersistenceMessage: disabled.message ?? null });
@@ -430,8 +573,24 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
         if (!row || !source || !state.activeConnectionId || column === source.primaryKey) return;
         const rowKey = String(row[source.primaryKey]); if (!rowKey) return;
         const mutationId = `${rowKey}-${column}`; const existing = state.mutations.find((item) => item.id === mutationId); const previousValue = existing?.previousValue ?? row[column];
-        const mutations = [...state.mutations.filter((item) => item.id !== mutationId), { id: mutationId, connectionId: state.activeConnectionId, table: source.table, primaryKey: source.primaryKey, rowKey, column, previousValue, nextValue: value }];
+        const mutations = [...state.mutations.filter((item) => item.id !== mutationId), { id: mutationId, connectionId: state.activeConnectionId, table: source.table, schema: source.schema, primaryKey: source.primaryKey, rowKey, column, previousValue, nextValue: value, keyValue: row[source.primaryKey], keyWireType: state.result?.columns.find((item) => item.key === source.primaryKey)?.wireType, wireType: state.result?.columns.find((item) => item.key === column)?.wireType }];
         set({ mutations, changesOpen: true });
+      },
+      // Deleting a row replaces any edits staged on it: the core refuses a row both edited and deleted.
+      stageDelete(rowIndex) {
+        const state = get(); const row = state.result?.rows[rowIndex]; const source = state.result?.editSource;
+        if (!row || !source || !state.activeConnectionId) return;
+        const rowKey = String(row[source.primaryKey]); if (!rowKey) return;
+        const deletion: CellMutation = { id: `${rowKey}-delete`, kind: 'delete', connectionId: state.activeConnectionId, table: source.table, schema: source.schema, primaryKey: source.primaryKey, rowKey, column: '', previousValue: null, nextValue: null, keyValue: row[source.primaryKey], keyWireType: state.result?.columns.find((item) => item.key === source.primaryKey)?.wireType };
+        set({ mutations: [...state.mutations.filter((item) => item.rowKey !== rowKey), deletion], changesOpen: true });
+      },
+      stageInsert(values) {
+        const state = get(); const source = state.result?.editSource; const columns = state.result?.columns ?? [];
+        const filled = Object.entries(values).map(([column, value]) => ({ column, value, wireType: columns.find((item) => item.key === column)?.wireType }));
+        if (!source || !state.activeConnectionId || !filled.length) return;
+        insertSequence += 1; const rowKey = `new-${insertSequence}`;
+        const insert: CellMutation = { id: rowKey, kind: 'insert', connectionId: state.activeConnectionId, table: source.table, schema: source.schema, primaryKey: source.primaryKey, rowKey, column: '', previousValue: null, nextValue: null, values: filled };
+        set({ mutations: [...state.mutations, insert], changesOpen: true });
       },
       discardMutation(id) { set((state) => ({ mutations: state.mutations.filter((item) => item.id !== id) })); },
       discardAllMutations() { mutationGeneration += 1; set({ mutations: [], changesOpen: false, mutationStatus: 'idle' }); },
@@ -448,7 +607,7 @@ export const createWorkspaceStore = (bridge: DataBridge): UseBoundStore<StoreApi
           set((current) => {
             const remainingMutations = current.mutations.filter((mutation) => !submittedMutations.has(mutation));
             return { mutationStatus: 'success', mutations: remainingMutations, changesOpen: remainingMutations.length > 0,
-              result: current.result ? { ...current.result, rows: current.result.rows.map((row) => { const primaryKey = current.result?.editSource?.primaryKey; const changes = primaryKey ? mutations.filter((change) => change.rowKey === String(row[primaryKey])) : []; return changes.reduce((updated, change) => ({ ...updated, [change.column]: change.nextValue }), row); }) } : null,
+              result: current.result ? { ...current.result, rows: current.result.rows.filter((row) => { const primaryKey = current.result?.editSource?.primaryKey; return !primaryKey || !mutations.some((change) => change.kind === 'delete' && change.rowKey === String(row[primaryKey])); }).map((row) => { const primaryKey = current.result?.editSource?.primaryKey; const changes = primaryKey ? mutations.filter((change) => change.rowKey === String(row[primaryKey])) : []; return changes.reduce((updated, change) => ({ ...updated, [change.column]: change.nextValue }), row); }) } : null,
               toasts: [...current.toasts, { id: toastId(), tone: 'success', title: 'Changes applied', detail: result.message }],
             };
           });

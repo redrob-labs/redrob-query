@@ -2,6 +2,7 @@
 //
 // Supplies a mounted plugin view with the host context the application can answer from.
 
+import { Icon } from '../ui/Icon';
 import { useCallback, useMemo, useRef } from 'react';
 
 import type { DatabaseKind } from '../domain/types';
@@ -100,7 +101,7 @@ export function PluginWorkspace({ viewKey, onClose, plugins: injected }: PluginW
           This view is not available: <code>{viewKey}</code>
         </p>
         <button type="button" onClick={onClose}>
-          Back to the query workspace
+          <Icon name="arrowLeft" /> Back to the query workspace
         </button>
       </section>
     );
@@ -120,7 +121,7 @@ export function PluginWorkspace({ viewKey, onClose, plugins: injected }: PluginW
           {found.plugin.manifest.description ?? 'This view has nothing to display yet.'}
         </p>
         <button type="button" onClick={onClose}>
-          Back to the query workspace
+          <Icon name="arrowLeft" /> Back to the query workspace
         </button>
       </section>
     );

@@ -2,6 +2,7 @@
 //
 // Mounts one plugin view in an iframe and binds a PluginHost to it.
 
+import { Icon } from '../ui/Icon';
 import { useEffect, useRef, useState } from 'react';
 
 import { PluginHost, type PluginHostContext } from './host';
@@ -73,7 +74,7 @@ export function PluginView({ manifest, view, resolveEntry, context, onClose, onT
         </span>
         {onClose ? (
           <button type="button" className="plugin-view-close" onClick={onClose} aria-label="Close plugin view">
-            ×
+            <Icon name="close" />
           </button>
         ) : null}
       </header>

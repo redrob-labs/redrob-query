@@ -1,12 +1,15 @@
 //! Database and AI runtime for Redrob Query.
 
 pub mod ai;
+pub mod cell_edits;
 pub mod connection;
+pub mod ddl;
 pub mod error;
 pub mod models;
 pub(crate) mod profile_store;
 pub mod query;
 pub mod secret;
+pub mod shared_account;
 
 pub use connection::{DataService, RemoveProfileOutcome, SaveProfileOutcome};
 pub use error::{DataError, Result};

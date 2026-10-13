@@ -159,6 +159,19 @@ describe('DemoBridge', () => {
 describe('TauriBridge wire adapter', () => {
   beforeEach(() => invokeMock.mockReset());
 
+  it('saves a connection read-only unless edits are allowed, and keeps what the core returns', async () => {
+    const saved = (readOnly: boolean) => ({ profile: { id: 'b1e5165c-a925-4f9c-b065-e395bbd433b4', name: 'Local', kind: 's_q_lite', config: { filePath: '/tmp/a.db', tls: false, options: {} }, readOnly, builtIn: false }, warning: null });
+    const bridge = new TauriBridge();
+    invokeMock.mockResolvedValueOnce(saved(true));
+    const quiet = await bridge.saveConnection({ name: 'Local', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/a.db', tls: false });
+    expect(invokeMock.mock.calls[0][1].profile.readOnly).toBe(true);
+    expect(quiet.profile.readOnly).toBe(true);
+    invokeMock.mockResolvedValueOnce(saved(false));
+    const writable = await bridge.saveConnection({ name: 'Local', kind: 'sqlite', host: '', port: 0, database: '', username: '', filePath: '/tmp/a.db', tls: false, readOnly: false });
+    expect(invokeMock.mock.calls[1][1].profile.readOnly).toBe(false);
+    expect(writable.profile.readOnly).toBe(false);
+  });
+
   it('saves nested connection config and its secret through one atomic command', async () => {
     invokeMock.mockResolvedValueOnce({
       profile: {
@@ -232,13 +245,64 @@ describe('TauriBridge wire adapter', () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  it('rejects desktop mutations without invoking native commands', async () => {
+  it('says why a desktop result cannot be edited, and makes it editable when it can', async () => {
+    const id = 'c1e5165c-a925-4f9c-b065-e395bbd433b4';
+    let keys: string[] = ['id']; let readOnly = false;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'list_connections') return [{ id, name: 'Local', kind: 's_q_lite', config: { filePath: '/tmp/a.db', tls: false, options: {} }, readOnly, builtIn: false }];
+      if (command === 'execute_query') return { columns: [{ name: 'id', dataType: 'INTEGER' }, { name: 'name', dataType: 'TEXT' }], rows: [[{ type: 'integer', value: '1' }, { type: 'text', value: 'Ann' }]], stats: { rowsReturned: 1, elapsedMs: 1 } };
+      if (command === 'primary_key_columns') return keys;
+      return [];
+    });
+    const run = async (query: string) => { const bridge = new TauriBridge(); await bridge.listConnections(); return bridge.executeQuery({ connectionId: id, language: 'sql', query }); };
+
+    expect((await run('SELECT id, name FROM people')).editSource).toEqual({ table: 'people', primaryKey: 'id' });
+    expect((await run('SELECT p.name AS who FROM people p')).readOnlyReason).toMatch(/plain SELECT from one table/);
+    keys = []; expect((await run('SELECT * FROM people')).readOnlyReason).toMatch(/people has no primary key/);
+    keys = ['a', 'b']; expect((await run('SELECT * FROM people')).readOnlyReason).toMatch(/key of 2 columns/);
+    keys = ['uid']; expect((await run('SELECT * FROM people')).readOnlyReason).toMatch(/include the key column uid/);
+    readOnly = true; keys = ['id']; expect((await run('SELECT * FROM people')).readOnlyReason).toMatch(/Allow edits/);
+  });
+
+  it('sends a staged new row as typed values, leaving out what was not filled in', async () => {
+    invokeMock.mockResolvedValueOnce({ rowsAffected: 1, elapsedMs: 2, committed: true });
     const bridge = new TauriBridge();
-    await expect(bridge.applyMutations([{
-      id: 'blocked-edit', connectionId: 'connection-1', table: 'customers', primaryKey: 'id',
-      rowKey: 'row-1', column: 'email', previousValue: 'before@example.test', nextValue: 'after@example.test',
-    }])).rejects.toThrow('Desktop preview is read-only');
-    expect(invokeMock).not.toHaveBeenCalled();
+    await bridge.applyMutations([{ id: 'new-1', kind: 'insert', connectionId: 'connection-1', table: 'people', primaryKey: 'id', rowKey: 'new-1', column: '', previousValue: null, nextValue: null,
+      values: [{ column: 'name', value: 'Cy', wireType: 'text' }, { column: 'mrr', value: '9.50', wireType: 'decimal' }] }]);
+    expect(invokeMock.mock.calls[0][1].edits).toEqual({ schema: null, table: 'people', primaryKey: 'id', rows: [],
+      inserts: [{ values: [{ column: 'name', value: { type: 'text', value: 'Cy' } }, { column: 'mrr', value: { type: 'decimal', value: '9.50' } }] }], deletes: [] });
+  });
+
+  it('sends a staged row delete as a typed key, apart from the cell edits', async () => {
+    invokeMock.mockResolvedValueOnce({ rowsAffected: 2, elapsedMs: 3, committed: true });
+    const bridge = new TauriBridge();
+    const base = { connectionId: 'connection-1', table: 'people', primaryKey: 'id', previousValue: null, keyWireType: 'integer' };
+    await bridge.applyMutations([
+      { ...base, id: '1-name', rowKey: '1', keyValue: 1, column: 'name', nextValue: 'Ann Lee', wireType: 'text' },
+      { ...base, id: '2-delete', kind: 'delete', rowKey: '2', keyValue: 2, column: '', nextValue: null },
+    ]);
+    expect(invokeMock.mock.calls[0][1].edits).toEqual({ schema: null, table: 'people', primaryKey: 'id',
+      rows: [{ key: { type: 'integer', value: '1' }, changes: [{ column: 'name', value: { type: 'text', value: 'Ann Lee' } }] }],
+      inserts: [], deletes: [{ type: 'integer', value: '2' }] });
+  });
+
+  it('sends staged edits as one typed change set, grouped by row', async () => {
+    invokeMock.mockResolvedValueOnce({ rowsAffected: 2, elapsedMs: 3, committed: true });
+    const bridge = new TauriBridge();
+    const base = { connectionId: 'connection-1', schema: 'public', table: 'customers', primaryKey: 'id', previousValue: null };
+    const result = await bridge.applyMutations([
+      { ...base, id: 'a', rowKey: '7', keyValue: 7, keyWireType: 'integer', column: 'email', nextValue: 'a@example.test', wireType: 'text' },
+      { ...base, id: 'b', rowKey: '7', keyValue: 7, keyWireType: 'integer', column: 'mrr', nextValue: '12.50', wireType: 'decimal' },
+      { ...base, id: 'c', rowKey: '8', keyValue: 8, keyWireType: 'integer', column: 'active', nextValue: null, wireType: 'boolean' },
+    ]);
+    expect(invokeMock).toHaveBeenCalledWith('apply_cell_edits', {
+      connectionId: 'connection-1',
+      edits: { schema: 'public', table: 'customers', primaryKey: 'id', rows: [
+        { key: { type: 'integer', value: '7' }, changes: [{ column: 'email', value: { type: 'text', value: 'a@example.test' } }, { column: 'mrr', value: { type: 'decimal', value: '12.50' } }] },
+        { key: { type: 'integer', value: '8' }, changes: [{ column: 'active', value: { type: 'null' } }] },
+      ], inserts: [], deletes: [] },
+    });
+    expect(result.message).toBe('Saved 3 changes in 2 rows.');
   });
 
   it('saves the Redrob key through secure desktop storage', async () => {
