@@ -79,7 +79,7 @@ Desktop results contain no editable source identity. Browser demo relational fix
 
 ## AI path
 
-The renderer may send only prompt, optional active query, database kind, and explicit query language. Rust rejects unknown fields and constructs the provider model, system instruction, messages, endpoint, and authorization itself. The API key comes from nonempty `REDROB_API_KEY` or the OS keyring and is used only as the HTTPS bearer credential.
+The renderer may send only prompt, optional active query, database kind, and explicit query language. Rust rejects unknown fields and constructs the provider model, system instruction, messages, endpoint, and authorization itself. The API key comes from nonempty `REDROB_API_KEY`, then the OS keyring, then Redrob Launcher's shared `account.json` (`crates/redrob-core/src/shared_account.rs`, read on every request) and is used only as the HTTPS bearer credential.
 
 ## Deliberate boundaries
 

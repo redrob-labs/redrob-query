@@ -34,7 +34,7 @@ use crate::{
     ConnectionStatus, DEMO_PROFILE_ID, DataError, DataValue, DatabaseKind, MetadataKind,
     MetadataNode, MetadataRequest, MutationPlan, MutationResult, MutationRisk, QueryClassification,
     QueryColumn, QueryLanguage, QueryRequest, QueryResultPage, QueryStats, Result,
-    ai::{AI_SECRET_ID, AiClient, build_assistant_chat_request},
+    ai::{AI_SECRET_ID, AiClient, AiKeyStatus, build_assistant_chat_request},
     profile_store::{
         JournalOperation, JournalPhase, PersistencePhase, ProfileJournal, ProfileRepository,
         RepositoryOpenError, deserialize_journal, profiles_from_map, reconcile, remove_journal,
@@ -1086,6 +1086,11 @@ impl DataService {
 
     pub async fn ai_chat(&self, input: AiAssistantRequest) -> Result<AiChatResponse> {
         self.ai.chat(build_assistant_chat_request(&input)?).await
+    }
+
+    /// Which key AI requests would spend right now, for the settings surface. Never the key itself.
+    pub fn ai_key_status(&self) -> AiKeyStatus {
+        self.ai.key_status()
     }
 
     async fn profile(&self, id: Uuid) -> Result<ConnectionProfile> {

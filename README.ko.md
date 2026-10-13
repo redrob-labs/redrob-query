@@ -137,7 +137,7 @@ cargo test --locked -p redrob-core --all-features -- --ignored
 
 ## Redrob AI 설정
 
-데스크톱 앱의 **Redrob 설정**에서 키를 OS 키링에 저장하세요. 개발 중에는 비어 있지 않은 `REDROB_API_KEY`가 저장된 키보다 우선합니다. 네이티브 클라이언트는 다음을 호출합니다.
+데스크톱 앱의 **Redrob 설정**에서 키를 OS 키링에 저장하세요. 개발 중에는 비어 있지 않은 `REDROB_API_KEY`가 저장된 키보다 우선합니다. 둘 다 없으면 Redrob Launcher가 이 컴퓨터에 남긴 공유 로그인(`$XDG_CONFIG_HOME/redrob-shared`, `~/Library/Application Support/ai.redrob.shared`, `%APPDATA%\Redrob\Shared` 의 `account.json`, `REDROB_SHARED_DIR`로 디렉터리 교체)을 요청마다 새로 읽어 쓰고, 파일을 쓰지는 않습니다. 이때 Redrob 설정에는 **Redrob Launcher로 로그인됨**이 표시됩니다. 네이티브 클라이언트는 다음을 호출합니다.
 
 ```text
 https://console.redrob.ai/api/backend/v1/chat/completions
