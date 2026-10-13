@@ -165,6 +165,31 @@ describe('Redrob Query workspace', () => {
     expect(document.body).not.toHaveTextContent(secret);
   });
 
+  it('says when the desktop key comes from Redrob Launcher, read fresh on every open', async () => {
+    const user = userEvent.setup();
+    const bridge = desktopBridge();
+    const aiKeyStatus = vi.fn()
+      .mockResolvedValueOnce({ source: 'launcher', accountName: 'Acme', apiKeyName: 'Redrob Launcher' })
+      .mockResolvedValueOnce({ source: 'none' });
+    bridge.aiKeyStatus = aiKeyStatus;
+    render(<App bridge={bridge} />);
+    await screen.findByTestId('desktop-banner');
+
+    await user.click(screen.getByTestId('open-ai-settings-header'));
+    const launcher = await screen.findByTestId('ai-key-launcher');
+    expect(launcher).toHaveTextContent('Signed in with Redrob Launcher');
+    expect(launcher).toHaveTextContent('Workspace: Acme');
+    expect(launcher).toHaveTextContent('Sign out in Redrob Launcher');
+    // Only the names are shown; the dialog has no disconnect for a key it does not own.
+    expect(screen.queryByRole('button', { name: /disconnect|clear/i })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('close-ai-settings'));
+
+    // Signed out in the launcher between two opens: the second read says so.
+    await user.click(screen.getByTestId('open-ai-settings-header'));
+    await waitFor(() => expect(aiKeyStatus).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('ai-key-launcher')).not.toBeInTheDocument();
+  });
+
   it('generates a revenue query with AI and places it in the editor', async () => {
     const user = await renderWorkspace();
     const input = screen.getByTestId('ai-input');

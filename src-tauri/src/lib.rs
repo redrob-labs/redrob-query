@@ -31,6 +31,7 @@ pub fn run() {
             commands::apply_table_change,
             commands::primary_key_columns,
             commands::save_ai_secret,
+            commands::ai_key_status,
             commands::ai_chat,
         ])
         .run(tauri::generate_context!())

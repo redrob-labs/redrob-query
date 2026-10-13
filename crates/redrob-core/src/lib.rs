@@ -9,6 +9,7 @@ pub mod models;
 pub(crate) mod profile_store;
 pub mod query;
 pub mod secret;
+pub mod shared_account;
 
 pub use connection::{DataService, RemoveProfileOutcome, SaveProfileOutcome};
 pub use error::{DataError, Result};

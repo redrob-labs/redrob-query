@@ -35,7 +35,18 @@ export interface DataBridge {
   applyMutations(mutations: CellMutation[]): Promise<MutationResult>;
   applyTableChange(connectionId: string, change: TableChange): Promise<void>;
   saveAiKey(secret: string): Promise<void>;
+  /** Which key AI requests spend right now. Never the key itself. Optional: a bridge without it
+   * cannot say, and the settings show nothing about the current sign-in. */
+  aiKeyStatus?(): Promise<AiKeyStatus>;
   askAi(request: AiRequest): Promise<AiResponse>;
+}
+
+/** Where the desktop app's Redrob key comes from: its own (`environment`, `keyring`), the computer's
+ * shared one written by Redrob Launcher (`launcher`), or nowhere (`none`). */
+export interface AiKeyStatus {
+  source: 'environment' | 'keyring' | 'launcher' | 'none';
+  accountName?: string;
+  apiKeyName?: string;
 }
 
 const wait = (ms = 180) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -697,6 +708,10 @@ export class TauriBridge implements DataBridge {
 
   async saveAiKey(secret: string): Promise<void> {
     await invoke<void>('save_ai_secret', { secret });
+  }
+
+  async aiKeyStatus(): Promise<AiKeyStatus> {
+    return invoke<AiKeyStatus>('ai_key_status');
   }
 
   async askAi(request: AiRequest): Promise<AiResponse> {

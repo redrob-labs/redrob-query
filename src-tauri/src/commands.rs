@@ -148,6 +148,13 @@ pub async fn save_ai_secret(service: State<'_, DataService>, secret: String) -> 
 }
 
 #[tauri::command]
+pub async fn ai_key_status(
+    service: State<'_, DataService>,
+) -> Result<redrob_core::ai::AiKeyStatus, String> {
+    Ok(service.ai_key_status())
+}
+
+#[tauri::command]
 pub async fn ai_chat(
     service: State<'_, DataService>,
     request: AiAssistantRequest,

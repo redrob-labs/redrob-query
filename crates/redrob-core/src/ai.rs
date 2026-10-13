@@ -5,13 +5,13 @@ use std::{sync::Arc, time::Duration};
 use futures_util::StreamExt;
 use reqwest::{Client, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::{
     AiAssistantRequest, AiChatRequest, AiChatResponse, AiMessage, AiRole, AiUsage, DataError,
-    DatabaseKind, QueryLanguage, Result, secret::SecretStore,
+    DatabaseKind, QueryLanguage, Result, secret::SecretStore, shared_account::read_shared_account,
 };
 
 pub const REDROB_API_BASE: &str = "https://console.redrob.ai/api/backend/v1";
@@ -103,6 +103,10 @@ pub struct AiClient {
     secrets: Arc<dyn SecretStore>,
     #[cfg(test)]
     api_key_override: Option<SecretString>,
+    /// Tests cannot set `REDROB_SHARED_DIR` (the process environment is shared and `set_var` is
+    /// unsafe), so they point at a shared file directly.
+    #[cfg(test)]
+    shared_account_override: Option<std::path::PathBuf>,
 }
 
 impl AiClient {
@@ -124,19 +128,22 @@ impl AiClient {
             secrets,
             #[cfg(test)]
             api_key_override: None,
+            #[cfg(test)]
+            shared_account_override: None,
         }
     }
 
     pub async fn chat(&self, request: AiChatRequest) -> Result<AiChatResponse> {
         validate_request(&request)?;
-        let api_key = self.api_key()?;
+        let credential = self.credential()?;
+        let endpoint = credential.endpoint.as_deref().unwrap_or(&self.endpoint);
         let mut last_error = DataError::AiUnavailable;
 
         for attempt in 0..MAX_ATTEMPTS {
             let response = self
                 .client
-                .post(&self.endpoint)
-                .bearer_auth(api_key.expose_secret())
+                .post(endpoint)
+                .bearer_auth(credential.api_key.expose_secret())
                 .json(&request)
                 .send()
                 .await;
@@ -168,19 +175,114 @@ impl AiClient {
         Err(last_error)
     }
 
-    fn api_key(&self) -> Result<SecretString> {
+    /// Where the app's key comes from right now, for the settings surface. Reads the shared file
+    /// fresh: the person may sign in or out in Redrob Launcher while this app is open.
+    #[must_use]
+    pub fn key_status(&self) -> AiKeyStatus {
+        match self.credential() {
+            Ok(credential) => credential.status,
+            Err(_) => AiKeyStatus {
+                source: AiKeySource::None,
+                account_name: None,
+                api_key_name: None,
+            },
+        }
+    }
+
+    /// The key to spend and where: this app's own key wins (`REDROB_API_KEY`, then the keyring),
+    /// and the computer's shared Redrob Launcher key is the fallback.
+    fn credential(&self) -> Result<Credential> {
         #[cfg(test)]
         if let Some(value) = self.api_key_override.as_ref() {
-            return Ok(value.clone());
+            return Ok(Credential::own(value.clone(), AiKeySource::Environment));
         }
         if let Ok(value) = std::env::var("REDROB_API_KEY")
             && !value.trim().is_empty()
         {
-            return Ok(SecretString::from(value));
+            return Ok(Credential::own(
+                SecretString::from(value),
+                AiKeySource::Environment,
+            ));
         }
-        self.secrets
-            .get(AI_SECRET_ID)?
-            .ok_or(DataError::AiAuthentication)
+        if let Some(value) = self.secrets.get(AI_SECRET_ID)? {
+            return Ok(Credential::own(value, AiKeySource::Keyring));
+        }
+        let shared = self.shared_account().ok_or(DataError::AiAuthentication)?;
+        let endpoint = if shared.api_base_url.is_empty() {
+            None
+        } else {
+            Some(format!("{}/chat/completions", shared.api_base_url))
+        };
+        Ok(Credential {
+            api_key: shared.api_key,
+            endpoint,
+            status: AiKeyStatus {
+                source: AiKeySource::Launcher,
+                account_name: Some(shared.account_name).filter(|name| !name.is_empty()),
+                api_key_name: Some(shared.api_key_name).filter(|name| !name.is_empty()),
+            },
+        })
+    }
+}
+
+impl AiClient {
+    #[cfg(not(test))]
+    #[allow(clippy::unused_self)]
+    fn shared_account(&self) -> Option<crate::shared_account::SharedAccount> {
+        read_shared_account()
+    }
+
+    #[cfg(test)]
+    fn shared_account(&self) -> Option<crate::shared_account::SharedAccount> {
+        self.shared_account_override.as_deref().map_or_else(
+            read_shared_account,
+            crate::shared_account::read_shared_account_at,
+        )
+    }
+}
+
+/// Which key the app spends on AI requests. Never carries the key itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiKeyStatus {
+    pub source: AiKeySource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiKeySource {
+    /// `REDROB_API_KEY` exported in the environment.
+    Environment,
+    /// This app's own key, saved from its settings into the OS keyring.
+    Keyring,
+    /// The computer's shared key, written by Redrob Launcher. Signing out happens there.
+    Launcher,
+    /// No key anywhere.
+    None,
+}
+
+struct Credential {
+    api_key: SecretString,
+    /// Overrides the configured endpoint; `None` keeps it.
+    endpoint: Option<String>,
+    status: AiKeyStatus,
+}
+
+impl Credential {
+    fn own(api_key: SecretString, source: AiKeySource) -> Self {
+        Self {
+            api_key,
+            endpoint: None,
+            status: AiKeyStatus {
+                source,
+                account_name: None,
+                api_key_name: None,
+            },
+        }
     }
 }
 
@@ -438,6 +540,89 @@ mod tests {
         assert_eq!(request_body["messages"][0]["content"], "show indexes");
         assert_eq!(request_body["temperature"], 0.2);
         assert_eq!(request_body["maxTokens"], 128);
+    }
+
+    fn shared_file(contents: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("account.json");
+        std::fs::write(&path, contents).unwrap();
+        (dir, path)
+    }
+
+    #[tokio::test]
+    async fn the_shared_launcher_key_is_the_fallback_and_is_spent_at_its_own_base() {
+        let body = br#"{"id":"chat-shared","model":"m","choices":[{"message":{"role":"assistant","content":"ok"}}]}"#.to_vec();
+        let (endpoint, requests, server) = mock_http_response("200 OK", body.clone(), body.len());
+        let base = endpoint.trim_end_matches("/chat/completions").to_owned();
+        let (_dir, path) = shared_file(&format!(
+            r#"{{"apiKey":"rk_shared","apiKeyName":"Redrob Launcher","accountName":"Acme","apiBaseUrl":"{base}"}}"#
+        ));
+        // The configured endpoint is unreachable on purpose: the shared file's base must be used.
+        let mut client = AiClient::with_endpoint(
+            Arc::new(MemorySecretStore::default()),
+            "http://127.0.0.1:9/chat/completions".to_owned(),
+        );
+        client.shared_account_override = Some(path.clone());
+
+        let status = client.key_status();
+        assert_eq!(status.source, AiKeySource::Launcher);
+        assert_eq!(status.account_name.as_deref(), Some("Acme"));
+        assert_eq!(status.api_key_name.as_deref(), Some("Redrob Launcher"));
+
+        let response = client.chat(test_chat_request()).await.unwrap();
+        assert_eq!(response.id, "chat-shared");
+        let request = requests.recv_timeout(StdDuration::from_secs(5)).unwrap();
+        server.join().unwrap();
+        let text = String::from_utf8_lossy(&request);
+        assert!(text.contains("authorization: Bearer rk_shared"), "{text}");
+
+        // Signed out in the launcher: the file is gone and so is the sign-in. Read fresh, not cached.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(client.key_status().source, AiKeySource::None);
+        assert!(matches!(
+            client.chat(test_chat_request()).await,
+            Err(DataError::AiAuthentication)
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_apps_own_keyring_key_wins_over_the_shared_one() {
+        let body = br#"{"id":"chat-own","model":"m","choices":[{"message":{"role":"assistant","content":"ok"}}]}"#.to_vec();
+        let (endpoint, requests, server) = mock_http_response("200 OK", body.clone(), body.len());
+        let (_dir, path) = shared_file(
+            r#"{"apiKey":"rk_shared","apiKeyName":"Redrob Launcher","accountName":"Acme","apiBaseUrl":"http://127.0.0.1:9"}"#,
+        );
+        let secrets = Arc::new(MemorySecretStore::default());
+        secrets.set(AI_SECRET_ID, "rk_own").unwrap();
+        let mut client = AiClient::with_endpoint(secrets, endpoint);
+        client.shared_account_override = Some(path);
+
+        let status = client.key_status();
+        assert_eq!(status.source, AiKeySource::Keyring);
+        assert!(status.account_name.is_none() && status.api_key_name.is_none());
+        client.chat(test_chat_request()).await.unwrap();
+        let request = requests.recv_timeout(StdDuration::from_secs(5)).unwrap();
+        server.join().unwrap();
+        let text = String::from_utf8_lossy(&request);
+        assert!(text.contains("authorization: Bearer rk_own"), "{text}");
+        assert!(!text.contains("rk_shared"));
+    }
+
+    #[test]
+    fn a_blank_or_missing_shared_file_is_not_a_sign_in() {
+        let (_dir, path) = shared_file(r#"{"apiKey":"","accountName":"Acme"}"#);
+        let mut client = AiClient::with_endpoint(
+            Arc::new(MemorySecretStore::default()),
+            "http://127.0.0.1:9/chat/completions".to_owned(),
+        );
+        client.shared_account_override = Some(path.clone());
+        assert_eq!(client.key_status().source, AiKeySource::None);
+        std::fs::write(&path, b"{ broken").unwrap();
+        assert_eq!(client.key_status().source, AiKeySource::None);
+        assert!(matches!(
+            client.credential(),
+            Err(DataError::AiAuthentication)
+        ));
     }
 
     #[tokio::test]
