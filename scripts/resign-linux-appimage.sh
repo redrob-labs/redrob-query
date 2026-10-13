@@ -38,36 +38,62 @@ rm -f "$image.sig"
 npx --no-install tauri signer sign "$image"
 [ -s "$image.sig" ] || { echo "::error::tauri signer produced no $name.sig"; exit 1; }
 
-gh release upload "$tag" "$image" "$image.sig" --clobber --repo "$GITHUB_REPOSITORY"
-
 # The release is a DRAFT, which the tags endpoint does not resolve, so find it in the listing.
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$work/releases.json"
-manifest_id="$(jq -r --arg tag "$tag" \
-  'map(select(.tag_name == $tag)) | first | .assets[] | select(.name == "latest.json") | .id' \
-  "$work/releases.json")"
-if [ -z "$manifest_id" ] || [ "$manifest_id" = "null" ]; then
+release_assets() {
+  gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+    | jq --arg tag "$tag" 'map(select(.tag_name == $tag)) | first | .assets'
+}
+asset_id_named() {
+  jq -r --arg name "$2" 'map(select(.name == $name)) | first | .id // empty' "$1"
+}
+
+# On a draft, tauri-action writes REST asset URLs into latest.json
+# (https://api.github.com/repos/<repo>/releases/assets/<id>) -- a draft asset has no public
+# download URL yet -- so the manifest knows this AppImage by its asset ID, not its name. Record
+# that ID before the upload below replaces the asset and mints a new one.
+release_assets > "$work/assets.before.json"
+old_id="$(asset_id_named "$work/assets.before.json" "$name")"
+if [ -z "$old_id" ]; then
+  echo "::error::$name is not attached to $tag; tauri-action did not upload it"
+  exit 1
+fi
+
+gh release upload "$tag" "$image" "$image.sig" --clobber --repo "$GITHUB_REPOSITORY"
+
+release_assets > "$work/assets.after.json"
+new_id="$(asset_id_named "$work/assets.after.json" "$name")"
+manifest_id="$(asset_id_named "$work/assets.after.json" "latest.json")"
+if [ -z "$new_id" ]; then
+  echo "::error::$name is not attached to $tag after re-upload"
+  exit 1
+fi
+if [ -z "$manifest_id" ]; then
   echo "::error::latest.json is not attached to $tag yet; the manifest cannot be updated"
   exit 1
 fi
 gh api -H 'Accept: application/octet-stream' \
   "repos/${GITHUB_REPOSITORY}/releases/assets/${manifest_id}" > "$work/latest.json"
 
-# Replace the signature on every platform entry whose URL is this AppImage -- tauri-action writes
-# both `linux-x86_64` and `linux-x86_64-appimage`, and missing one leaves a client that resolves
-# the other key verifying against stale bytes.
+# Repoint every platform entry that named this AppImage -- by the old asset ID, or by name should
+# a published-form URL ever appear -- at the re-uploaded asset, with the new signature.
+# tauri-action writes both `linux-x86_64` and `linux-x86_64-appimage`, and missing one leaves a
+# client that resolves the other key verifying against stale bytes.
 sig="$(cat "$image.sig")"
-jq --arg name "$name" --arg sig "$sig" '
+new_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${new_id}"
+jq --arg name "$name" --arg sig "$sig" --arg old_id "$old_id" --arg new_url "$new_url" '
   .platforms |= with_entries(
-    if (.value.url | endswith("/" + $name)) then .value.signature = $sig else . end)
+    if (.value.url | (endswith("/releases/assets/" + $old_id) or endswith("/" + $name)))
+    then .value.url = $new_url | .value.signature = $sig
+    else . end)
 ' "$work/latest.json" > "$work/latest.new.json"
 
-replaced="$(jq --arg name "$name" --arg sig "$sig" \
-  '[.platforms[] | select((.url | endswith("/" + $name)) and .signature == $sig)] | length' \
+replaced="$(jq --arg url "$new_url" --arg sig "$sig" \
+  '[.platforms[] | select(.url == $url and .signature == $sig)] | length' \
   "$work/latest.new.json")"
 if [ "$replaced" -lt 1 ]; then
-  echo "::error::no latest.json platform entry points at $name; nothing was re-signed in the manifest"
+  echo "::error::no latest.json platform entry points at $name (asset $old_id); nothing was re-signed in the manifest"
   exit 1
 fi
 
