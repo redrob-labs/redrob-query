@@ -111,10 +111,12 @@ jobs:
 
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
+        # desktop-file-utils: the AppImage repack step below runs appimagetool, which refuses to
+        # pack without `desktop-file-validate` on PATH (measured on the v0.2.1 Linux leg).
         run: >-
           sudo apt-get update && sudo apt-get install -y
           libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev librsvg2-dev
-          patchelf libssl-dev
+          patchelf libssl-dev desktop-file-utils
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -433,6 +435,23 @@ jobs:
     steps:
       - name: Check out the tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Redrob Launcher reads one small file beside the installers, `redrob-launcher.json`, to
+      # learn that this release reads its shared account file -- so signing in to the launcher is
+      # all a user needs. Written by scripts/launcher-release-manifest.mjs (pinned by its test) and
+      # uploaded here, in the one job that runs after every platform leg, so it is attached exactly
+      # once. `--clobber` keeps a re-run from failing on the asset it uploaded last time. The rename
+      # step that follows fails the release if the file is missing.
+      - name: Attach the Redrob Launcher release manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/launcher-release-manifest.mjs "$RUNNER_TEMP/release-assets/redrob-launcher.json"
+          gh release upload "${RELEASE_TAG}" "$RUNNER_TEMP/release-assets/redrob-launcher.json" \
+            --clobber --repo "${GITHUB_REPOSITORY}"
 
       # Tauri names its bundles `Redrob Query_<version>_<arch>.<ext>`; Redrob Launcher installs
       # only `redrob-query-<version>-<os>-<arch>.<ext>`. The installers (and their detached .sig

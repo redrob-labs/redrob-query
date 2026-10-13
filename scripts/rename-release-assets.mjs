@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
 import { isLauncherInstallable, launcherAssetName } from './launcher-asset-name.mjs';
+import { assertReleaseCarriesLauncherManifest } from './launcher-release-manifest.mjs';
 
 const [, , releaseJsonPath, repository, tag] = process.argv;
 if (!releaseJsonPath || !repository || !tag) {
@@ -66,6 +67,16 @@ if (installersLeft.length > 0) {
 }
 if (installable.length === 0) {
   console.error(`no launcher-installable asset is attached to ${tag}`);
+  process.exit(1);
+}
+
+// The manifest the launcher reads beside the installers (scripts/launcher-release-manifest.mjs).
+// The workflow uploads it before this script runs; a release without it would still install but
+// the launcher would not learn that it reads the shared account.
+try {
+  assertReleaseCarriesLauncherManifest(assets, tag);
+} catch (error) {
+  console.error(error.message);
   process.exit(1);
 }
 
