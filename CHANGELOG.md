@@ -4,7 +4,23 @@ The release workflow's notes point here, so this file is what a download's notes
 follow the `vMAJOR.MINOR.PATCH` tags that trigger a release; while the major is 0 a minor bump is
 where behaviour may change.
 
-## Unreleased
+## 0.2.4 - 2026-10-14
+
+### Fixed
+
+- rustls updated to 0.23.46 for RUSTSEC-2026-0347 and RUSTSEC-2026-0348, which the release
+  gate's cargo-audit refused on v0.2.3. No application change.
+
+## 0.2.3 - 2026-10-14
+
+### Fixed
+
+- The Linux release step that repacks and re-signs the AppImage looked the asset up by its local
+  file name, but GitHub stores an uploaded asset with every space turned into a dot, so the step
+  failed on every tag since it was added (v0.2.1, v0.2.2) and those releases stayed drafts. It now
+  searches for the stored name. No application change.
+
+## 0.2.2 - 2026-10-14
 
 ### Changed
 
