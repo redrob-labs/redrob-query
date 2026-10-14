@@ -4,7 +4,7 @@ The release workflow's notes point here, so this file is what a download's notes
 follow the `vMAJOR.MINOR.PATCH` tags that trigger a release; while the major is 0 a minor bump is
 where behaviour may change.
 
-## Unreleased
+## 0.2.2 - 2026-10-14
 
 ### Changed
 
