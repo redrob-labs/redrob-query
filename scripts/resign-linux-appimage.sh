@@ -31,6 +31,10 @@ if [ "${#images[@]}" -ne 1 ]; then
 fi
 image="${images[0]}"
 name="$(basename "$image")"
+# GitHub stores an uploaded asset under its name with every space turned into a dot
+# ("Redrob Query_0.2.2_amd64.AppImage" becomes "Redrob.Query_0.2.2_amd64.AppImage"), so the
+# release is searched for that form; the local file keeps its own name.
+asset_name="${name// /.}"
 
 bash "$here/strip-appimage-wayland.sh" "$image" "$appimagetool"
 
@@ -54,7 +58,7 @@ asset_id_named() {
 # download URL yet -- so the manifest knows this AppImage by its asset ID, not its name. Record
 # that ID before the upload below replaces the asset and mints a new one.
 release_assets > "$work/assets.before.json"
-old_id="$(asset_id_named "$work/assets.before.json" "$name")"
+old_id="$(asset_id_named "$work/assets.before.json" "$asset_name")"
 if [ -z "$old_id" ]; then
   echo "::error::$name is not attached to $tag; tauri-action did not upload it"
   exit 1
@@ -63,7 +67,7 @@ fi
 gh release upload "$tag" "$image" "$image.sig" --clobber --repo "$GITHUB_REPOSITORY"
 
 release_assets > "$work/assets.after.json"
-new_id="$(asset_id_named "$work/assets.after.json" "$name")"
+new_id="$(asset_id_named "$work/assets.after.json" "$asset_name")"
 manifest_id="$(asset_id_named "$work/assets.after.json" "latest.json")"
 if [ -z "$new_id" ]; then
   echo "::error::$name is not attached to $tag after re-upload"
@@ -82,7 +86,7 @@ gh api -H 'Accept: application/octet-stream' \
 # client that resolves the other key verifying against stale bytes.
 sig="$(cat "$image.sig")"
 new_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${new_id}"
-jq --arg name "$name" --arg sig "$sig" --arg old_id "$old_id" --arg new_url "$new_url" '
+jq --arg name "$asset_name" --arg sig "$sig" --arg old_id "$old_id" --arg new_url "$new_url" '
   .platforms |= with_entries(
     if (.value.url | (endswith("/releases/assets/" + $old_id) or endswith("/" + $name)))
     then .value.url = $new_url | .value.signature = $sig
