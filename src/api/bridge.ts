@@ -35,19 +35,23 @@ export interface DataBridge {
   applyMutations(mutations: CellMutation[]): Promise<MutationResult>;
   applyTableChange(connectionId: string, change: TableChange): Promise<void>;
   saveAiKey(secret: string): Promise<void>;
-  /** Which key AI requests spend right now. Never the key itself. Optional: a bridge without it
-   * cannot say, and the settings show nothing about the current sign-in. */
+  /** Whether the shared Redrob Code engine is signed in to the Redrob console, and with whose key.
+   * Never the key itself. Rejects with the engine's own sentence when Redrob Code is not installed or
+   * would not start. Optional: a bridge without it cannot say, and the settings show nothing about
+   * the current sign-in. */
   aiKeyStatus?(): Promise<AiKeyStatus>;
   askAi(request: AiRequest): Promise<AiResponse>;
 }
 
-/** Where the desktop app's Redrob key comes from: its own (`environment`, `keyring`), the computer's
- * shared one written by Redrob Launcher (`launcher`), or nowhere (`none`). */
+/** Whose Redrob console key the shared Redrob Code engine uses: one handed to it by an app or its own
+ * environment (`engine`), Redrob Launcher's shared sign-in (`launcher`), or none (`none`). The
+ * desktop app itself holds no key. */
 export interface AiKeyStatus {
-  source: 'environment' | 'keyring' | 'launcher' | 'none';
-  accountName?: string;
-  apiKeyName?: string;
+  source: 'engine' | 'launcher' | 'none';
 }
+
+/** Where a person gets Redrob Code when the engine reports it is not installed. */
+export const REDROB_LAUNCHER_RELEASES_URL = 'https://github.com/redrob-labs/redrob-launcher/releases/latest';
 
 const wait = (ms = 180) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const deepEqual = (left: unknown, right: unknown): boolean => {

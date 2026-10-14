@@ -146,7 +146,7 @@ describe('Redrob Query workspace', () => {
 
     await user.click(screen.getByTestId('open-ai-settings-header'));
     expect(screen.getByRole('dialog', { name: 'Redrob settings' })).toBeInTheDocument();
-    expect(screen.getByText(/operating system keychain/i)).toBeInTheDocument();
+    expect(screen.getByText(/handed to the shared Redrob Code engine/i)).toBeInTheDocument();
     expect(screen.getByText(/does not send credentials or store your key/i)).toBeInTheDocument();
     await user.click(screen.getByTestId('close-ai-settings'));
 
@@ -165,12 +165,13 @@ describe('Redrob Query workspace', () => {
     expect(document.body).not.toHaveTextContent(secret);
   });
 
-  it('says when the desktop key comes from Redrob Launcher, read fresh on every open', async () => {
+  it('says whose key the Redrob Code engine uses, read fresh on every open', async () => {
     const user = userEvent.setup();
     const bridge = desktopBridge();
     const aiKeyStatus = vi.fn()
-      .mockResolvedValueOnce({ source: 'launcher', accountName: 'Acme', apiKeyName: 'Redrob Launcher' })
-      .mockResolvedValueOnce({ source: 'none' });
+      .mockResolvedValueOnce({ source: 'launcher' })
+      .mockResolvedValueOnce({ source: 'none' })
+      .mockResolvedValueOnce({ source: 'engine' });
     bridge.aiKeyStatus = aiKeyStatus;
     render(<App bridge={bridge} />);
     await screen.findByTestId('desktop-banner');
@@ -178,9 +179,8 @@ describe('Redrob Query workspace', () => {
     await user.click(screen.getByTestId('open-ai-settings-header'));
     const launcher = await screen.findByTestId('ai-key-launcher');
     expect(launcher).toHaveTextContent('Signed in with Redrob Launcher');
-    expect(launcher).toHaveTextContent('Workspace: Acme');
     expect(launcher).toHaveTextContent('Sign out in Redrob Launcher');
-    // Only the names are shown; the dialog has no disconnect for a key it does not own.
+    // The dialog has no disconnect for a key it does not own.
     expect(screen.queryByRole('button', { name: /disconnect|clear/i })).not.toBeInTheDocument();
     await user.click(screen.getByTestId('close-ai-settings'));
 
@@ -188,6 +188,34 @@ describe('Redrob Query workspace', () => {
     await user.click(screen.getByTestId('open-ai-settings-header'));
     await waitFor(() => expect(aiKeyStatus).toHaveBeenCalledTimes(2));
     expect(screen.queryByTestId('ai-key-launcher')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('ai-key-engine')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('close-ai-settings'));
+
+    // A key the engine holds itself (handed over by an app or its environment).
+    await user.click(screen.getByTestId('open-ai-settings-header'));
+    expect(await screen.findByTestId('ai-key-engine')).toHaveTextContent('Signed in to Redrob');
+  });
+
+  it('shows the install sentence with the launcher link when Redrob Code is not installed', async () => {
+    const user = userEvent.setup();
+    const bridge = desktopBridge();
+    const sentence = 'Redrob Code is not installed. Install it with Redrob Launcher. https://github.com/redrob-labs/redrob-launcher/releases/latest';
+    bridge.aiKeyStatus = vi.fn().mockRejectedValue(sentence);
+    bridge.saveAiKey = vi.fn().mockRejectedValue(sentence);
+    render(<App bridge={bridge} />);
+    await screen.findByTestId('desktop-banner');
+
+    await user.click(screen.getByTestId('open-ai-settings-header'));
+    const missing = await screen.findByTestId('ai-engine-missing');
+    expect(missing).toHaveTextContent('Redrob Code is not installed. Install it with Redrob Launcher.');
+    expect(within(missing).getByRole('link', { name: 'Get Redrob Launcher' })).toHaveAttribute('href', 'https://github.com/redrob-labs/redrob-launcher/releases/latest');
+    expect(screen.queryByTestId('ai-key-launcher')).not.toBeInTheDocument();
+
+    // Saving a key needs the engine too: the same sentence, and the key is not echoed.
+    await user.type(screen.getByTestId('ai-key-input'), 'rrk_not_echoed_123');
+    await user.click(screen.getByTestId('save-ai-key'));
+    expect(await screen.findByTestId('ai-settings-feedback')).toHaveTextContent('Redrob Code is not installed');
+    expect(document.body).not.toHaveTextContent('rrk_not_echoed_123');
   });
 
   it('generates a revenue query with AI and places it in the editor', async () => {
