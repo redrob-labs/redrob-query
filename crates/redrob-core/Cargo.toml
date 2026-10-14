@@ -19,6 +19,10 @@ fs2 = "0.4"
 base64 = "0.22"
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 mongodb = "3"
+# The shared Redrob Code daemon, from redrob-code's own crate (docs/LOCAL-ENGINE-API.md section 3):
+# finds or starts the one engine on this machine and hands back its record. The AI client talks to
+# that daemon only; the daemon holds the Redrob console key.
+redrob-engine-client = { git = "https://github.com/redrob-labs/redrob-code", tag = "v0.6.3" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
