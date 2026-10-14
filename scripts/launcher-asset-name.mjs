@@ -7,10 +7,10 @@
 // `Redrob Query_<version>_<arch><suffix>` instead -- and GitHub replaces the space with a dot
 // on upload -- so `Redrob.Query_0.2.0_amd64.AppImage` is invisible to the launcher.
 //
-// Renaming is done on the release AFTER the build, by asset id, so the bundler, the signer and
-// the updater's signature over the bytes are untouched. The updater does not depend on these
-// names: latest.json embeds each signature and is pointed at the renamed assets by
-// rewrite-updater-urls.mjs, which resolves asset ids to whatever name they carry at that moment.
+// Renaming is done on the build runner AFTER the bundler and the signer have finished, by
+// stage-release-assets.mjs, so the bytes and the updater's signature over them are untouched.
+// latest.json is then written from the staged names (write-updater-manifest.mjs), so the updater
+// points at exactly the names the publish job uploads.
 //
 // Only installers and their detached .sig files are renamed. The `.app.tar.gz` updater payloads
 // and latest.json keep the bundler's names: nothing installs them by hand, and the launcher has

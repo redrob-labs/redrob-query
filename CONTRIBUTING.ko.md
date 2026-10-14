@@ -60,10 +60,14 @@ git switch -c release/v0.2.0
 git switch main && git pull
 git tag -a v0.2.0 -m "Redrob Query v0.2.0"
 git push origin v0.2.0
-# bring main's release commit back so develop does not fall behind:
-git switch -c chore/sync-main-to-develop main
-# open a pull request into develop
+# the tag publishes the GitHub Release itself; the gitflow check then opens the
+# back-merge pull request (sync/back-merge-<sha>) into develop -- merge it
 ```
+
+태그는 `package.json`의 버전과 같아야 하고, 모든 플랫폼 레그가 빌드·서명·검증을 마치면 릴리스는
+바로 **발행**됩니다 — 승인할 초안이 없습니다. 릴리스 없이 파이프라인만 돌려 보려면 **Signed
+desktop release** 워크플로를 `version` 입력(예: `0.3.0-1`, MSI 번들러 때문에 pre-release 식별자는
+숫자여야 합니다)으로 수동 실행하세요. 모든 레그를 빌드·서명하고 아무것도 발행하지 않습니다.
 
 hotfix도 같은 형태이며, `hotfix/*`를 `develop`이 아니라 `main`에서 떼고 양쪽으로 머지합니다.
 

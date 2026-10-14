@@ -4,6 +4,21 @@ The release workflow's notes point here, so this file is what a download's notes
 follow the `vMAJOR.MINOR.PATCH` tags that trigger a release; while the major is 0 a minor bump is
 where behaviour may change.
 
+## Unreleased
+
+### Changed
+
+- The release pipeline is the redrob-labs shared shape. Windows installers are Authenticode-signed
+  through Azure Artifact Signing with the job's OpenID Connect login and the organisation's one
+  signing script (`redrob-labs/.github/actions/sign-windows`), run by tauri as its sign command; the
+  self-signed certificate, its secrets and the `NotTrusted` allowance are gone, and every installer
+  must verify as `Valid`. Each platform leg uploads its files as a `release-*` artifact under the
+  launcher-readable names, `latest.json` is written from those files with every updater signature
+  checked against its bytes, and the shared `release-publish` job publishes the release as latest
+  with `SHA256SUMS.txt` and `redrob-launcher.json`. There is no draft any more; a manual run with a
+  `version` input is a dry run that publishes nothing. The gitflow check calls the organisation's
+  reusable workflow, whose back-merge job opens the back-merge pull request itself.
+
 ## 0.2.4 - 2026-10-14
 
 ### Fixed

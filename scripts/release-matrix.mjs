@@ -2,11 +2,12 @@
 // latest.json, from ONE list.
 //
 // Two things drove this out of the workflow file. First, a static matrix cannot skip a single
-// leg, and the Windows leg has to be skippable: Authenticode signing needs a certificate that
-// is not configured yet, and a leg that fails on every tag makes the whole release red, which
-// hides real regressions instead of surfacing them. Second, the verify job used to hardcode
-// the four updater platform keys it required, so adding or removing a leg meant editing two
-// places and getting a correct gate to fail for the wrong reason.
+// leg, and the Windows leg has to be skippable: Authenticode signing needs the organisation's
+// Azure Artifact Signing account to be configured for this repository, and a leg that fails on
+// every tag makes the whole release red, which hides real regressions instead of surfacing them.
+// Second, the manifest job used to hardcode the four updater platform keys it required, so
+// adding or removing a leg meant editing two places and getting a correct gate to fail for the
+// wrong reason.
 //
 // Windows is SKIPPED rather than built unsigned. An unsigned installer that reaches a user is
 // worse than no installer: it trains people to click through the warning.
@@ -45,7 +46,7 @@ const legs = [
   },
 ];
 
-// Which file each bundle type leaves on the release. The verify job asserted
+// Which file each bundle type leaves on the release. The manifest job asserted
 // `.AppImage .deb .dmg .exe .msi` literally, so skipping the Windows leg would have made a
 // correct gate fail for a reason that has nothing to do with the release being wrong.
 const bundleAssetSuffixes = {
@@ -67,8 +68,9 @@ const skipped = legs.filter((leg) => !included.includes(leg));
 for (const leg of skipped) {
   console.log(
     `::notice title=Platform skipped::${leg.label} is not built because the repository ` +
-      'variable WINDOWS_SIGNING_READY is not "true". Set it once a code-signing ' +
-      'certificate is in WIN_CSC_LINK; nothing else needs to change.',
+      'variable WINDOWS_SIGNING_READY is not "true". Set it once Azure Artifact Signing ' +
+      '(the AZURE_* and ARTIFACT_SIGNING_* organisation secrets and the `release` environment ' +
+      'federated credential) covers this repository; nothing else needs to change.',
   );
 }
 
