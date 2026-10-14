@@ -2,9 +2,14 @@ import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { Loader } from '@redrob-labs/ui';
 import { Icon } from '../ui/Icon';
 import { useWorkspace } from '../store/WorkspaceProvider';
-import type { AiKeyStatus } from '../api/bridge';
+import { type AiKeyStatus, REDROB_LAUNCHER_RELEASES_URL } from '../api/bridge';
 
 type Feedback = { tone: 'success' | 'error'; message: string } | null;
+
+/** The engine's own sentence for its absence ("Redrob Code is not installed..." or "The Redrob Code
+ * engine could not be started: ..."), when that is what a bridge call rejected with. */
+const engineSentence = (error: unknown): string | null =>
+  typeof error === 'string' && (error.startsWith('Redrob Code is not installed') || error.startsWith('The Redrob Code engine could not be started')) ? error : null;
 
 const validateKey = (value: string): string | null => {
   if (!value) return 'Enter your Redrob API key.';
@@ -24,16 +29,24 @@ export function AiSettingsModal() {
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [keyStatus, setKeyStatus] = useState<AiKeyStatus | null>(null);
+  // The engine's own sentence when Redrob Code is not installed or would not start.
+  const [engineError, setEngineError] = useState<string | null>(null);
+  const [statusReads, setStatusReads] = useState(0);
 
-  // Read fresh each time the dialog opens: the person may sign in or out in Redrob Launcher while
-  // this app is open, and the dialog must say what the next AI request would use.
+  // Read fresh each time the dialog opens (and after a save): the person may sign in or out in
+  // Redrob Code or Redrob Launcher while this app is open, and the dialog must say what the engine
+  // would use for the next AI request.
   useEffect(() => {
     if (!open || !bridge.aiKeyStatus) return;
     let cancelled = false;
     setKeyStatus(null);
-    bridge.aiKeyStatus().then((status) => { if (!cancelled) setKeyStatus(status); }, () => { if (!cancelled) setKeyStatus(null); });
+    setEngineError(null);
+    bridge.aiKeyStatus().then(
+      (status) => { if (!cancelled) setKeyStatus(status); },
+      (error: unknown) => { if (!cancelled) setEngineError(engineSentence(error) ?? 'The Redrob Code engine could not be reached.'); },
+    );
     return () => { cancelled = true; };
-  }, [open, bridge]);
+  }, [open, bridge, statusReads]);
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
@@ -78,11 +91,14 @@ export function AiSettingsModal() {
         tone: 'success',
         message: bridge.mode === 'demo'
           ? 'Demo acknowledged. Browser demo does not send or store credentials.'
-          : 'Redrob key saved securely in your OS keychain.',
+          : 'Redrob key handed to the Redrob Code engine, which keeps it.',
       });
-    } catch {
+      setStatusReads((count) => count + 1);
+    } catch (error: unknown) {
       setKey('');
-      setFeedback({ tone: 'error', message: 'Could not save the Redrob key. Check secure storage access and try again.' });
+      // The engine names its own absence ("Redrob Code is not installed...") and nothing else is
+      // shown verbatim: the key is never part of a message.
+      setFeedback({ tone: 'error', message: engineSentence(error) ?? 'Could not hand the Redrob key to the Redrob Code engine. Try again.' });
     } finally {
       setSaving(false);
     }
@@ -115,13 +131,32 @@ export function AiSettingsModal() {
           <button type="button" aria-label="Close Redrob settings" data-testid="close-ai-settings" onClick={close} disabled={saving}><Icon name="close" size={24} /></button>
         </div>
         <form id="ai-settings-form" className="ai-settings-form" onSubmit={save}>
-          <div className="ai-settings-security"><Icon name="shieldCheck" size={24} /><div><strong>Secure by design</strong><p id="ai-settings-description">In the desktop app, your Redrob key is stored in the operating system keychain. It is never added to queries or AI messages.</p></div></div>
+          <div className="ai-settings-security"><Icon name="shieldCheck" size={24} /><div><strong>Secure by design</strong><p id="ai-settings-description">In the desktop app, your Redrob key is handed to the shared Redrob Code engine on this computer, which keeps it and calls Redrob with it. This app stores no key, and the key is never added to queries or AI messages.</p></div></div>
+          {engineError ? (
+            <div className="ai-settings-feedback error" data-testid="ai-engine-missing" role="alert">
+              <Icon name="close" />
+              <span>
+                {engineError.endsWith(REDROB_LAUNCHER_RELEASES_URL)
+                  ? <>{engineError.slice(0, -REDROB_LAUNCHER_RELEASES_URL.length)}<a href={REDROB_LAUNCHER_RELEASES_URL} target="_blank" rel="noreferrer">Get Redrob Launcher</a></>
+                  : engineError}
+              </span>
+            </div>
+          ) : null}
           {keyStatus?.source === 'launcher' ? (
             <div className="ai-settings-security ai-settings-launcher" data-testid="ai-key-launcher" role="status">
               <Icon name="check" size={24} />
               <div>
                 <strong>Signed in with Redrob Launcher</strong>
-                <p>{keyStatus.accountName ? `Workspace: ${keyStatus.accountName}. ` : ''}Sign out in Redrob Launcher. A key saved here is used instead of the shared one.</p>
+                <p>The engine uses Redrob Launcher's sign-in. Sign out in Redrob Launcher. A key saved here is handed to the engine and used instead.</p>
+              </div>
+            </div>
+          ) : null}
+          {keyStatus?.source === 'engine' ? (
+            <div className="ai-settings-security ai-settings-launcher" data-testid="ai-key-engine" role="status">
+              <Icon name="check" size={24} />
+              <div>
+                <strong>Signed in to Redrob</strong>
+                <p>The Redrob Code engine holds a Redrob key. Saving a key here replaces it.</p>
               </div>
             </div>
           ) : null}
@@ -141,11 +176,11 @@ export function AiSettingsModal() {
             aria-describedby="ai-key-hint ai-key-feedback"
             disabled={saving}
           />
-          <small id="ai-key-hint">Paste a key beginning with <code>rrk_</code>. Saving replaces the key currently stored by the desktop app.</small>
-          <div className="demo-credential-notice"><strong>{bridge.mode === 'demo' ? 'Browser demo' : 'AI request context'}</strong><span>{bridge.mode === 'demo' ? 'This demo does not send credentials or store your key. AI responses are generated locally.' : 'Desktop AI sends your prompt and optional active query to Redrob. Database result rows and credentials are not automatically attached. The desktop renderer trusts user-entered content in those fields, so anything you include there is sent.'}</span></div>
+          <small id="ai-key-hint">Paste a key beginning with <code>rrk_</code>. Saving hands it to the Redrob Code engine and replaces the key the engine holds.</small>
+          <div className="demo-credential-notice"><strong>{bridge.mode === 'demo' ? 'Browser demo' : 'AI request context'}</strong><span>{bridge.mode === 'demo' ? 'This demo does not send credentials or store your key. AI responses are generated locally.' : 'Desktop AI sends your prompt and optional active query to Redrob through the Redrob Code engine. Database result rows and credentials are not automatically attached. The desktop renderer trusts user-entered content in those fields, so anything you include there is sent.'}</span></div>
           {feedback ? <div id="ai-key-feedback" className={`ai-settings-feedback ${feedback.tone}`} role={feedback.tone === 'error' ? 'alert' : 'status'} data-testid="ai-settings-feedback">{feedback.tone === 'success' ? <Icon name="check" /> : <Icon name="close" />}{feedback.message}</div> : <span id="ai-key-feedback" />}
         </form>
-        <div className="modal-footer ai-settings-footer"><span><i /> {bridge.mode === 'demo' ? 'Demo mode · no credential network request' : 'Desktop mode · OS keychain storage'}</span><div><button type="button" className="ghost-button" onClick={close} disabled={saving}>Cancel</button><button type="submit" form="ai-settings-form" className="primary-button" data-testid="save-ai-key" disabled={saving}>{saving ? <Loader size="sm" label="Saving the key" /> : null}{saving ? 'Saving…' : 'Save key'}</button></div></div>
+        <div className="modal-footer ai-settings-footer"><span><i /> {bridge.mode === 'demo' ? 'Demo mode · no credential network request' : 'Desktop mode · key kept by the Redrob Code engine'}</span><div><button type="button" className="ghost-button" onClick={close} disabled={saving}>Cancel</button><button type="submit" form="ai-settings-form" className="primary-button" data-testid="save-ai-key" disabled={saving}>{saving ? <Loader size="sm" label="Saving the key" /> : null}{saving ? 'Saving…' : 'Save key'}</button></div></div>
       </section>
     </div>
   );

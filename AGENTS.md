@@ -149,5 +149,8 @@ switching the trigger.
   CI runs clippy with `-D warnings`, so a pedantic lint fails the build.
 - **`src-tauri/tauri.release.conf.json` is gitignored on purpose**: it is generated inside a
   release runner by `scripts/prepare-release-config.mjs`. Do not create it locally and commit it.
-- **Do not commit anything from `.env`.** `.env.example` is the only env file tracked, and secrets
-  in the desktop app live in the OS keyring.
+- **Do not commit anything from `.env`.** `.env.example` is the only env file tracked, and database
+  secrets in the desktop app live in the OS keyring. This app holds no Redrob console key: the shared
+  Redrob Code daemon does (`PUT /auth/redrob`), and `crates/redrob-core/src/ai.rs` reaches the console
+  only through it (`redrob-engine-client`). There is no `REDROB_API_KEY` any more. Do not add a direct
+  console path for chat, do not store a key, and do not print one.

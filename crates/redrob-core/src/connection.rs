@@ -743,12 +743,10 @@ impl DataService {
         }
     }
 
-    pub fn save_ai_secret(&self, secret: &str) -> Result<()> {
-        self.ensure_persistent_storage_available()?;
-        if secret.is_empty() {
-            return Err(DataError::SecretUnavailable);
-        }
-        self.secrets.set(AI_SECRET_ID, secret)
+    /// Hands a Redrob console key to the shared Redrob Code engine, which keeps it. Nothing is
+    /// written to this app's own storage.
+    pub async fn ai_sign_in(&self, secret: &str) -> Result<()> {
+        self.ai.sign_in(secret).await
     }
 
     async fn connection_test_secret(
@@ -1088,9 +1086,9 @@ impl DataService {
         self.ai.chat(build_assistant_chat_request(&input)?).await
     }
 
-    /// Which key AI requests would spend right now, for the settings surface. Never the key itself.
-    pub fn ai_key_status(&self) -> AiKeyStatus {
-        self.ai.key_status()
+    /// Whether the engine is signed in to the Redrob console, for the settings surface. Never a key.
+    pub async fn ai_key_status(&self) -> Result<AiKeyStatus> {
+        self.ai.account_status().await
     }
 
     async fn profile(&self, id: Uuid) -> Result<ConnectionProfile> {
@@ -5566,10 +5564,6 @@ mod tests {
         ));
         assert!(matches!(
             second.save_connection_secret(id, "must-not-write").await,
-            Err(DataError::PersistenceConsistency)
-        ));
-        assert!(matches!(
-            second.save_ai_secret("must-not-write"),
             Err(DataError::PersistenceConsistency)
         ));
         assert!(matches!(

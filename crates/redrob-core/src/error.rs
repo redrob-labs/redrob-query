@@ -40,6 +40,10 @@ pub enum DataError {
     InvalidApproval,
     #[error("AI authentication is not configured")]
     AiAuthentication,
+    /// The shared Redrob Code engine is missing or would not start. The message is the sentence the
+    /// app shows verbatim (`ai::unavailable_message`); there is no fallback path to name.
+    #[error("{0}")]
+    EngineUnavailable(String),
     #[error("AI service is temporarily unavailable")]
     AiUnavailable,
     #[error("AI request was rejected: {0}")]
