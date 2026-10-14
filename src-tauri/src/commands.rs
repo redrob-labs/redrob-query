@@ -144,14 +144,14 @@ pub async fn apply_cell_edits(
 
 #[tauri::command]
 pub async fn save_ai_secret(service: State<'_, DataService>, secret: String) -> Result<(), String> {
-    service.save_ai_secret(&secret).map_err(message)
+    service.ai_sign_in(&secret).await.map_err(message)
 }
 
 #[tauri::command]
 pub async fn ai_key_status(
     service: State<'_, DataService>,
 ) -> Result<redrob_core::ai::AiKeyStatus, String> {
-    Ok(service.ai_key_status())
+    service.ai_key_status().await.map_err(message)
 }
 
 #[tauri::command]
