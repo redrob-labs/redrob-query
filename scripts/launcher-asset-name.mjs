@@ -53,10 +53,10 @@ export function launcherAssetName(name, version) {
 
 // What the launcher accepts, mirrored from its parser: <stem>-<version>-<os>-<arch>.<ext> with
 // a digit-led version and an extension it installs.
-export const INSTALLABLE_EXTENSIONS = ['.msi', '-portable.zip', '.dmg', '.AppImage', '.deb', '.rpm', '.flatpak', '.tar.gz'];
+export const INSTALLABLE_EXTENSIONS = ['.msi', '-portable.zip', '.dmg', '.AppImage', '.deb', '.rpm', '.tar.gz'];
 export const LAUNCHER_TOKENS = [
   'linux-x86_64', 'linux-aarch64', 'macos-universal', 'macos-aarch64', 'macos-x86_64',
-  'windows-x64', 'windows-arm64', 'windows-x86', 'freebsd-x86_64',
+  'windows-x64', 'windows-arm64', 'windows-x86',
 ];
 
 /**
