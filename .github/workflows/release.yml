@@ -384,13 +384,14 @@ jobs:
           }
 
       # Installers and their .sig files take the names Redrob Launcher installs
-      # (`redrob-query-<version>-<os>-<arch>.<ext>`); the updater payloads keep the bundler's.
+      # (`redrob-query-<version>-<os>-<arch>.<ext>`); the macOS updater payload gets the version
+      # and architecture tauri leaves out of its name.
       # Decided here, before upload, so latest.json can name every asset before the release exists.
       - name: Stage the release files under their published names
         shell: bash
         env:
           BUNDLE_DIR: ${{ steps.bundle.outputs.dir }}
-        run: node scripts/stage-release-assets.mjs "$BUNDLE_DIR" "$RUNNER_TEMP/release-assets" "$RELEASE_VERSION"
+        run: node scripts/stage-release-assets.mjs "$BUNDLE_DIR" "$RUNNER_TEMP/release-assets" "$RELEASE_VERSION" "$RELEASE_TARGET"
 
       - name: Upload the release files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

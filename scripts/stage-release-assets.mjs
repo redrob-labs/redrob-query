@@ -9,14 +9,20 @@
 //
 //   - installers and their detached `.sig` files take the launcher-readable name
 //     `redrob-query-<version>-<os>-<arch>.<ext>` (launcher-asset-name.mjs);
-//   - everything else (the `.app.tar.gz` updater payloads) keeps the bundler's name with every
-//     space replaced by a dot, which is the name GitHub would store it under anyway -- written
-//     out explicitly so latest.json can name the asset before it exists on the release.
+//   - the macOS updater payload, which tauri writes as `Redrob Query.app.tar.gz` with neither
+//     version nor architecture, becomes `Redrob.Query_<version>_<arch>.app.tar.gz` -- the name
+//     tauri-action gave it, so an installed client's platform key keeps resolving, and so the two
+//     macOS legs do not overwrite each other in the merged artifact. <arch> comes from the build
+//     target (`aarch64-apple-darwin` -> `aarch64`, `x86_64-apple-darwin` -> `x64`);
+//   - anything else keeps the bundler's name with every space replaced by a dot, which is the
+//     name GitHub would store it under anyway -- written out explicitly so latest.json can name
+//     the asset before it exists on the release.
 //
 // Renaming a file does not touch its bytes, so the updater signature made over it stays valid.
 //
-// Usage: node scripts/stage-release-assets.mjs <bundle-dir> <out-dir> <version>
-//   <bundle-dir> is tauri's `target/<triple>/release/bundle`; <version> has no leading "v".
+// Usage: node scripts/stage-release-assets.mjs <bundle-dir> <out-dir> <version> <target>
+//   <bundle-dir> is tauri's `target/<triple>/release/bundle`; <version> has no leading "v";
+//   <target> is the Rust target triple the leg built.
 
 import { copyFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -30,6 +36,14 @@ export const RELEASE_FILE_SUFFIXES = ['.AppImage', '.deb', '.dmg', '.msi', '-set
 
 const BUNDLER_NAME = /^Redrob[. ]Query_(?<version>[^_]+)_/;
 
+// Rust target triple -> the architecture token tauri-action put in the updater payload's name.
+export const PAYLOAD_ARCH = {
+  'aarch64-apple-darwin': 'aarch64',
+  'x86_64-apple-darwin': 'x64',
+};
+
+const UNVERSIONED_PAYLOAD = /^Redrob[. ]Query(?<suffix>\.app\.tar\.gz(\.sig)?)$/;
+
 /** True for a release file or the detached signature of one. */
 export function isReleaseFile(name) {
   const base = name.endsWith('.sig') ? name.slice(0, -'.sig'.length) : name;
@@ -40,10 +54,17 @@ export function isReleaseFile(name) {
  * The name a bundler file is published under.
  * @param {string} name     file name as the bundler wrote it
  * @param {string} version  release version without the leading "v"
+ * @param {string} target   Rust target triple of the leg that built it
  */
-export function stagedName(name, version) {
+export function stagedName(name, version, target) {
   const renamed = launcherAssetName(name, version);
   if (renamed !== null) return renamed;
+  const payload = UNVERSIONED_PAYLOAD.exec(name);
+  if (payload) {
+    const arch = PAYLOAD_ARCH[target];
+    if (!arch) throw new Error(`${name}: no updater payload architecture is defined for target ${target}`);
+    return `Redrob.Query_${version}_${arch}${payload.groups.suffix}`;
+  }
   const match = BUNDLER_NAME.exec(name);
   if (match && match.groups.version !== version) {
     throw new Error(`${name} carries version ${match.groups.version}, not ${version}`);
@@ -68,16 +89,16 @@ async function* walk(dir) {
  * Stage every release file under `bundleDir` into `outDir`.
  * @returns {Promise<string[]>} the staged names, sorted
  */
-export async function stageReleaseAssets(bundleDir, outDir, version) {
+export async function stageReleaseAssets(bundleDir, outDir, version, target) {
   const staged = new Map();
   for await (const file of walk(bundleDir)) {
     if (!isReleaseFile(file.name)) continue;
-    const target = stagedName(file.name, version);
-    const previous = staged.get(target);
+    const published = stagedName(file.name, version, target);
+    const previous = staged.get(published);
     if (previous) {
-      throw new Error(`${file.path} and ${previous} would both be published as ${target}`);
+      throw new Error(`${file.path} and ${previous} would both be published as ${published}`);
     }
-    staged.set(target, file.path);
+    staged.set(published, file.path);
   }
   if (staged.size === 0) {
     throw new Error(`no release file under ${bundleDir} (looked for ${RELEASE_FILE_SUFFIXES.join(' ')})`);
@@ -99,13 +120,13 @@ export async function stageReleaseAssets(bundleDir, outDir, version) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const [, , bundleDir, outDir, version] = process.argv;
-  if (!bundleDir || !outDir || !version) {
-    console.error('usage: stage-release-assets.mjs <bundle-dir> <out-dir> <version>');
+  const [, , bundleDir, outDir, version, target] = process.argv;
+  if (!bundleDir || !outDir || !version || !target) {
+    console.error('usage: stage-release-assets.mjs <bundle-dir> <out-dir> <version> <target>');
     process.exit(2);
   }
   try {
-    const names = await stageReleaseAssets(bundleDir, outDir, version);
+    const names = await stageReleaseAssets(bundleDir, outDir, version, target);
     console.log(`Staged ${names.length} file(s) into ${outDir}:`);
     for (const name of names) console.log(`  ${name}`);
   } catch (error) {
