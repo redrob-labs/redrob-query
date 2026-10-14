@@ -65,7 +65,7 @@ PostgreSQL/MySQL certificate and hostname verification use public trust roots. C
 
 ## Redrob AI egress
 
-Desktop AI calls `https://console.redrob.ai/api/backend/v1/chat/completions` with model `auto`. The renderer CSP does not grant this origin; the trusted Rust HTTPS client performs the request.
+Desktop AI calls the shared Redrob Code daemon on this machine (`<daemon>/v1/chat/completions`, plain HTTP on 127.0.0.1) with model `auto`; the daemon holds the Redrob console key and is the only process that reaches `console.redrob.ai`. There is no fallback path from this app to the console. The renderer CSP grants neither origin; the trusted Rust client performs the request with the daemon's own authorization, `x-redrob-app: query` and `x-redrob-session`.
 
 The renderer-facing request permits only:
 
@@ -74,9 +74,9 @@ The renderer-facing request permits only:
 - supported database kind;
 - explicit compatible query language.
 
-Rust constructs the system instruction, model, temperature, endpoint, and message shape. Unknown fields—including renderer-provided message arrays, result rows, credentials, model, or endpoint—are rejected or omitted. SQL Server context is rejected. Responses are capped at 2 MiB. The API key is used as the HTTPS bearer credential and is not inserted into messages.
+Rust constructs the system instruction, model, temperature, endpoint, and message shape. Unknown fields—including renderer-provided message arrays, result rows, credentials, model, or endpoint—are rejected or omitted. SQL Server context is rejected. Responses are capped at 2 MiB. No console key exists in this app: the daemon's Basic secret (from its `server.json` record, rotated on every daemon start) is the only credential on the request, and it is not inserted into messages.
 
-Database result rows and credentials are not automatically attached. Anything manually typed or pasted into the prompt or active query is sent. A nonempty `REDROB_API_KEY` environment value takes precedence over the keyring value; with neither, the Redrob Launcher shared account file (`account.json`, see redrob-launcher `docs/shared-account.md`) is read, never written, and its key is spent at the `apiBaseUrl` it names. The key is never logged or shown; the settings surface shows only the account and key names.
+Database result rows and credentials are not automatically attached. Anything manually typed or pasted into the prompt or active query is sent. A key pasted into Redrob settings is handed to the daemon (`PUT /auth/redrob`) and not stored here; a key an earlier version saved in the OS keyring is handed over once and deleted. The settings surface reads only whether the daemon is signed in and whose key it uses (`GET /provider`). When Redrob Code is not installed the app shows that sentence and the launcher link, and sends nothing.
 
 ## Error handling
 

@@ -79,7 +79,7 @@ Desktop results contain no editable source identity. Browser demo relational fix
 
 ## AI path
 
-The renderer may send only prompt, optional active query, database kind, and explicit query language. Rust rejects unknown fields and constructs the provider model, system instruction, messages, endpoint, and authorization itself. The API key comes from nonempty `REDROB_API_KEY`, then the OS keyring, then Redrob Launcher's shared `account.json` (`crates/redrob-core/src/shared_account.rs`, read on every request) and is used only as the HTTPS bearer credential.
+The renderer may send only prompt, optional active query, database kind, and explicit query language. Rust rejects unknown fields and constructs the provider model, system instruction, messages, endpoint, and authorization itself. The request goes to the shared Redrob Code daemon (`crates/redrob-core/src/ai.rs`, via `redrob-engine-client`: `require_as("query", 10)` finds or starts it, `app_headers` signs the request) at `<daemon>/v1/chat/completions`; the daemon holds the Redrob console key, so this app has none and no direct console path. A 401 against a stale daemon secret re-reads the record once and retries; a missing engine surfaces as `DataError::EngineUnavailable` carrying the install sentence.
 
 ## Deliberate boundaries
 

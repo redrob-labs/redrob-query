@@ -137,13 +137,13 @@ Read the complete [security model and limitations](docs/SECURITY.md).
 
 ## Redrob AI configuration
 
-Use **Redrob settings** in the desktop app to store a key in the OS keyring. For development, a nonempty `REDROB_API_KEY` takes precedence over the saved key. With neither, the app uses the computer's shared Redrob Launcher sign-in (`account.json` in `$XDG_CONFIG_HOME/redrob-shared`, `~/Library/Application Support/ai.redrob.shared` or `%APPDATA%\Redrob\Shared`; `REDROB_SHARED_DIR` overrides the directory), read fresh on each request and never written; Redrob settings then show **Signed in with Redrob Launcher**. The native client calls:
+**Requires Redrob Code.** Desktop AI talks to the one shared Redrob Code daemon on this machine (`~/.redrob/run/server.json`; started with `redrob service start` when none is running) at:
 
 ```text
-https://console.redrob.ai/api/backend/v1/chat/completions
+<daemon>/v1/chat/completions
 ```
 
-The provider request uses model `auto`. Browser-demo AI is local and deterministic; an entered demo key is not retained or sent.
+Every request carries the daemon's own authorization, `x-redrob-app: query` and a per-run `x-redrob-session`; the request uses model `auto`. The daemon holds the Redrob console key and calls the console with it; this app never has a key of its own and has no direct path to the console, so there is one place masking applies. Sign in once -- in Redrob Code, in Redrob Launcher, or here: **Redrob settings** hands a pasted key to the engine (`PUT /auth/redrob`) and reads whether the engine is signed in from `GET /provider`, saying **Signed in with Redrob Launcher** when that is whose key the engine uses. Without Redrob Code the dialog and every AI request say "Redrob Code is not installed. Install it with Redrob Launcher." with a link to [the launcher's latest release](https://github.com/redrob-labs/redrob-launcher/releases/latest). A key an earlier version of this app saved in the OS keyring is handed to the engine once and deleted. `REDROB_API_KEY` and the launcher shared-account reader are gone. The daemon record and binary come from `redrob-engine-client` (redrob-code `docs/LOCAL-ENGINE-API.md`, section 3); `REDROB_RUN_DIR` and `REDROB_CODE_BIN` point tests at a private daemon. Browser-demo AI is local and deterministic; an entered demo key is not retained or sent.
 
 ## License and attribution
 

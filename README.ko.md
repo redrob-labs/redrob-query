@@ -137,13 +137,13 @@ cargo test --locked -p redrob-core --all-features -- --ignored
 
 ## Redrob AI 설정
 
-데스크톱 앱의 **Redrob 설정**에서 키를 OS 키링에 저장하세요. 개발 중에는 비어 있지 않은 `REDROB_API_KEY`가 저장된 키보다 우선합니다. 둘 다 없으면 Redrob Launcher가 이 컴퓨터에 남긴 공유 로그인(`$XDG_CONFIG_HOME/redrob-shared`, `~/Library/Application Support/ai.redrob.shared`, `%APPDATA%\Redrob\Shared` 의 `account.json`, `REDROB_SHARED_DIR`로 디렉터리 교체)을 요청마다 새로 읽어 쓰고, 파일을 쓰지는 않습니다. 이때 Redrob 설정에는 **Redrob Launcher로 로그인됨**이 표시됩니다. 네이티브 클라이언트는 다음을 호출합니다.
+**Redrob Code가 필요합니다.** 데스크톱 AI는 이 컴퓨터에 하나 있는 공유 Redrob Code 데몬(`~/.redrob/run/server.json`; 없으면 `redrob service start`로 띄움)의 다음 경로에 말합니다.
 
 ```text
-https://console.redrob.ai/api/backend/v1/chat/completions
+<daemon>/v1/chat/completions
 ```
 
-프로바이더 요청은 모델 `auto`를 씁니다. 브라우저 데모의 AI는 로컬이고 결정적이며, 데모에 입력한 키는 보관하거나 전송하지 않습니다.
+모든 요청에 데몬 자체의 인증, `x-redrob-app: query`, 실행마다 하나인 `x-redrob-session`이 실리고, 모델은 `auto`입니다. Redrob 콘솔 키는 데몬이 보관하고 데몬이 그 키로 콘솔을 부릅니다. 이 앱은 자체 키를 갖지 않고 콘솔로 직접 가는 경로도 없습니다 -- 마스킹이 적용되는 곳이 한 곳이 되도록. 로그인은 한 번만: Redrob Code에서, Redrob Launcher에서, 또는 여기서. **Redrob 설정**은 붙여 넣은 키를 엔진에 넘기고(`PUT /auth/redrob`), 엔진이 로그인돼 있는지 `GET /provider`에서 읽어 엔진이 쓰는 키가 런처의 것이면 **Redrob Launcher로 로그인됨**이라고 말합니다. Redrob Code가 없으면 설정 대화상자와 모든 AI 요청이 "Redrob Code is not installed. Install it with Redrob Launcher."와 [런처 최신 릴리스](https://github.com/redrob-labs/redrob-launcher/releases/latest) 링크를 보입니다. 이전 버전의 이 앱이 OS 키링에 저장했던 키는 한 번 엔진에 넘기고 지웁니다. `REDROB_API_KEY`와 런처 공유 계정 파일 읽기는 없어졌습니다. 데몬 레코드와 바이너리는 `redrob-engine-client`(redrob-code `docs/LOCAL-ENGINE-API.md` 3절)가 찾고, `REDROB_RUN_DIR`와 `REDROB_CODE_BIN`은 테스트를 비공개 데몬으로 향하게 합니다. 브라우저 데모의 AI는 로컬이고 결정적이며, 데모에 입력한 키는 보관하거나 전송하지 않습니다.
 
 ## 기여
 
