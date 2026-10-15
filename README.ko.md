@@ -77,7 +77,7 @@ Linux에서는 Tauri가 요구하는 WebKitGTK 4.1, JavaScriptCoreGTK 4.1, libso
 
 `src-tauri/icons/`에 표준 Tauri PNG·ICNS·ICO·iOS·Android 아이콘이 들어 있습니다. 모두 RGBA여야 합니다 — `tauri::generate_context!`가 RGBA가 아닌 아이콘에서 컴파일 타임에 패닉하므로, `npm run release:check`가 이를 단정합니다.
 
-서명된 인스톨러는 **Signed desktop release** 워크플로만 만듭니다. `vMAJOR.MINOR.PATCH` 태그를 푸시하면 Linux x64·macOS Intel·macOS Apple Silicon·Windows x64를 빌드하고, 업데이터 번들에 서명하고, macOS 빌드를 공증한 뒤 `latest.json`을 포함한 전부를 **초안** GitHub Release에 올립니다. 그 초안을 발행하는 것이 곧 릴리스입니다 — GitHub Releases가 업데이트 채널이라 `releases/latest/download/latest.json`은 사람이 발행한 버전만 서비스합니다. 자격 증명이 없으면 서명 없는 산출물을 발행하는 대신 릴리스를 중단합니다.
+서명된 인스톨러는 **Signed desktop release** 워크플로만 만듭니다. `vMAJOR.MINOR.PATCH` 태그를 푸시하면(태그는 `package.json`의 버전과 같아야 합니다) Linux x64·macOS Intel·macOS Apple Silicon·Windows x64를 빌드하고, 업데이터 번들에 서명하고, macOS 빌드를 공증하고, Windows 인스톨러는 조직의 Azure Artifact Signing 계정으로 Authenticode 서명합니다 — 번들 직전에 잡이 OpenID Connect로 로그인하고 tauri가 `redrob-labs/.github`의 공용 서명 스크립트를 실행하므로 인증서 파일이나 클라이언트 시크릿은 어디에도 없습니다. 각 레그는 산출물을 [Redrob Launcher](https://github.com/redrob-labs/redrob-launcher)가 설치하는 이름으로 `release-*` 아티팩트에 올리고, 그 파일들로 `latest.json`을 쓰면서 모든 업데이터 서명을 실제 바이트와 대조한 뒤, 공용 `release-publish` 잡이 `SHA256SUMS.txt`·`redrob-launcher.json`과 함께 GitHub Release를 latest로 **발행**합니다(`-` 접미사가 있는 버전은 pre-release로 발행되어 `releases/latest`에 잡히지 않습니다). GitHub Releases가 업데이트 채널이라 `releases/latest/download/latest.json`은 가장 최근에 발행된 버전을 서비스합니다. 워크플로를 `version` 입력으로 수동 실행하면 드라이런입니다: 모든 레그를 빌드·서명·검증하고 아무것도 발행하지 않습니다. 자격 증명이 없으면 서명 없는 산출물을 발행하는 대신 릴리스를 중단합니다.
 
 ## 데스크톱 로컬 작업공간 데이터
 

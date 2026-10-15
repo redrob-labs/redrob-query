@@ -59,10 +59,15 @@ git switch -c release/v0.2.0
 git switch main && git pull
 git tag -a v0.2.0 -m "Redrob Query v0.2.0"
 git push origin v0.2.0
-# bring main's release commit back so develop does not fall behind:
-git switch -c chore/sync-main-to-develop main
-# open a pull request into develop
+# the tag publishes the GitHub Release itself; the gitflow check then opens the
+# back-merge pull request (sync/back-merge-<sha>) into develop -- merge it
 ```
+
+The tag must equal the version in `package.json`, and the release is **published** when every
+platform leg has built, signed and verified -- there is no draft to approve. To exercise the
+pipeline without releasing, run the **Signed desktop release** workflow by hand with a `version`
+such as `0.3.0-1` (a pre-release identifier must be numeric for the MSI bundler): it builds and
+signs every leg and publishes nothing.
 
 A hotfix is the same shape with `hotfix/*` cut from `main` rather than `develop`, and it merges into
 both.

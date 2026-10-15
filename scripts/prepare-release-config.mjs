@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const publicKey = process.env.TAURI_UPDATER_PUBLIC_KEY?.trim();
@@ -8,14 +8,15 @@ if (!publicKey)
 // GitHub Releases IS the update channel -- there is no CDN in front of it.
 //
 // `releases/latest/download/<asset>` resolves to the newest published, non-prerelease
-// release, which is what makes the draft-release QA gate work: a draft is not "latest",
-// so no installed client can see a version until a human publishes it. Tauri follows
-// the redirect to the asset itself.
+// release. The shared publish job (redrob-labs/.github release-publish.yml) publishes a
+// tagged build as latest -- or as a prerelease, invisible to this URL, when the version
+// carries a `-` -- and a manual dispatch publishes nothing at all. Tauri follows the
+// redirect to the asset itself.
 //
-// The tag workflow attaches this manifest with tauri-action's `uploadUpdaterJson`, and
-// its verify-release-assets job fails the build if the manifest is missing or if any
-// platform URL points outside this repository's own release assets. Without that guard
-// the failure is silent: the app installs and simply never updates again.
+// The release workflow's updater-manifest job writes latest.json from the staged files and
+// fails the build if any platform the matrix built is missing from it or any URL points
+// outside this repository's own release assets. Without that guard the failure is silent:
+// the app installs and simply never updates again.
 //
 // scripts/validate-release.mjs asserts this URL names this repository, so a copy of this
 // file taken from a sibling product cannot ship a feed pointing at the wrong repo.
@@ -35,17 +36,40 @@ const config = {
   },
 };
 
+// A dry run (workflow_dispatch with a version) builds installers for a version the sources do
+// not declare, e.g. 0.3.0-rc.1 on a tree that says 0.2.4. The bundle names, the updater
+// payloads and latest.json all have to agree on ONE version, so the dispatched one overrides
+// the config here. A tag run passes the version the sources already carry (the version job
+// refuses the tag otherwise), so this is a no-op there.
+const releaseVersion = process.env.RELEASE_VERSION?.trim();
+if (releaseVersion) config.version = releaseVersion;
+
 if (process.platform === "win32") {
-  const thumbprint = process.env.WIN_CSC_CERTIFICATE_THUMBPRINT?.trim();
-  if (!thumbprint) {
+  // Authenticode through Azure Artifact Signing, with the ONE copy of the recipe the
+  // organisation keeps: redrob-labs/.github/actions/sign-windows/sign.ps1, checked out by
+  // the workflow at `.redrob-shared`. Tauri signs the executable before packaging and each
+  // installer after, so every one of them goes through this command; it reads the
+  // ARTIFACT_SIGNING_* variables from the job's environment and authenticates with the
+  // `azure/login` the job performed right before `tauri build`. No certificate file, no
+  // thumbprint, no client secret anywhere in this repository.
+  //
+  // Absolute path on purpose: the bundler does not promise which directory it runs the
+  // command from, and a relative path that resolves from src-tauri/ fails only on the
+  // Windows leg of a real release.
+  const sharedDir = resolve(process.env.REDROB_SHARED_DIR?.trim() || ".redrob-shared");
+  const signScript = resolve(sharedDir, "actions/sign-windows/sign.ps1");
+  try {
+    await access(signScript);
+  } catch {
     throw new Error(
-      "WIN_CSC_CERTIFICATE_THUMBPRINT is required for a Windows release.",
+      `${signScript} is missing: check out redrob-labs/.github at ${sharedDir} before preparing a Windows release.`,
     );
   }
   config.bundle.windows = {
-    certificateThumbprint: thumbprint,
-    digestAlgorithm: "sha256",
-    timestampUrl: "http://timestamp.digicert.com",
+    signCommand: {
+      cmd: "pwsh",
+      args: ["-NoProfile", "-File", signScript, "%1"],
+    },
   };
 }
 
@@ -57,4 +81,6 @@ await mkdir(resolve("src-tauri"), { recursive: true });
 await writeFile(output, `${JSON.stringify(config, null, 2)}\n`, {
   mode: 0o600,
 });
-console.log(`Prepared release configuration for ${process.platform}.`);
+console.log(
+  `Prepared release configuration for ${process.platform}${releaseVersion ? ` (version ${releaseVersion})` : ""}.`,
+);
