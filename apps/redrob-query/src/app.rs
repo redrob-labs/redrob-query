@@ -956,8 +956,17 @@ impl QueryApp {
                                 let body = egui::TextStyle::Body.resolve(ui.style());
                                 let small = egui::TextStyle::Small.resolve(ui.style());
                                 let mut job = egui::text::LayoutJob::default();
-                                let title_colour =
-                                    if selected { tokens.accent } else { tokens.text };
+                                // The selected tab sits on the selection fill (the accent).
+                                let title_colour = if selected {
+                                    tokens.primary_text
+                                } else {
+                                    tokens.text
+                                };
+                                let faint = if selected {
+                                    tokens.primary_text.gamma_multiply(0.75)
+                                } else {
+                                    tokens.text_faint
+                                };
                                 job.append(
                                     &tab.title,
                                     0.0,
@@ -966,7 +975,7 @@ impl QueryApp {
                                 job.append(
                                     &format!("  {connection}"),
                                     0.0,
-                                    egui::TextFormat::simple(small, tokens.text_faint),
+                                    egui::TextFormat::simple(small, faint),
                                 );
                                 if tab.is_running() {
                                     job.append(
@@ -983,7 +992,7 @@ impl QueryApp {
                                     job.append(
                                         "  ●",
                                         0.0,
-                                        egui::TextFormat::simple(body, tokens.accent),
+                                        egui::TextFormat::simple(body, title_colour),
                                     );
                                 }
                                 let response = ui.selectable_label(selected, job);

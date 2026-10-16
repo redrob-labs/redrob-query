@@ -622,7 +622,7 @@ impl QueryTab {
                     ] {
                         let selected = self.view == view;
                         let text = if selected {
-                            RichText::new(label).color(tokens.accent).strong()
+                            RichText::new(label).color(tokens.primary_text).strong()
                         } else {
                             RichText::new(label)
                         };
