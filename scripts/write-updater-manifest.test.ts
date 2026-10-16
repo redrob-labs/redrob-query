@@ -15,9 +15,9 @@ const V = '0.2.4';
 const STAGED = [
   'redrob-query-0.2.4-linux-x86_64.AppImage',
   'redrob-query-0.2.4-linux-x86_64.deb',
-  'Redrob.Query_0.2.4_aarch64.app.tar.gz',
+  'redrob-query-0.2.4-macos-aarch64.app.tar.gz',
   'redrob-query-0.2.4-macos-aarch64.dmg',
-  'Redrob.Query_0.2.4_x64.app.tar.gz',
+  'redrob-query-0.2.4-macos-x86_64.app.tar.gz',
   'redrob-query-0.2.4-macos-x86_64.dmg',
   'redrob-query-0.2.4-windows-x64-setup.exe',
   'redrob-query-0.2.4-windows-x64.msi',
@@ -48,7 +48,7 @@ describe('buildUpdaterManifest', () => {
       signature: 'sig-of-redrob-query-0.2.4-linux-x86_64.AppImage',
       url: `https://github.com/${REPO}/releases/download/v0.2.4/redrob-query-0.2.4-linux-x86_64.AppImage`,
     });
-    expect(manifest.platforms['darwin-x86_64'].url).toBe(assetUrl(REPO, V, 'Redrob.Query_0.2.4_x64.app.tar.gz'));
+    expect(manifest.platforms['darwin-x86_64'].url).toBe(assetUrl(REPO, V, 'redrob-query-0.2.4-macos-x86_64.app.tar.gz'));
     // Windows prefers the NSIS installer, as updaterJsonPreferNsis did.
     expect(manifest.platforms['windows-x86_64'].url).toMatch(/-windows-x64-setup\.exe$/);
     expect(manifest.platforms['windows-x86_64-msi'].url).toMatch(/-windows-x64\.msi$/);

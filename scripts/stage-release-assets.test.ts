@@ -77,10 +77,10 @@ describe('stagedName', () => {
     expect(stagedName('Redrob Query_0.2.4_x64-setup.exe', '0.2.4', WINDOWS_TARGET)).toBe('redrob-query-0.2.4-windows-x64-setup.exe');
   });
 
-  it('gives the macOS updater payload the version and arch tauri leaves out, as tauri-action did', () => {
-    expect(stagedName('Redrob Query.app.tar.gz', '0.2.4', ARM_MAC)).toBe('Redrob.Query_0.2.4_aarch64.app.tar.gz');
-    expect(stagedName('Redrob Query.app.tar.gz.sig', '0.2.4', INTEL_MAC)).toBe('Redrob.Query_0.2.4_x64.app.tar.gz.sig');
-    expect(PAYLOAD_ARCH).toEqual({ 'aarch64-apple-darwin': 'aarch64', 'x86_64-apple-darwin': 'x64' });
+  it('gives the macOS updater payload the version and launcher os-arch token tauri leaves out', () => {
+    expect(stagedName('Redrob Query.app.tar.gz', '0.2.4', ARM_MAC)).toBe('redrob-query-0.2.4-macos-aarch64.app.tar.gz');
+    expect(stagedName('Redrob Query.app.tar.gz.sig', '0.2.4', INTEL_MAC)).toBe('redrob-query-0.2.4-macos-x86_64.app.tar.gz.sig');
+    expect(PAYLOAD_ARCH).toEqual({ 'aarch64-apple-darwin': 'macos-aarch64', 'x86_64-apple-darwin': 'macos-x86_64' });
   });
 
   it('refuses an updater payload from a target it has no architecture token for', () => {
@@ -88,7 +88,7 @@ describe('stagedName', () => {
   });
 
   it('gives any other versioned bundler file the name GitHub would store it under: spaces become dots', () => {
-    expect(stagedName('Redrob Query_0.2.4_aarch64.app.tar.gz', '0.2.4', ARM_MAC)).toBe('Redrob.Query_0.2.4_aarch64.app.tar.gz');
+    expect(stagedName('Redrob Query_0.2.4_amd64.rpm', '0.2.4', LINUX_TARGET)).toBe('Redrob.Query_0.2.4_amd64.rpm');
   });
 
   it('refuses a file built for another version', () => {
@@ -98,7 +98,7 @@ describe('stagedName', () => {
 
   it('keeps a numeric pre-release identifier, the form the dry run uses', () => {
     expect(stagedName('Redrob Query_0.3.0-1_x64_en-US.msi', '0.3.0-1', WINDOWS_TARGET)).toBe('redrob-query-0.3.0-1-windows-x64.msi');
-    expect(stagedName('Redrob Query.app.tar.gz', '0.3.0-1', ARM_MAC)).toBe('Redrob.Query_0.3.0-1_aarch64.app.tar.gz');
+    expect(stagedName('Redrob Query.app.tar.gz', '0.3.0-1', ARM_MAC)).toBe('redrob-query-0.3.0-1-macos-aarch64.app.tar.gz');
   });
 });
 
@@ -118,8 +118,8 @@ describe('stageReleaseAssets', () => {
   it('stages the macOS leg without descending into the unpacked .app', async () => {
     const { bundleDir, outDir } = bundle(MACOS);
     expect(await stageReleaseAssets(bundleDir, outDir, '0.2.4', ARM_MAC)).toEqual([
-      'Redrob.Query_0.2.4_aarch64.app.tar.gz',
-      'Redrob.Query_0.2.4_aarch64.app.tar.gz.sig',
+      'redrob-query-0.2.4-macos-aarch64.app.tar.gz',
+      'redrob-query-0.2.4-macos-aarch64.app.tar.gz.sig',
       'redrob-query-0.2.4-macos-aarch64.dmg',
     ]);
   });
@@ -130,8 +130,8 @@ describe('stageReleaseAssets', () => {
     const armNames = await stageReleaseAssets(arm.bundleDir, arm.outDir, '0.2.4', ARM_MAC);
     const intelNames = await stageReleaseAssets(intel.bundleDir, intel.outDir, '0.2.4', INTEL_MAC);
     expect(intelNames).toEqual([
-      'Redrob.Query_0.2.4_x64.app.tar.gz',
-      'Redrob.Query_0.2.4_x64.app.tar.gz.sig',
+      'redrob-query-0.2.4-macos-x86_64.app.tar.gz',
+      'redrob-query-0.2.4-macos-x86_64.app.tar.gz.sig',
       'redrob-query-0.2.4-macos-x86_64.dmg',
     ]);
     expect(armNames.filter((name) => intelNames.includes(name))).toEqual([]);

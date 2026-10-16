@@ -38,8 +38,8 @@ import { fileURLToPath } from 'node:url';
 export const UPDATER_KEYS = [
   { suffix: '-linux-x86_64.AppImage', keys: ['linux-x86_64', 'linux-x86_64-appimage'] },
   { suffix: '-linux-x86_64.deb', keys: ['linux-x86_64-deb'] },
-  { suffix: '_aarch64.app.tar.gz', keys: ['darwin-aarch64', 'darwin-aarch64-app'] },
-  { suffix: '_x64.app.tar.gz', keys: ['darwin-x86_64', 'darwin-x86_64-app'] },
+  { suffix: '-macos-aarch64.app.tar.gz', keys: ['darwin-aarch64', 'darwin-aarch64-app'] },
+  { suffix: '-macos-x86_64.app.tar.gz', keys: ['darwin-x86_64', 'darwin-x86_64-app'] },
   { suffix: '-windows-x64-setup.exe', keys: ['windows-x86_64', 'windows-x86_64-nsis'] },
   { suffix: '-windows-x64.msi', keys: ['windows-x86_64-msi'] },
 ];

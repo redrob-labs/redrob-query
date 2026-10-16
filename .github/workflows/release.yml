@@ -383,9 +383,9 @@ jobs:
             Write-Host "$($installer.Name) signed by CN=$cn status=$($signature.Status)"
           }
 
-      # Installers and their .sig files take the names Redrob Launcher installs
-      # (`redrob-query-<version>-<os>-<arch>.<ext>`); the macOS updater payload gets the version
-      # and architecture tauri leaves out of its name.
+      # Installers, the macOS updater payloads and their .sig files take the names Redrob Launcher
+      # reads (`redrob-query-<version>-<os>-<arch>.<ext>`); the payload gets the version and
+      # os-arch token tauri leaves out of its name.
       # Decided here, before upload, so latest.json can name every asset before the release exists.
       - name: Stage the release files under their published names
         shell: bash
