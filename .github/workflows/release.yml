@@ -1,163 +1,185 @@
-name: Signed desktop release
+name: Release
 
-# The redrob-labs release shape (redrob-labs/.github workflow-templates/release.yml):
+# The ONE release path: every platform is built on GitHub runners from the single cargo binary
+# `redrob-query` (apps/redrob-query), Windows is signed through Azure Artifact Signing with the
+# job's OpenID Connect login, macOS is signed and notarized with the organization's Developer ID,
+# and the shared redrob-labs publish job creates the GitHub Release.
 #
-#   tag v<version> on main  ->  version  ->  build matrix (build, then sign)  ->  updater manifest  ->  publish
+#   gh workflow run release.yml --ref main -f tag=vX.Y.Z           # the release: PUBLISHED as latest
+#   gh workflow run release.yml --ref <branch> -f dry_run=true     # builds and signs; publishes nothing
 #
-# The parts every repository shares are not in this file; they are called:
-#   - redrob-labs/.github/actions/sign-windows/sign.ps1          Authenticode through Azure Artifact Signing,
-#                                                                 run by tauri as `bundle.windows.signCommand`
-#   - redrob-labs/.github/.github/workflows/release-publish.yml   checksums, launcher manifest, the release
+# The parts every redrob-labs repository shares are not in this file; they are called:
+#   - redrob-labs/.github/actions/sign-windows                     Authenticode through Azure Artifact Signing
+#   - redrob-labs/.github/.github/workflows/release-publish.yml    checksums, launcher manifest, release
 #
-# Rules the shape encodes:
-#   - the trigger is the tag push; `workflow_dispatch` with a version is a DRY RUN -- it builds, signs and
-#     verifies every leg and publishes nothing;
-#   - Windows: compile, THEN `azure/login` (OIDC), THEN bundle -- tauri signs the executable and both
-#     installers during bundling, through the shared script. The login token is short-lived and the compile
-#     is long; never the other way round, never a client secret or a certificate file;
-#   - the jobs that sign run in the `release` environment with `id-token: write`;
-#   - the publish job runs only on a tag and only when every build job succeeded, and publishes the
-#     release as latest (as a prerelease when the version carries a `-`).
+# Rules this file encodes:
+#   - Windows: build, THEN `azure/login` (OIDC), THEN sign -- the login token is short-lived and the
+#     build is long; there is no certificate file and no client secret anywhere. The executable is
+#     signed BEFORE it is zipped and before the setup embeds that zip; the uninstaller and the setup
+#     are signed in their turn. `release` is the environment the organization's federated credential
+#     names; any other name is refused.
+#   - validate is the repository script plus `cargo fmt --check`; clippy and the tests ran on the
+#     pull request (.github/workflows/ci.yml) and are not repeated here;
+#   - the publish job runs only for a real tag, and only when every job before it succeeded;
+#   - the release is published as latest unless the version carries a pre-release suffix.
 #
-# Everything a leg uploads is a `release-*` artifact under its FINAL name; the publish job ships those
-# bytes unchanged. latest.json, the Tauri updater feed, is one of them (the updater-manifest job).
-
+# There is no Node, no Tauri and no WebKitGTK here any more: 0.3.0 replaced the Tauri + React shell with an
+# egui shell, so a leg is `cargo build --release -p redrob-query --target <triple>` and a packaging
+# script. The Linux leg needs the X11/Wayland/GL development headers egui, wgpu and rfd link against.
+#
+# Exactly THREE targets (tools/release_matrix.py is the list):
+#   macOS arm64        redrob-query-<v>-macos-arm64.zip + .dmg          (Developer ID, notarized, stapled)
+#   Linux x86_64       redrob-query-<v>-linux-x86_64.tar.gz + .deb
+#   Windows x64        redrob-query-<v>-windows-x64-portable.zip + -setup.exe   (Azure Artifact Signing)
 on:
-  push:
-    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
-      version:
-        description: Version for a dry run, e.g. 0.3.0-1 (builds and signs every leg, publishes nothing)
+      tag:
+        description: "Release tag, vMAJOR.MINOR.PATCH, already pushed and on main (empty for a dry run)"
+        required: false
         type: string
-        required: true
+        default: ""
+      dry_run:
+        description: "Dry run: build and sign the dispatched ref, publish nothing"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag != '' && inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
   PRODUCT: Redrob Query
   PRODUCT_URL: https://github.com/${{ github.repository }}
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  version:
-    name: Resolve the version and verify the tree
+  validate:
+    name: Validate release tag
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     outputs:
-      version: ${{ steps.v.outputs.version }}
-      # The build matrix and the updater platform keys the manifest must carry, both derived from
-      # the single list in scripts/release-matrix.mjs.
+      # The version without the leading v, the commit every later job builds, and whether this is a
+      # dry run. For a tag the commit is the tag's; for a dry run it is the dispatched ref's.
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+      dry_run: ${{ steps.resolve.outputs.dry_run }}
+      # The build matrix, the platform assets the release must carry, and the platform list the
+      # release notes promise -- all from the single list in tools/release_matrix.py.
       matrix: ${{ steps.release-matrix.outputs.matrix }}
-      platforms: ${{ steps.release-matrix.outputs.platforms }}
-      asset_suffixes: ${{ steps.release-matrix.outputs.asset_suffixes }}
+      archive_suffixes: ${{ steps.release-matrix.outputs.archive_suffixes }}
+      installer_suffixes: ${{ steps.release-matrix.outputs.installer_suffixes }}
+      notes_platforms: ${{ steps.release-matrix.outputs.notes_platforms }}
       windows_signing_ready: ${{ steps.release-matrix.outputs.windows_signing_ready }}
     steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      # A tag names the version the sources declare, or it is refused: the installers, the updater
-      # payloads and latest.json all carry package.json's version, and a tag that disagrees would
-      # publish v0.3.0 whose every file says 0.2.4. A dispatch names any well-formed version for the
-      # dry run, and scripts/prepare-release-config.mjs stamps it onto the build.
-      - name: Resolve the version
-        id: v
+      # A dry run builds whatever was dispatched; a release builds the tag it names. Resolved
+      # before the checkout so the checkout can take the result.
+      - name: Resolve what to build
+        id: resolve
         env:
-          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          declared="$(node -p 'require("./package.json").version')"
-          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then
-            v="${GITHUB_REF_NAME#v}"
-            if [ "$v" != "$declared" ]; then
-              echo "::error::tag ${GITHUB_REF_NAME} does not match the package.json version ${declared}"
-              exit 1
-            fi
-          elif [ -n "$INPUT_VERSION" ]; then
-            v="${INPUT_VERSION#v}"
+          if [ "$INPUT_DRY_RUN" = "true" ]; then
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "::notice::dry run of $GITHUB_REF_NAME ($GITHUB_SHA): builds and signs, publishes nothing"
+          elif [ -n "$INPUT_TAG" ]; then
+            [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] \
+              || { echo "::error::not a release tag: $INPUT_TAG"; exit 1; }
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            echo "ref=refs/tags/$INPUT_TAG" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::not a tag push and no version input"
+            echo "::error::give a tag (the release) or set dry_run (a rehearsal); neither was given"
             exit 1
           fi
-          # tauri's MSI bundler maps a pre-release identifier onto the fourth Windows version
-          # field, so it must be a plain number no greater than 65535 (`0.3.0-1`, not `0.3.0-rc.1`);
-          # the bundler would refuse `rc.1` two jobs and forty minutes later.
-          if ! printf '%s' "$v" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]{0,4}))?$'; then
-            echo "::error::'$v' is not a version like 1.2.3 or 1.2.3-1 (a pre-release identifier must be numeric for the MSI bundler)"
-            exit 1
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          {
-            echo "### ${PRODUCT} v$v (\`${GITHUB_SHA::9}\`)"
-            [ "${GITHUB_REF_TYPE:-}" = tag ] || echo "Dry run: nothing is published."
-          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Require release tag commit on main
-        if: github.ref_type == 'tag'
-        shell: bash
-        run: |
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::Release tag commit must be reachable from origin/main"
-            exit 1
-          fi
-      - name: Install Linux desktop dependencies
-        run: >-
-          sudo apt-get update && sudo apt-get install -y
-          libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev librsvg2-dev
-          patchelf libssl-dev
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
         with:
-          node-version: 22
-          cache: npm
+          ref: ${{ steps.resolve.outputs.ref }}
+          fetch-depth: 0
+
       # Decides which platforms this release builds. Windows is omitted, with a notice in the
       # run log, until the repository variable WINDOWS_SIGNING_READY is "true" -- see the
-      # script for why an unsigned Windows installer is not the fallback.
+      # script for why an unsigned Windows executable is not the fallback.
       - name: Resolve the release matrix
         id: release-matrix
         env:
           WINDOWS_SIGNING_READY: ${{ vars.WINDOWS_SIGNING_READY }}
-        run: node scripts/release-matrix.mjs
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          toolchain: 1.94.0
-          components: rustfmt, clippy
-      - name: Install locked dependencies
-        run: npm ci
-      - name: Run complete verification
-        run: npm run check
+        run: python3 tools/release_matrix.py
 
-  rust-advisories:
-    name: Rust security advisories
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Rust for security audit
+      # The packaging step derives the version from the TAG, while the binary reports the one in
+      # Cargo.toml. Nothing made the two agree, so a tag could ship archives named one version
+      # holding a binary that calls itself another. Checked here, before anything is built.
+      # A dry run has no tag: it takes the crate version as it is and skips the tag checks.
+      - name: Require the tag on main, matching the workspace version and the changelog
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ steps.resolve.outputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          test -n "$crate_version"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "version=${crate_version}" >> "$GITHUB_OUTPUT"
+            echo "dry run: building Cargo.toml version ${crate_version} at $(git rev-parse --short HEAD)"
+            exit 0
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Release tag commit must be reachable from origin/main"
+            exit 1
+          fi
+          tag_version="${RELEASE_TAG#v}"
+          if [ "$tag_version" != "$crate_version" ]; then
+            echo "::error::Tag v${tag_version} does not match Cargo.toml version ${crate_version}"
+            exit 1
+          fi
+          # The release notes say "See CHANGELOG", so a release whose version has no entry there
+          # ships notes that describe nothing.
+          if ! grep -q "^## ${tag_version} " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## ${tag_version}' section"
+            exit 1
+          fi
+          if grep -q "^## ${tag_version} - unreleased" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md still marks ${tag_version} as unreleased"
+            exit 1
+          fi
+          echo "version=${tag_version}" >> "$GITHUB_OUTPUT"
+
+      # The repository script, as the CI `checks` job runs it: the brand-asset pins.
+      - name: Brand assets match the design system pins
+        run: python3 scripts/check-brand.py
+
+      - name: Rust toolchain (rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
-          toolchain: stable
-      - name: Install pinned cargo-audit
-        run: cargo +stable install cargo-audit --version 0.22.2 --locked
-      # This repository's Cargo workspace is at the root, not under src-tauri.
-      - name: Audit locked Rust dependencies
-        run: cargo +stable audit --file Cargo.lock
+          toolchain: "1.95.0"
+          components: rustfmt
+
+      - name: Formatting
+        run: |
+          # clippy and the tests already gated the commit on its pull request (ci.yml); a release
+          # re-running them cost 14 minutes per dispatch for no new information.
+          cargo fmt --all -- --check
 
   build:
     name: Build ${{ matrix.label }}
-    needs: [version, rust-advisories]
+    needs: [validate]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
     # `release` is the environment the organization's federated credential names
-    # (repo:redrob-labs/<repo>:environment:release); the macOS and Linux legs run in it too so one
-    # set of protection rules covers every leg that produces a release file.
+    # (repo:redrob-labs/<repo>:environment:release); any other name is refused by Azure.
     environment: release
     permissions:
       contents: read
@@ -165,92 +187,43 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
-        # Generated by scripts/release-matrix.mjs in the version job, so the Windows leg can be
-        # excluded while Authenticode signing is not configured, and so the updater platform
-        # keys the manifest job requires come from the same single list.
-        include: ${{ fromJSON(needs.version.outputs.matrix) }}
-    runs-on: ${{ matrix.platform }}
-    timeout-minutes: 90
+        # Generated by tools/release_matrix.py in the validate job, so the Windows leg can be
+        # excluded while Authenticode signing is not configured, and so the asset names the
+        # verify job demands and the platform list the release notes promise come from that
+        # same single list.
+        include: ${{ fromJSON(needs.validate.outputs.matrix) }}
     env:
-      RELEASE_VERSION: ${{ needs.version.outputs.version }}
-      RELEASE_TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.validate.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      # Plain IDs (not credentials); here so the login step can be skipped when signing is not set up.
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
     steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
         with:
-          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.sha }}
 
-      # The one copy of the Windows signing recipe. tauri runs it as `bundle.windows.signCommand`
-      # (scripts/prepare-release-config.mjs points the bundler at it), so this repository carries
-      # no signing code of its own.
-      - name: Check out the shared signing recipe
-        if: runner.os == 'Windows'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: redrob-labs/.github
-          ref: main
-          path: .redrob-shared
-
-      - name: Install Linux desktop dependencies
-        if: runner.os == 'Linux'
-        # desktop-file-utils: the AppImage repack step below runs appimagetool, which refuses to
-        # pack without `desktop-file-validate` on PATH (measured on the v0.2.1 Linux leg).
-        run: >-
-          sudo apt-get update && sudo apt-get install -y
-          libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev librsvg2-dev
-          patchelf libssl-dev desktop-file-utils
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Set up Rust
+      - name: Rust toolchain (rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
-          toolchain: 1.94.0
+          toolchain: "1.95.0"
           targets: ${{ matrix.target }}
 
-      - name: Install locked JavaScript dependencies
-        run: npm ci
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.slug }}
 
-      - name: Require release signing material
-        shell: bash
-        env:
-          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
         run: |
-          test -n "$TAURI_UPDATER_PUBLIC_KEY"
-          test -n "$TAURI_SIGNING_PRIVATE_KEY"
-          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libgtk-3-dev libdbus-1-dev dpkg-dev
 
-      - name: Require Apple signing and notarization credentials
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CODESIGN_CERT_P12_BASE64: ${{ secrets.APPLE_CODESIGN_CERT_P12_BASE64 }}
-          APPLE_CODESIGN_CERT_PASSWORD: ${{ secrets.APPLE_CODESIGN_CERT_PASSWORD }}
-          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
-          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
-          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
-        run: |
-          set -euo pipefail
-          for name in \
-            APPLE_CODESIGN_CERT_P12_BASE64 \
-            APPLE_CODESIGN_CERT_PASSWORD \
-            APPLE_NOTARY_API_KEY_P8_BASE64 \
-            APPLE_NOTARY_API_KEY_ID \
-            APPLE_NOTARY_API_ISSUER_ID; do
-            test -n "${!name:-}"
-          done
-          printf '%s' "$APPLE_NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
-          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
-          printf 'APPLE_API_KEY_PATH=%s\n' "$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
-
+      # macOS: import the Developer ID certificate into a throwaway keychain and read the
+      # identity back out, rather than assuming its name.
       - name: Import Apple Developer ID certificate
         if: runner.os == 'macOS'
         shell: bash
@@ -259,6 +232,8 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CODESIGN_CERT_PASSWORD }}
         run: |
           set -euo pipefail
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
           printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/redrob-certificate.p12"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/redrob-build.keychain"
@@ -270,187 +245,361 @@ jobs:
           CERT_ID="$(security find-identity -v -p codesigning "$RUNNER_TEMP/redrob-build.keychain" | awk -F'"' 'NR==1 {print $2}')"
           test -n "$CERT_ID"
           printf 'APPLE_SIGNING_IDENTITY=%s\n' "$CERT_ID" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/redrob-certificate.p12"
 
-      # Writes src-tauri/tauri.release.conf.json: the updater key and feed, the version this run
-      # builds, and on Windows the shared sign.ps1 as the bundler's sign command.
-      - name: Prepare signed updater configuration
+      - name: Prepare Apple notarization key
+        if: runner.os == 'macOS'
+        shell: bash
         env:
-          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
-          REDROB_SHARED_DIR: ${{ github.workspace }}/.redrob-shared
-        run: npm run release:prepare
+          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_NOTARY_API_KEY_P8_BASE64 APPLE_NOTARY_API_KEY_ID APPLE_NOTARY_API_ISSUER_ID; do
+            test -n "${!name:-}"
+          done
+          printf '%s' "$APPLE_NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
 
-      # Windows signs mid-bundling, so the login has to sit between the compile and the bundle:
-      # compile everything first (no installer yet), log in, then bundle. The second `tauri build`
-      # finds cargo's output up to date and goes straight to packaging and signing.
-      - name: Compile before signing (Windows)
-        if: runner.os == 'Windows'
+      - name: Build
+        shell: bash
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- --target ${{ matrix.target }} --no-bundle --config src-tauri/tauri.release.conf.json
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+          # The Windows exe must carry its icon and version info (build.rs); a silent fallback is refused.
+          REDROB_QUERY_REQUIRE_WINRES: "1"
+        run: cargo build --release --locked -p redrob-query --target "$TARGET"
 
+      # The tests ran on the pull request; here the binary has to at least answer --version, which
+      # proves it links and starts without a display.
+      - name: Smoke test the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/$TARGET/release/redrob-query"
+          [ "$RUNNER_OS" = "Windows" ] && bin="$bin.exe"
+          test -x "$bin"
+          "$bin" --version
+
+      # One staging tree per platform: bin/<binary> and the licence set (LICENSE, NOTICE,
+      # UPSTREAM_NOTICES.md). The licence texts travel with every archive (GPL-3.0-or-later, section 4).
+      - name: Stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/stage"
+          python3 tools/release/stage.py --target "$TARGET" --version "$VERSION" --out "$stage"
+          ls -R "$stage" | head -50
+
+      # The version Finder, the About box and Gatekeeper show is read from the bundle after it is
+      # built, not trusted from the script that wrote it.
+      - name: Require the bundle version to match the workspace version (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          plist="$RUNNER_TEMP/stage/Redrob Query.app/Contents/Info.plist"
+          crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          for key in CFBundleShortVersionString CFBundleVersion; do
+            bundle_version="$(plutil -extract "$key" raw -o - "$plist")"
+            if [ "$bundle_version" != "$crate_version" ]; then
+              echo "::error::Info.plist $key is $bundle_version, Cargo.toml is $crate_version"
+              exit 1
+            fi
+          done
+
+      - name: Sign, notarize and staple (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/stage/Redrob Query.app"
+
+          codesign --force --deep --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          # notarytool takes an archive, not a bundle; ditto --keepParent preserves the
+          # .app directory structure that a plain zip mangles.
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_API_KEY_ID" \
+            --issuer "$APPLE_NOTARY_API_ISSUER_ID" \
+            --wait
+
+          # Stapling and validating both look the ticket up in Apple's CloudKit service, and that
+          # lookup drops ("The network connection was lost", error 68) after notarization was
+          # Accepted. Each network step is retried with backoff; a real refusal fails every attempt.
+          retry() {
+            local i
+            for i in 1 2 3 4 5 6; do
+              if "$@"; then return 0; fi
+              [ "$i" -lt 6 ] || { echo "::error::failed after 6 attempts: $*"; return 1; }
+              echo "::warning::attempt $i of 6 failed: $*; retrying in $((i * 20))s"
+              sleep $((i * 20))
+            done
+          }
+          retry xcrun stapler staple "$app"
+          retry xcrun stapler validate "$app"
+          # Gatekeeper's own verdict, which is what a user's machine actually applies.
+          retry spctl --assess --type execute --verbose=4 "$app"
+          rm -f "$RUNNER_TEMP/notarize.zip"
+
+      # The login comes after the build on purpose: the OpenID Connect token is short-lived and a
+      # long build left signtool without a usable credential (it then waited on a browser).
       - name: Log in to Azure (OIDC)
-        if: runner.os == 'Windows'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # On Windows, tauri calls the shared sign.ps1 on the executable, the NSIS installer and the
-      # MSI as it packages them, with ARTIFACT_SIGNING_* from this environment and the login above.
-      # On macOS it signs with the imported Developer ID and notarizes with the API key.
-      - name: Build, bundle and sign
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_KEY: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
-          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
-          ARTIFACT_SIGNING_ENDPOINT: ${{ runner.os == 'Windows' && secrets.ARTIFACT_SIGNING_ENDPOINT || '' }}
-          ARTIFACT_SIGNING_ACCOUNT: ${{ runner.os == 'Windows' && secrets.ARTIFACT_SIGNING_ACCOUNT || '' }}
-          ARTIFACT_SIGNING_CERT_PROFILE: ${{ runner.os == 'Windows' && secrets.ARTIFACT_SIGNING_CERT_PROFILE || '' }}
-          SIGN_DESCRIPTION: ${{ env.PRODUCT }}
-          SIGN_URL: ${{ env.PRODUCT_URL }}
-        run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json
+      # The executable is signed BEFORE it is zipped: the portable zip and the setup both carry it
+      # as is.
+      - name: Sign the executable (Windows)
+        if: runner.os == 'Windows'
+        uses: redrob-labs/.github/actions/sign-windows@main
+        with:
+          files: ${{ runner.temp }}/stage/bin/redrob-query.exe
+          description: ${{ env.PRODUCT }}
+          url: ${{ env.PRODUCT_URL }}
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          account: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          cert-profile: ${{ secrets.ARTIFACT_SIGNING_CERT_PROFILE }}
 
-      - name: Locate the bundle directory
-        id: bundle
+      - name: Package
+        id: package
         shell: bash
         run: |
           set -euo pipefail
-          # This is a Cargo workspace rooted at the repo, so the bundle is NOT under src-tauri/;
-          # ask cargo instead of hardcoding either layout.
-          target_root="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)"
-          echo "dir=${target_root}/${RELEASE_TARGET}/release/bundle" >> "$GITHUB_OUTPUT"
+          out="$RUNNER_TEMP/artifacts"
+          mkdir -p "$out"
+          base="redrob-query-${VERSION}-${{ matrix.slug }}"
 
-      # The default bundler ships the build host's libwayland in the AppImage, and on Mesa 25+ that
-      # makes WebKitWebProcess abort with EGL_BAD_PARAMETER: the window opens and stays blank
-      # (tauri-apps/tauri#15665). Measured on v0.2.0 before this step existed -- strace on the web
-      # process, then the same AppImage with only those four libraries removed rendered with no
-      # environment overrides. Repacking changes the bytes, so the script also re-signs; the manifest
-      # job picks the new .sig up from beside the staged file and verifies it against the bytes.
-      - name: Repack the AppImage without bundled Wayland, and re-sign it
-        if: runner.os == 'Linux'
+          case "$RUNNER_OS" in
+            macOS)
+              # Archive the whole staging tree, not just the .app, so the licences and notices
+              # travel with the binary. ditto (not zip/cp) because it preserves the code
+              # signature's extended attributes and the stapled notarization ticket.
+              mv "$RUNNER_TEMP/stage" "$RUNNER_TEMP/${base}"
+              ( cd "$RUNNER_TEMP" && ditto -c -k --sequesterRsrc --keepParent "$base" "$out/${base}.zip" )
+              ;;
+            Windows)
+              # `-portable`: the unpacked, signed app, which Redrob Launcher unzips and runs in place.
+              powershell -NoProfile -Command \
+                "Compress-Archive -Path '$RUNNER_TEMP/stage/*' -DestinationPath '$out/${base}-portable.zip' -Force"
+              ;;
+            *)
+              tar -C "$RUNNER_TEMP/stage" -czf "$out/${base}.tar.gz" .
+              # The same tree as a package for apt; the system's own uninstall removes it.
+              python3 tools/release/make_deb.py "$RUNNER_TEMP/stage" "$VERSION" "$out/${base}.deb"
+              # The licence set once, from Linux, rather than three times under the same name.
+              cp LICENSE NOTICE UPSTREAM_NOTICES.md "$out/"
+              ;;
+          esac
+
+          printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
+          printf 'dir=%s\n' "$out" >> "$GITHUB_OUTPUT"
+          ls -la "$out"
+
+      # The disk image most people download: the stapled app, an Applications link, the uninstaller
+      # and the licences, on the branded window (installer/macos/). The image is signed, notarized and
+      # stapled in its own right, so Gatekeeper accepts it before anyone opens the app inside.
+      - name: Disk image (macOS)
+        if: runner.os == 'macOS'
         shell: bash
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          BUNDLE_DIR: ${{ steps.bundle.outputs.dir }}
-          # Pinned by digest: this binary rewrites a signed release artifact.
-          APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
-          APPIMAGETOOL_SHA256: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1
+          BASE: ${{ steps.package.outputs.base }}
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
         run: |
           set -euo pipefail
-          tool="$RUNNER_TEMP/appimagetool"
-          curl -fsSL -o "$tool" "$APPIMAGETOOL_URL"
-          echo "${APPIMAGETOOL_SHA256}  ${tool}" | sha256sum -c -
-          chmod +x "$tool"
-          # Runners have no FUSE; both the tool and the AppImage run through their own extractor.
-          export APPIMAGE_EXTRACT_AND_RUN=1
-          bash scripts/resign-linux-appimage.sh "$BUNDLE_DIR" "$tool"
+          trap 'rm -f "$RUNNER_TEMP/AuthKey.p8"' EXIT
+          # A venv: the runner's Homebrew Python is "externally managed" (PEP 668) and refuses
+          # `pip install --user`.
+          python3 -m venv "$RUNNER_TEMP/dmgbuild-venv"
+          "$RUNNER_TEMP/dmgbuild-venv/bin/python" -m pip install --quiet "dmgbuild==1.6.5"
+          export PATH="$RUNNER_TEMP/dmgbuild-venv/bin:$PATH"  # make-dmg.sh runs `python3 -m dmgbuild`
+          dmg="$RUNNER_TEMP/artifacts/${BASE}.dmg"
+          bash installer/macos/make-dmg.sh \
+            --app "$RUNNER_TEMP/$BASE/Redrob Query.app" \
+            --licenses "$RUNNER_TEMP/$BASE/share/redrob-query/licenses" \
+            --version "$VERSION" --sign-identity "$APPLE_SIGNING_IDENTITY" --out "$dmg"
+          xcrun notarytool submit "$dmg" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_API_KEY_ID" \
+            --issuer "$APPLE_NOTARY_API_ISSUER_ID" \
+            --wait
+          # The same retry as the app's staple, above (each step is its own shell).
+          retry() {
+            local i
+            for i in 1 2 3 4 5 6; do
+              if "$@"; then return 0; fi
+              [ "$i" -lt 6 ] || { echo "::error::failed after 6 attempts: $*"; return 1; }
+              echo "::warning::attempt $i of 6 failed: $*; retrying in $((i * 20))s"
+              sleep $((i * 20))
+            done
+          }
+          retry xcrun stapler staple "$dmg"
+          retry xcrun stapler validate "$dmg"
+          retry spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
 
-      # sign.ps1 already verified each file it signed (`signtool verify /pa`, Status Valid, signer
-      # CN). This asserts the OUTCOME over the installers that leave the runner: both are present
-      # and each carries a Valid, timestamped Authenticode signature by the organisation's
-      # certificate -- so a bundler that quietly skipped the sign command cannot ship unsigned.
-      - name: Verify Windows installer signatures
+      # The setup carries the signed zip above and the uninstaller, so it is built after signing:
+      # uninstaller first, signed, then embedded; the setup last, signed. installer/windows/README.md.
+      - name: Build the uninstaller (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $work = Join-Path $env:RUNNER_TEMP "setup"
+          python installer/windows/build.py --out $work --arch x64 --version $env:VERSION --uninstaller-only
+          if ($LASTEXITCODE -ne 0) { throw "uninstaller build failed ($LASTEXITCODE)" }
+          if (-not (Test-Path -LiteralPath (Join-Path $work "uninstall/Uninstall Redrob Query.exe"))) {
+            throw "uninstaller was not built"
+          }
+
+      - name: Sign the uninstaller (Windows)
+        if: runner.os == 'Windows'
+        uses: redrob-labs/.github/actions/sign-windows@main
+        with:
+          files: ${{ runner.temp }}/setup/uninstall/*.exe
+          description: ${{ env.PRODUCT }}
+          url: ${{ env.PRODUCT_URL }}
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          account: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          cert-profile: ${{ secrets.ARTIFACT_SIGNING_CERT_PROFILE }}
+
+      - name: Build the setup (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          BUNDLE_DIR: ${{ steps.bundle.outputs.dir }}
-          EXPECTED_CN: McKinley Rice, Inc.
+          BASE: ${{ steps.package.outputs.base }}
         run: |
           $ErrorActionPreference = "Stop"
-          if (-not (Test-Path -LiteralPath $env:BUNDLE_DIR)) { throw "No bundle directory at $env:BUNDLE_DIR" }
-          $installers = @(Get-ChildItem -LiteralPath $env:BUNDLE_DIR -Recurse -File | Where-Object { $_.Extension -in '.exe', '.msi' })
-          if (-not ($installers.Extension -contains '.exe') -or -not ($installers.Extension -contains '.msi')) {
-            throw "Expected both signed NSIS and MSI installers"
+          $work = Join-Path $env:RUNNER_TEMP "setup"
+          $zip = Join-Path $env:RUNNER_TEMP "artifacts/$env:BASE-portable.zip"
+          $setupName = "$env:BASE-setup.exe"
+          $uninstaller = Join-Path $work "uninstall/Uninstall Redrob Query.exe"
+          python installer/windows/build.py --out $work --arch x64 --version $env:VERSION --payload $zip `
+            --uninstaller $uninstaller --name $setupName
+          if ($LASTEXITCODE -ne 0) { throw "setup build failed ($LASTEXITCODE)" }
+          $setup = Join-Path $work $setupName
+          # The setup must carry exactly the zip that ships beside it; a stale payload would install
+          # a different build than the one its checksum file describes.
+          if ((Get-Item -LiteralPath $setup).Length -le (Get-Item -LiteralPath $zip).Length) {
+            throw "setup is not larger than the zip it should embed"
           }
-          foreach ($installer in $installers) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
-            if ($signature.Status -ne 'Valid') {
-              throw "$($installer.Name) signature status $($signature.Status): $($signature.StatusMessage)"
-            }
-            $cn = $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
-            if ($cn -ne $env:EXPECTED_CN) {
-              throw "$($installer.Name) signed by CN=$cn, expected CN=$($env:EXPECTED_CN)"
-            }
-            if (-not $signature.TimeStamperCertificate) {
-              throw "$($installer.Name) signature carries no timestamp"
-            }
-            Write-Host "$($installer.Name) signed by CN=$cn status=$($signature.Status)"
-          }
+          Copy-Item -LiteralPath $setup -Destination (Join-Path $env:RUNNER_TEMP "artifacts/$setupName")
 
-      # Installers, the macOS updater payloads and their .sig files take the names Redrob Launcher
-      # reads (`redrob-query-<version>-<os>-<arch>.<ext>`); the payload gets the version and
-      # os-arch token tauri leaves out of its name.
-      # Decided here, before upload, so latest.json can name every asset before the release exists.
-      - name: Stage the release files under their published names
-        shell: bash
-        env:
-          BUNDLE_DIR: ${{ steps.bundle.outputs.dir }}
-        run: node scripts/stage-release-assets.mjs "$BUNDLE_DIR" "$RUNNER_TEMP/release-assets" "$RELEASE_VERSION" "$RELEASE_TARGET"
-
-      - name: Upload the release files
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Sign the setup (Windows)
+        if: runner.os == 'Windows'
+        uses: redrob-labs/.github/actions/sign-windows@main
         with:
-          name: release-${{ matrix.target }}
-          path: ${{ runner.temp }}/release-assets/*
+          files: ${{ runner.temp }}/artifacts/*-setup.exe
+          description: ${{ env.PRODUCT }}
+          url: ${{ env.PRODUCT_URL }}
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          account: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          cert-profile: ${{ secrets.ARTIFACT_SIGNING_CERT_PROFILE }}
+
+      # `release-*` is the prefix the shared publish job collects; the checksums and the launcher
+      # manifest are written there, over every platform's files at once.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.slug }}
+          path: ${{ steps.package.outputs.dir }}/*
           if-no-files-found: error
 
-  # latest.json IS the feed on GitHub Releases. Missing it does not fail an install, it silently
-  # freezes every existing client on its current version; a signature over the wrong bytes passes
-  # "has a signature" and fails on every user's machine at the first update check. So the manifest
-  # is written from the staged files, checked against the platforms the matrix built, and every
-  # signature is verified against the file it names -- on a dry run as well as on a tag.
-  updater-manifest:
-    name: Updater manifest
-    needs: [version, build]
+      - name: Remove the temporary keychain (macOS)
+        if: always() && runner.os == 'macOS'
+        run: |
+          if [ -f "$RUNNER_TEMP/redrob-build.keychain" ]; then security delete-keychain "$RUNNER_TEMP/redrob-build.keychain" || true; fi
+
+  verify-release-assets:
+    name: Signed builds and licence files accompany the release
+    needs: [validate, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-      - name: Download every leg's release files
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      # A missing platform is a release that silently ships less than its notes claim, and a
+      # binary without its licence texts breaks the one thing MIT and Apache ask for. Both fail
+      # here, BEFORE the release is published.
+      - uses: actions/download-artifact@v4
         with:
           pattern: release-*
-          path: release-assets
+          path: artifacts
           merge-multiple: true
-      - name: Write latest.json and verify every updater signature against its bytes
+
+      - name: Assert every platform and every licence artifact is present
         env:
-          RELEASE_VERSION: ${{ needs.version.outputs.version }}
-          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
-          REQUIRED_PLATFORMS: ${{ needs.version.outputs.platforms }}
-          REQUIRED_ASSET_SUFFIXES: ${{ needs.version.outputs.asset_suffixes }}
+          REQUIRED_ARCHIVES: ${{ needs.validate.outputs.archive_suffixes }} ${{ needs.validate.outputs.installer_suffixes }}
+        shell: bash
         run: |
           set -euo pipefail
-          echo "Staged release files:"
-          ls -1 release-assets | sed 's/^/  /'
-          mkdir -p manifest
-          node scripts/write-updater-manifest.mjs release-assets "$RELEASE_VERSION" "$GITHUB_REPOSITORY" manifest/latest.json
-          cat manifest/latest.json
-      - name: Upload latest.json
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: release-updater-manifest
-          path: manifest/latest.json
-          if-no-files-found: error
+          names="$(ls -1 artifacts)"
+          echo "Assets built:"
+          printf '  %s\n' $names
 
+          # Platform archives and installers come from the same generator that built the matrix,
+          # so a leg that was deliberately not built is not demanded here, and one that WAS built
+          # cannot be quietly missing.
+          for suffix in ${REQUIRED_ARCHIVES}; do
+            found=0
+            for name in $names; do
+              case "$name" in
+                *"$suffix") found=1; break ;;
+              esac
+            done
+            if [ "$found" -ne 1 ]; then
+              echo "::error::no asset ending in ${suffix}; a platform this run built produced no archive"
+              exit 1
+            fi
+          done
+
+          # The licence artifacts are unconditional. The checksums and redrob-launcher.json are
+          # the publish job's: it writes both over this same set of files.
+          for pattern in \
+            '^LICENSE$' \
+            '^NOTICE$' \
+            '^UPSTREAM_NOTICES\.md$'; do
+            if ! printf '%s\n' $names | grep -qE "$pattern"; then
+              echo "::error::no asset matching ${pattern}; the licence texts and notices must accompany every binary"
+              exit 1
+            fi
+          done
+
+          if printf '%s\n' $names | grep -q '\.unsigned\.'; then
+            echo "::error::an unsigned archive is among the assets"
+            exit 1
+          fi
+
+          echo "Every built platform asset (${REQUIRED_ARCHIVES}) and the licence files are present."
+
+  # The shared redrob-labs publish job: SHA256SUMS.txt over every asset, redrob-launcher.json (this
+  # app reads the launcher's shared account file directly), and the release v<version> created
+  # and PUBLISHED as latest (prerelease when the version carries a `-`). Only for a real tag, never
+  # for a dry run, and only when every job before it succeeded. `tag` and `target` are passed
+  # explicitly because this workflow is dispatched from a branch: github.sha is the branch head, not
+  # the tag's commit. The assets reach it as the `release-*` artifacts every job above uploaded
+  # (release-linux-x86_64, release-macos-arm64, release-windows-x64), which the shared
+  # job merges into one directory before writing the sums -- the same hand-over redrob-canvas uses.
   publish:
-    needs: [version, rust-advisories, build, updater-manifest]
-    if: always() && github.ref_type == 'tag' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped')
+    needs: [validate, build, verify-release-assets]
+    if: always() && needs.validate.outputs.dry_run != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped')
     uses: redrob-labs/.github/.github/workflows/release-publish.yml@main
     permissions:
       contents: write
     with:
-      version: ${{ needs.version.outputs.version }}
+      version: ${{ needs.validate.outputs.version }}
       title: Redrob Query
       launcher_manifest: true
       publish: true
+      tag: ${{ inputs.tag }}
+      target: ${{ needs.validate.outputs.sha }}
