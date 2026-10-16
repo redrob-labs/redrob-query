@@ -1333,8 +1333,9 @@ impl eframe::App for QueryApp {
                     self.structure.ui(ui, &self.workspace, read_only);
                 });
         }
+        let canvas = Tokens::of(ui).canvas;
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
+            .frame(egui::Frame::NONE.fill(canvas))
             .show(ui, |ui| self.central(ui));
 
         self.shortcuts_window(ui.ctx());
