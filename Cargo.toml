@@ -1,15 +1,45 @@
 [workspace]
-members = ["crates/redrob-core", "src-tauri"]
-resolver = "2"
+resolver = "3"
+members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.2.4"
+version = "0.3.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-rust-version = "1.94"
+rust-version = "1.95"
 authors = ["Janghoon Lee (Redrob) and contributors"]
 repository = "https://github.com/redrob-labs/redrob-query"
 homepage = "https://github.com/redrob-labs/redrob-query"
+
+[workspace.dependencies]
+arboard = { version = "3.6", default-features = false }
+base64 = "0.22"
+bigdecimal = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+eframe = { version = "0.36", default-features = false }
+egui = { version = "0.36", default-features = false }
+egui_extras = { version = "0.36", default-features = false }
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+fs2 = "0.4"
+futures-util = "0.3"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+log = "0.4"
+mongodb = "3"
+# `rustls-tls` bundles the webpki roots; `rustls-tls-native-roots` adds the OS store, so a corporate
+# TLS-inspecting proxy's root (installed on Windows, not in webpki) still verifies; `system-proxy`
+# reads the OS proxy settings, which `default-features = false` had switched off.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "system-proxy", "stream"] }
+rfd = "0.17"
+secrecy = { version = "0.10", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "sqlite", "chrono", "bigdecimal", "uuid", "json"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time", "rt-multi-thread", "macros"] }
+url = { version = "2", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+webbrowser = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -20,3 +50,27 @@ pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+too_many_lines = "allow"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+
+# CI gates compile with `--profile ci`: no optimisation anywhere (the dev profile optimises every
+# dependency at level 2, which is what makes a cold `cargo test` take a quarter of an hour).
+[profile.ci]
+inherits = "dev"
+opt-level = 0
+debug = "line-tables-only"
+incremental = false
+
+[profile.ci.package."*"]
+opt-level = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

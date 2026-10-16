@@ -53,16 +53,21 @@ from `origin/main`, so tagging straight off `develop` fails instead of shipping.
 
 ```bash
 git switch develop && git pull
-git switch -c release/v0.2.0
-# bump the version, update the changelog, run the release check
-# open a pull request into main and merge it, then tag main:
+git switch -c release/0.3.0
+# bump the version in Cargo.toml, write the CHANGELOG section, run the gate
+# open a pull request into develop and merge it; then a pull request develop -> main
+# (merge commit) and tag main:
 git switch main && git pull
-git tag -a v0.2.0 -m "Redrob Query v0.2.0"
-git push origin v0.2.0
-# bring main's release commit back so develop does not fall behind:
-git switch -c chore/sync-main-to-develop main
-# open a pull request into develop
+git tag -a v0.3.0 -m "Redrob Query v0.3.0"
+git push origin refs/tags/v0.3.0:refs/tags/v0.3.0
+gh workflow run release.yml --ref main -f tag=v0.3.0
+# then merge main back into develop
 ```
+
+The tag must equal the workspace version in `Cargo.toml` and `CHANGELOG.md` must carry a
+`## <version>` section; the release is **published** when every platform leg has built, signed and
+verified -- there is no draft to approve. To exercise the pipeline without releasing, run the
+**Release** workflow with `dry_run=true`: it builds and signs the dispatched ref and publishes nothing.
 
 A hotfix is the same shape with `hotfix/*` cut from `main` rather than `develop`, and it merges into
 both.
@@ -76,22 +81,19 @@ need write access to contribute, and pull requests from forks run CI with no rep
 git switch develop && git pull
 git switch -c fix/short-description
 
-npm install
-npm run typecheck
-npm run test
-npm run build
-
 cargo fmt --all
-cargo clippy --all-targets -- -D warnings
+cargo clippy -p redrob-query -p redrob-query-core --all-targets -- -D warnings
+cargo test -p redrob-query-core
+python3 scripts/check-brand.py
 
-npm run release:check   # the release validator, before tagging
+cargo run -p redrob-query     # the app; the built-in Demo SQLite profile needs no server
 
 # open a pull request into develop
 ```
 
-The browser demo is backed by deterministic in-memory sample data, on purpose: it demonstrates the
-product without a database and without anybody's credentials. Keep it deterministic, so a screenshot
-taken today matches one taken next month.
+The built-in Demo SQLite profile is an in-memory database with deterministic sample data, on
+purpose: it demonstrates the product without a server and without anybody's credentials. Keep it
+deterministic, so a screenshot taken today matches one taken next month.
 
 ### Commits
 
@@ -100,29 +102,23 @@ or what the app is allowed to write, say so there.
 
 ## Branding
 
-The mark in `src/assets/` is the Redrob mark, the same one Redrob Cowork ships, and the app icons are
-generated from it. Replacing it with a drawing that merely resembles it is how a product ends up with
-two logos.
+Every brand file (`resources/icons`, `resources/brand`, the installers' `res/`) is built from the
+design system's published files by `scripts/build-brand-assets.py` and pinned by sha256 in
+`brand/SOURCES.json`. Replacing one with a drawing that merely resembles it is how a product ends up
+with two logos, and `scripts/check-brand.py` refuses it.
 
 ## What CI checks
 
-`.github/workflows/ci.yml` runs on every pull request and on pushes to `main` and `develop`. It consumes no
-secrets, so a pull request from a fork gets exactly the same run as one from a branch here. Two jobs,
-and both are required before a merge:
+`.github/workflows/ci.yml` runs on every pull request. It consumes no secrets, so a pull request from
+a fork gets exactly the same run as one from a branch here. Two jobs:
 
 | Check | What it runs |
 | --- | --- |
-| **Release metadata, types, tests, build** | `npm run release:check`, `npm run typecheck`, `npm test`, `npm run build` |
-| **Format, clippy, tests** | `npm run rust:fmt`, `npm run rust:clippy` (`-D warnings`), `npm run rust:test` |
+| **brand assets** | `python3 scripts/check-brand.py` |
+| **fmt, clippy, test (profile ci)** | `cargo fmt --all -- --check`, `cargo clippy -p redrob-query -p redrob-query-core --all-targets --locked --profile ci -- -D warnings`, `cargo test` of the same crates. Skipped when no Rust input changed or when the pull request targets `main` |
 
-`npm run release:check` is the one worth knowing about. It pins the things that fan out across
-several files and go wrong silently: the version in `package.json`, `Cargo.toml`, `tauri.conf.json`
-and `package-lock.json`; the Cargo `rust-version` against `rust-toolchain.toml`; the Tauri
-`productName` and `identifier`; and that every PNG under `src-tauri/icons/` is RGBA. The last one is
-not cosmetic — `tauri::generate_context!` panics at compile time on a non-RGBA icon, so a single RGB
-icon means the desktop app does not build.
-
-`npm run check` runs the whole set locally in one command.
+The release workflow (`.github/workflows/release.yml`) repeats only the brand check and
+`cargo fmt --check`, then builds, signs and publishes the three targets.
 
 ## Dependency updates
 

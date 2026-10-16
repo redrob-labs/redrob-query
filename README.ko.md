@@ -2,153 +2,164 @@
 
 [English](./README.md) · **한국어**
 
-Redrob Query는 Rust 1.94, Tauri 2, React 19, TypeScript로 만든 JVM 없는 AI 보조 데이터베이스 작업공간입니다. PostgreSQL, MySQL, SQLite, MongoDB용 데스크톱 작업공간으로, 기본은 읽기만 하고 허락한 연결에서만 고칩니다. 결정적인 인메모리 샘플 데이터만으로 동작하는 브라우저 데모도 제공합니다.
+Redrob Query는 PostgreSQL, MySQL, SQLite, MongoDB를 위한 에이전트형 데이터베이스 클라이언트입니다.
+네이티브 창 하나(Rust, wgpu 위의 egui)에서 기본은 읽기만 하고, 허락한 곳에서만 변경을 검토한 뒤
+고치며, 옆에 있는 에이전트가 쿼리 초안을 써 줍니다. JVM도, 브라우저 런타임도, 웹 데모도 없습니다.
+로그인은 [Redrob Launcher](https://github.com/redrob-labs/redrob-launcher)에서 한 번만 하면 이 앱이
+그 계정을 읽습니다.
 
-워크플로는 DBeaver Community를 참고했지만 Redrob Query는 처음부터 새로 구현한 것입니다. DBeaver 소스 코드나 브랜딩이 들어 있지 않고, Eclipse RCP·OSGi·JDBC·Java·JVM 런타임도 없습니다.
+워크플로는 DBeaver Community를 참고했고, 엔진의 일부는 Beekeeper Studio Community Edition에서
+포팅했습니다([NOTICE](NOTICE), [UPSTREAM_NOTICES.md](UPSTREAM_NOTICES.md) 참고). Eclipse RCP·OSGi·
+JDBC·Java·Electron은 들어 있지 않습니다.
 
 ## 출하 범위
 
 | 영역 | 기능 |
 |---|---|
-| 프로필 | 사용자 프로필 생성·테스트·편집·연결·연결 해제·삭제. 내장 프로필은 변경 불가 |
-| PostgreSQL | 신원을 검증하는 TLS, 메타데이터, 한계가 정해진 SQL 읽기, 네이티브 스칼라 디코딩, 검토 후 편집 |
-| MySQL | 신원을 검증하는 TLS, 메타데이터, 한계가 정해진 SQL 읽기, unsigned/decimal/시간/BIT 디코딩, 검토 후 편집 |
-| SQLite | 편집을 허락하기 전에는 읽기 전용(`mode=ro`)으로 여는 파일 프로필, 메타데이터, 가드가 걸린 읽기, 검토 후 편집. 네이티브 데모는 `:memory:` 사용 |
-| MongoDB | 표준/SRV 프로필, 별도 `authSource`, 컬렉션, 최대 25개 문서 필드 샘플링, 엄격한 `find`/`aggregate`/explain JSON |
-| 결과 | 25/50/100/250행 페이징, 타입이 있는 가상 스크롤 행, 현재 페이지 정렬·필터, 열 표시 설정, 열·행 메뉴, 상세 패널, 실행 메시지, 눈에 보이는 CSV 내보내기 |
-| 편집 | 연결마다 "Allow edits"를 켜기 전에는 꺼져 있습니다. 셀 고치기, 행 추가·삭제, 표 만들기·열 추가. 모든 변경은 쌓아 두고 검토한 뒤 한 트랜잭션으로 적용하며, 문장마다 정확히 한 행만 바꾸지 않으면 전부 되돌립니다. 고칠 수 없는 결과는 이유를 보여 줍니다 |
-| 쿼리 작업공간 | 연결이 소유하는 SQL/MQL 탭, 엔진별 시작 쿼리, 저장된 쿼리(Save / Ctrl+S), 읽기 전용 문장 여러 개를 한 번에 실행하고 결과 고르기, 고정한 표, 로컬 데스크톱 복원, 한계가 정해진 실행 이력, 포매팅, 단축키 |
-| Redrob AI | 모델 `auto`를 통한 엔진 인식 SQL/MQL 생성과 설명 |
-| 브라우저 데모 | PostgreSQL/MySQL/SQLite/Mongo 샘플 워크플로, 로컬 AI 응답, 원자적 인메모리 관계형 편집 리뷰 |
+| 프로필 | 내장 **Demo SQLite**(`:memory:`, 오프라인에서 동작)와 사용자 프로필: 생성·테스트·편집·연결·연결 해제·삭제. 비밀번호는 파일이 아니라 OS 키링에 저장 |
+| PostgreSQL / MySQL | 신원을 검증하는 TLS, 스키마별로 묶인 표와 뷰, 열, 기본 키·외래 키, 인덱스, 한계가 정해진 읽기 전용 SQL, 검토 후 편집 |
+| SQLite | 파일 프로필(편집을 허락하기 전에는 `mode=ro`), 표, 열, 테이블 값 pragma로 읽는 키와 인덱스, 검토 후 편집 |
+| MongoDB | 표준/SRV 프로필, `authSource`, 25개 문서 필드 샘플링이 붙은 컬렉션, 엄격한 `find` / `aggregate` / `explain` 요청 본문, 컬렉션 인덱스, JSON 문서 보기 |
+| 편집기 | 연결별 탭, SQL과 Mongo JSON 색칠, Ctrl+Enter로 선택 영역 또는 커서가 있는 문장 실행(읽기 전용 배치는 문장 하나씩), Ctrl+Shift+F 포매팅, Ctrl+S로 텍스트를 파일에 저장, 엔진별 시작 쿼리, Mongo 요청 스트립 |
+| 결과 | 가상 스크롤 행, 가져온 페이지 안에서 정렬·필터, 열 표시 설정, 셀 복사, TSV / JSON 복사·저장, 탭별 행 한도 |
+| 편집 | 셀을 더블클릭해 새 값을 쌓고, 행 메뉴에서 삭제하고, Changes 패널에서 쌓인 변경을 검토한 뒤 Apply가 한 트랜잭션으로 실행합니다. 어느 문장이라도 정확히 한 행만 바꾸지 않으면 전부 되돌립니다. 단일 열 기본 키가 있는 표 하나의 결과와 읽기 전용이 아닌 프로필이 필요합니다 |
+| 구조 | PK / FK / not-null 표시가 붙은 열, 외래 키, 인덱스. 고정된 타입 목록 위의 폼으로 표 만들기·열 추가 |
+| Ask | 원하는 쿼리를 말로 설명하면 활성 탭의 텍스트만 맥락으로 함께 가고, 결과 행과 자격 증명은 절대 가지 않습니다. 답의 ` ```sql ` / ` ```mql ` 블록은 한 번 눌러 편집기에 넣습니다 |
+| 작업공간 | 시작할 때 최대 30개 탭과 50개 이력을 복원(`workspace.json`), 창 위치는 `ui.ron`. `REDROB_QUERY_NO_PREFS=1`이면 아무것도 남기지 않음 |
 
-이 릴리스는 SQL Server를 지원하지 않습니다. 연결 UI에 없고, 프로필 검증과 AI 검증 양쪽에서 거부합니다.
-
-데스크톱 연결은 그 연결에서 "Allow edits"를 켜기 전까지 읽기 전용입니다. 켜도 쌓인 변경을 검토하고 Apply를 누르기 전에는 아무것도 쓰지 않습니다. 셀 수정은 값을 바인딩한 `UPDATE … WHERE <기본 키> = ?`가 되고, 행 추가·삭제도 같은 방식이며, 전체가 한 트랜잭션으로 실행되어 어느 한 문장이라도 정확히 한 행을 바꾸지 않으면 되돌립니다. 결과에 단일 열 기본 키가 들어 있는, 표 하나를 그대로 읽는 쿼리만 고칠 수 있습니다. 브라우저 데모의 편집은 프로필별 인메모리 픽스처를 바꾸며, 새로고침하면 사라집니다.
+이 릴리스는 SQL Server를 지원하지 않습니다. 편집기에 입력한 쓰기 문장은 엔진의 읽기 전용 게이트가
+거부합니다. 쓰기 경로는 Changes 패널과 구조 폼 둘뿐입니다.
 
 ## 구조
 
 ```text
-React 19 + Monaco + TanStack Virtual
-                │
-         Zustand 작업공간 상태
-                │ DataBridge
-          ┌─────┴───────────┐
-     DemoBridge         Tauri IPC 허용목록
-   (브라우저 메모리)               │
-                            redrob-core (Rust)
-                       ┌─────────┼──────────┐
-                 SQLx 구체 구현   MongoDB   Redrob AI
-                 PG/MySQL/SQLite 드라이버  HTTPS 클라이언트
+apps/redrob-query  (wgpu 위의 eframe / egui 0.36)
+  profiles · schema · editor · grid · changes · structure · Ask 도크
+                │  Workspace  (옛 명령 하나당 메서드 하나, Pending 핸들로 답)
+crates/redrob-query-core
+  DataService  ──  SQLx (PostgreSQL / MySQL / SQLite)  ·  mongodb  ·  reqwest (콘솔)
+  query.rs 읽기 전용 분류 · cell_edits.rs · ddl.rs · keys.rs · profile_store.rs · secret.rs
+  account.rs: Redrob Launcher의 공용 account.json
 ```
 
-[아키텍처](docs/ARCHITECTURE.md), [보안](docs/SECURITY.md), [데모 안내](docs/DEMO.md), [DBeaver 워크플로 대응표](docs/DBEAVER-PORTING-MAP.md)를 함께 보세요.
+[아키텍처](docs/ARCHITECTURE.md), [보안](docs/SECURITY.md), [DBeaver 워크플로 맵](docs/DBEAVER-PORTING-MAP.md)을
+참고하세요.
 
-## 빠른 시작: 브라우저 데모
+## 설치
 
-브라우저 데모는 데이터베이스나 Redrob 서비스에 접속하지 않고, 작업공간을 저장하지도 않습니다.
+모든 릴리스는 Redrob Launcher가 읽는 이름으로 다음을 싣습니다.
+
+| 플랫폼 | 자산 |
+|---|---|
+| Linux x86_64 | `redrob-query-<version>-linux-x86_64.tar.gz`, `redrob-query-<version>-linux-x86_64.deb` |
+| macOS arm64 | `redrob-query-<version>-macos-arm64.dmg`, `redrob-query-<version>-macos-arm64.zip` (서명·공증·스테이플) |
+| Windows x64 | `redrob-query-<version>-windows-x64-setup.exe` (영어 + 한국어 설치 프로그램), `redrob-query-<version>-windows-x64-portable.zip` (서명) |
+
+여기에 `SHA256SUMS.txt`와 `redrob-launcher.json`이 더해집니다. Windows 설치 프로그램은 사용자별로
+`%LOCALAPPDATA%\Programs\Redrob Query`에 설치하며, 설치된 제품은 **ProductName `Redrob Query`**,
+실행 파일은 **`bin\redrob-query.exe`**, 설정 > 앱 항목은 `RedrobQuery`(게시자 `Redrob`)입니다. Redrob
+Launcher가 이 이름으로 설치 여부를 알아봅니다. 자세한 내용: [installer/windows/README.md](installer/windows/README.md).
+
+## 소스에서 빌드
+
+Rust는 rustup으로 설치합니다. `rust-toolchain.toml`이 1.95.0과 rustfmt, Clippy를 고정합니다. Linux에서는
+셸이 X11 / Wayland / GL 개발 헤더와 GTK 3(파일 대화상자)에 링크합니다.
 
 ```bash
-npm ci
-npm run dev
+sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
+  libgl1-mesa-dev libgtk-3-dev libdbus-1-dev
+cargo run --release -p redrob-query
 ```
 
-`http://127.0.0.1:1420`을 엽니다. 데모는 연결된 **Acme Warehouse** 샘플 프로필로 시작합니다. 결정적인 메타데이터와 쿼리, 기본 50행 크기에서 두 페이지 분량의 결과, 로컬 AI 응답, CSV 내보내기, 프로필 수명주기 시뮬레이션, 리뷰를 거치는 인메모리 관계형 편집을 지원합니다.
+`redrob-query --version`은 버전을 출력하고 끝나며 디스플레이가 필요 없습니다.
 
-요구 사항: Node.js 22.12+, npm 11+.
-
-## 데스크톱 개발
-
-1. Node.js 22.12+, npm 11+, 그리고 [Tauri v2 사전 요구 사항](https://v2.tauri.app/start/prerequisites/)의 플랫폼 패키지를 설치합니다.
-2. rustup으로 Rust를 설치합니다. `rust-toolchain.toml`이 Rust 1.94.0과 rustfmt, Clippy를 고정합니다.
-3. 의존성을 설치하고 Tauri를 실행합니다.
+### 검증
 
 ```bash
-npm ci
-npm run tauri dev
-```
-
-현재 호스트 플랫폼용 패키지 빌드:
-
-```bash
-npm run tauri build
-```
-
-Linux에서는 Tauri가 요구하는 WebKitGTK 4.1, JavaScriptCoreGTK 4.1, libsoup 3, librsvg 개발 패키지가 필요합니다. 프런트엔드 프로덕션 빌드와 모든 `redrob-core` 검사는 그 패키지 없이도 돌아가고, `npm run tauri build`만 필요합니다.
-
-`src-tauri/icons/`에 표준 Tauri PNG·ICNS·ICO·iOS·Android 아이콘이 들어 있습니다. 모두 RGBA여야 합니다 — `tauri::generate_context!`가 RGBA가 아닌 아이콘에서 컴파일 타임에 패닉하므로, `npm run release:check`가 이를 단정합니다.
-
-서명된 인스톨러는 **Signed desktop release** 워크플로만 만듭니다. `vMAJOR.MINOR.PATCH` 태그를 푸시하면 Linux x64·macOS Intel·macOS Apple Silicon·Windows x64를 빌드하고, 업데이터 번들에 서명하고, macOS 빌드를 공증한 뒤 `latest.json`을 포함한 전부를 **초안** GitHub Release에 올립니다. 그 초안을 발행하는 것이 곧 릴리스입니다 — GitHub Releases가 업데이트 채널이라 `releases/latest/download/latest.json`은 사람이 발행한 버전만 서비스합니다. 자격 증명이 없으면 서명 없는 산출물을 발행하는 대신 릴리스를 중단합니다.
-
-## 데스크톱 로컬 작업공간 데이터
-
-데스크톱 모드는 열린 쿼리 탭 최대 30개와 첫 페이지가 성공한 실행 이력 50개를 버전이 붙은 렌더러 로컬 스토리지에 저장합니다. 저장되는 것은 쿼리 텍스트와 탭·이력 메타데이터뿐이고, 결과 행·데이터베이스 자격 증명·AI 프롬프트는 절대 저장하지 않습니다. 빈 탭 초안도 유효하며 복원됩니다. 실행 이력은 첫 페이지에서 성공적으로 끝난, 비어 있지 않은 쿼리만 남깁니다. 쿼리 텍스트는 평문이고 그 안에 민감한 리터럴이 들어 있을 수 있으므로, 이력 메뉴에 **저장 중단 및 로컬 데이터 삭제**가 있습니다. 이 opt-out은 별도로 저장되어 재시작 후에도 사용자가 명시적으로 다시 켤 때까지 꺼진 상태로 유지됩니다. 잘못된·중복·엔진 불일치·과대·손상된 항목은 거부하며, 저장이 실패하면 성공했다고 말하지 않고 실패를 표시합니다.
-
-브라우저 데모의 탭과 이력은 현재 페이지 세션 동안만 메모리에 남습니다. 데스크톱 상태를 선택·복원·로드하는 것이 자동 연결이나 자동 쿼리 실행을 일으키는 일은 없습니다.
-
-## 검증
-
-```bash
-npm run release:check
-npm run typecheck
-npm test
-npm run test:coverage
-npm run build
-npm audit --audit-level=low
 cargo fmt --all -- --check
-cargo clippy --locked -p redrob-core --all-targets --all-features -- -D warnings
-cargo test --locked -p redrob-core --all-features
-cargo audit --file Cargo.lock
+cargo clippy -p redrob-query -p redrob-query-core --all-targets --locked -- -D warnings
+cargo test -p redrob-query-core --locked
+python3 scripts/check-brand.py
 ```
 
-`npm run release:check`는 npm·Cargo·Tauri·락파일·Rust 툴체인 버전, 제품명, 번들 식별자, 창 라벨, 개발 URL 메타데이터, 그리고 아이콘이 모두 RGBA인지 검증합니다. 커버리지 하한은 statements/lines 85%, branches 75%, functions 65%입니다.
-
-기본 Rust 코어 실행은 격리된 테스트만 돌리고 외부 커넥터 테스트 3개는 ignored로 보고합니다. 이건 실제 서버에 대한 증거가 아닙니다. 그 게이트를 돌리려면 버려도 되는 서비스 URL을 넣고 명시적으로 opt-in 하세요.
+기본 테스트는 격리되어 있고 라이브 서버가 필요한 커넥터 테스트 세 개를 ignored로 보고합니다. 돌리려면
+일회용 서비스 URL을 내보내고 명시적으로 켭니다.
 
 ```bash
 export REDROB_TEST_POSTGRES_URL='postgresql://…'
 export REDROB_TEST_MYSQL_URL='mysql://…'
 export REDROB_TEST_MONGO_URL='mongodb://…'
 export REDROB_TEST_MONGO_DATABASE='redrob_test' # 선택
-cargo test --locked -p redrob-core --all-features -- --ignored
+cargo test -p redrob-query-core --locked -- --ignored
 ```
 
-명시적으로 실행한 라이브 테스트는 필요한 URL이 없으면 실패합니다. 프로덕션 자격 증명을 쓰지 마세요. Mongo 게이트는 UUID 이름의 컬렉션만 만들고 지웁니다. Rust는 `.env` 파일을 자동으로 읽지 않습니다.
+### 브랜드 자산
 
-`npm run check`는 워크스페이스 전체 Rust 검사까지 포함하므로 Linux에서는 네이티브 Tauri 시스템 패키지가 필요합니다.
+`resources/icons`, `resources/brand`, 설치 프로그램의 `res/` 아래 모든 파일은
+`scripts/build-brand-assets.py --design-system <경로>`가 디자인 시스템 배포물에서 만들고
+`brand/SOURCES.json`에 sha256으로 고정합니다. `scripts/check-brand.py`(CI와 릴리스)가 손으로 고친 파일이나
+고정되지 않은 파일을 거부합니다.
+
+### 릴리스
+
+**Release** 워크플로(`gh workflow run release.yml --ref main -f tag=vX.Y.Z`)가 cargo 바이너리 하나로 세
+타깃을 빌드하고, Windows는 작업의 OpenID Connect 로그인으로 Azure Artifact Signing에서 서명하고, macOS는
+조직의 Developer ID로 서명·공증하며, 공용 `redrob-labs/.github` 게시 작업이 `SHA256SUMS.txt`와
+`redrob-launcher.json`을 쓰고 GitHub Release를 latest로 게시합니다. 태그는 `main` 위에 있어야 하고
+`Cargo.toml`의 워크스페이스 버전과 같아야 하며 [CHANGELOG.md](CHANGELOG.md)에 `## <version>` 절이 있어야
+합니다. `-f dry_run=true`는 브랜치를 빌드·서명만 하고 아무것도 게시하지 않습니다.
+
+## 로컬 데이터
+
+| 파일 | 내용 |
+|---|---|
+| `connections.json` | 비밀이 없는 프로필 메타데이터(엔진의 파일, 원자적, 저널링) |
+| `account.json` | 런처의 Connect나 사용자가 써 둔 이 앱 자체의 Redrob 로그인. 공용 파일보다 우선 |
+| `workspace.json` | 열린 탭(쿼리 텍스트만)과 실행 이력. 결과 행·비밀번호·프롬프트는 저장하지 않음 |
+| `ui.ron` | eframe의 창 위치와 패널 크기 |
+
+디렉터리는 Windows `%APPDATA%\Redrob Query`, macOS `~/Library/Application Support/Redrob Query`, 그 외
+`$XDG_CONFIG_HOME/redrob-query`(`~/.config/redrob-query`)이며 `REDROB_QUERY_CONFIG_DIR`로 바꿀 수 있습니다.
+쿼리 텍스트는 평문이라 민감한 리터럴이 들어 있을 수 있습니다. 작업공간과 창 상태를 남기지 않으려면
+`REDROB_QUERY_NO_PREFS=1`을 설정하세요.
 
 ## 보안 요약
 
-- 비밀이 아닌 프로필 메타데이터는 평문 `connections.json`에 저장하고, 비밀번호와 Redrob 키는 OS 키링을 씁니다.
-- 비밀을 담지 않는 fsync 저널, 준비 단계 키링 항목, 배타적 프로필 락이 갱신을 복구 가능하게 만들고 안전하지 않은 복구나 동시 소유 상황에서 닫힌 방향으로 실패하게 합니다.
-- 직접 쓰는 쿼리는 읽기만 합니다. 한 번 실행에 읽기 전용 문장만 받으며(여러 개는 전부 읽기 전용일 때만, 하나씩 따로 실행), PostgreSQL/MySQL은 읽기 전용 트랜잭션을, SQLite는 닫힌 방향으로 실패하는 PRAGMA 허용목록을 씁니다. 쓰기는 편집을 허락한 연결에서 검토한 편집으로만 일어납니다.
-- Mongo 요청은 엄격하고 한계가 있습니다. aggregate의 `$out`과 `$merge`는 재귀적으로 거부합니다. 메타데이터는 최대 25개 문서에서 최상위 타입·존재·널 허용 힌트를 병합한 것이며 완전한 스키마가 아닙니다.
-- PostgreSQL/MySQL TLS를 켜면 공개 신뢰 루트로 인증서 신원을 검증합니다. 사설·자체 서명 CA 설정은 제공하지 않습니다.
-- 데스크톱 AI는 프롬프트와 선택적으로 현재 쿼리를 Redrob에 보냅니다. 결과 행과 자격 증명은 첨부하지 않지만, 사용자가 그 텍스트에 직접 넣은 민감한 리터럴은 전송됩니다.
+- 비밀이 없는 프로필 메타데이터는 평문 `connections.json`에, 비밀번호는 OS 키링에 저장합니다.
+- 비밀이 없는 fsync 저널, 단계적 키링 항목, 배타적 프로필 잠금으로 갱신을 복구 가능하게 하고, 안전하지
+  않은 복구나 동시 소유 상황에서는 닫힌 쪽으로 실패합니다.
+- 입력한 쿼리는 읽기만 합니다. 매 실행은 읽기 전용 문장만 받고(여러 개는 전부 읽기 전용일 때만, 각각 따로
+  실행), PostgreSQL / MySQL은 읽기 전용 트랜잭션, SQLite는 닫힌 쪽으로 실패하는 PRAGMA 허용목록을
+  씁니다. 쓰기는 읽기 전용이 아닌 프로필에서, 모든 값을 바인딩해, 검토한 편집과 구조 폼으로만 일어납니다.
+- Mongo 요청은 엄격하고 한계가 있습니다. aggregate의 `$out`과 `$merge`는 재귀적으로 거부합니다.
+- PostgreSQL / MySQL TLS를 켜면 공개 신뢰 루트로 인증서 신원을 검증합니다.
+- Ask는 프롬프트와 활성 탭의 텍스트를 계정의 bearer 키로 Redrob 콘솔에 보냅니다. 결과 행과 자격 증명은
+  붙지 않지만, 두 텍스트에 직접 입력한 민감한 리터럴은 전송됩니다.
 
 전체 [보안 모델과 한계](docs/SECURITY.md)를 읽어 보세요.
 
+## Redrob 계정
+
+Ask는 Redrob Launcher가 이 컴퓨터를 로그인시킨 계정을 씁니다. `$XDG_CONFIG_HOME/redrob-shared`,
+`~/Library/Application Support/ai.redrob.shared`, `%APPDATA%\Redrob\Shared`(`REDROB_SHARED_DIR`로 변경)의
+`account.json`을 런처의 `docs/shared-account.md` 계약대로 요청마다 읽고, 앱이 열려 있는 동안 지켜봅니다.
+환경 변수 `REDROB_API_KEY`, 그다음 이 앱 자체의 `account.json`이 그보다 우선합니다. 키는
+`{apiBaseUrl}/chat/completions`에 모델 `auto`로 bearer 토큰으로만 보내며, 콘솔이 거부하면 콘솔의 메시지를
+그대로 보여 줍니다. 계정이 없으면 Ask 도크가 그렇다고 말하고 런처를 열어 줍니다. 이 앱에는 자체 로그인이
+없습니다.
+
 ## 현재 경계
 
-- 자유 입력 쓰기 SQL은 없습니다. 변경은 검토하는 편집과 표 만들기 폼으로만 합니다. 표에 단일 열 기본 키가 있어야 고칠 수 있고, MongoDB 결과는 고칠 수 없습니다.
-- 페이징은 서버·브리지 단위로 한계가 있고, 정렬과 필터는 현재 로드된 페이지에만 적용됩니다.
-- 사설 CA·클라이언트 인증서 UI, SSH 터널, 클라우드 인증 플러그인, 스크립트 실행기, ER 다이어그램, 관리 도구 모음, 데이터 전송 파이프라인, 비교·마이그레이션 도구, 드라이버 마켓플레이스, SQL Server 커넥터는 없습니다.
-- Mongo 샘플 메타데이터는 한계가 있는 힌트이며, 컬렉션 스키마를 확정적으로 추론한 것이 아닙니다.
-- 외부 PostgreSQL/MySQL/Mongo와 Redrob API 연동은 사용자가 제공하는 서비스·자격 증명이 필요하고, 브라우저 데모는 그것을 검증하지 않습니다.
+- 자유 형식 쓰기 SQL은 없습니다. 변경은 검토한 편집 집합과 표 폼으로만 갑니다. 고치려면 단일 열 기본 키가
+  필요하고, MongoDB 결과와 복합 키는 아직 고칠 수 없습니다.
+- 정렬과 필터는 데이터베이스가 아니라 가져온 페이지(탭의 한도까지)에만 적용됩니다.
+- 사용자 CA·클라이언트 인증서 UI, SSH 터널, ER 다이어그램, 데이터 전송 파이프라인, 비교·마이그레이션 도구,
+  드라이버 마켓플레이스, SQL Server 커넥터는 없습니다.
+- Mongo 샘플 메타데이터는 한계가 있는 힌트이지 스키마가 아닙니다.
 
-## Redrob AI 설정
+## 라이선스와 저작자 표시
 
-**Redrob Code가 필요합니다.** 데스크톱 AI는 이 컴퓨터에 하나 있는 공유 Redrob Code 데몬(`~/.redrob/run/server.json`; 없으면 `redrob service start`로 띄움)의 다음 경로에 말합니다.
-
-```text
-<daemon>/v1/chat/completions
-```
-
-모든 요청에 데몬 자체의 인증, `x-redrob-app: query`, 실행마다 하나인 `x-redrob-session`이 실리고, 모델은 `auto`입니다. Redrob 콘솔 키는 데몬이 보관하고 데몬이 그 키로 콘솔을 부릅니다. 이 앱은 자체 키를 갖지 않고 콘솔로 직접 가는 경로도 없습니다 -- 마스킹이 적용되는 곳이 한 곳이 되도록. 로그인은 한 번만: Redrob Code에서, Redrob Launcher에서, 또는 여기서. **Redrob 설정**은 붙여 넣은 키를 엔진에 넘기고(`PUT /auth/redrob`), 엔진이 로그인돼 있는지 `GET /provider`에서 읽어 엔진이 쓰는 키가 런처의 것이면 **Redrob Launcher로 로그인됨**이라고 말합니다. Redrob Code가 없으면 설정 대화상자와 모든 AI 요청이 "Redrob Code is not installed. Install it with Redrob Launcher."와 [런처 최신 릴리스](https://github.com/redrob-labs/redrob-launcher/releases/latest) 링크를 보입니다. 이전 버전의 이 앱이 OS 키링에 저장했던 키는 한 번 엔진에 넘기고 지웁니다. `REDROB_API_KEY`와 런처 공유 계정 파일 읽기는 없어졌습니다. 데몬 레코드와 바이너리는 `redrob-engine-client`(redrob-code `docs/LOCAL-ENGINE-API.md` 3절)가 찾고, `REDROB_RUN_DIR`와 `REDROB_CODE_BIN`은 테스트를 비공개 데몬으로 향하게 합니다. 브라우저 데모의 AI는 로컬이고 결정적이며, 데모에 입력한 키는 보관하거나 전송하지 않습니다.
-
-## 기여
-
-[CONTRIBUTING.md](CONTRIBUTING.md)에 브랜치 모델, 필수 검사, 그리고 실수로 깨기 쉬운 두 가지 규칙이 있습니다.
-
-## 라이선스와 귀속
-
-Redrob Query는 [GNU General Public License 버전 3 이상](LICENSE)으로 배포됩니다. Beekeeper Studio Community Edition 소스를 이식하기 시작하면서 Apache-2.0에서 옮겼습니다 — 그쪽이 GPL-3.0-or-later이므로 더 강한 카피레프트가 코드와 함께 따라옵니다. 귀속과 상표 유보는 [NOTICE](NOTICE)를 보세요. 서드파티 구성요소는 각자의 라이선스를 따릅니다.
+Redrob Query는 [GNU General Public License, version 3 or later](LICENSE)로 배포합니다. GPL-3.0-or-later인
+Beekeeper Studio Community Edition 소스를 들여오기 전까지는 Apache-2.0이었고, 더 강한 카피레프트가 코드와
+함께 옵니다. 저작자 표시와 상표 유보는 [NOTICE](NOTICE), 상류 코드 고지는
+[UPSTREAM_NOTICES.md](UPSTREAM_NOTICES.md)를 보세요. 서드파티 구성 요소는 각자의 라이선스를 따릅니다.

@@ -1,26 +1,13 @@
-# Dependencies
-node_modules/
-target/
-
 # Build outputs
-dist/
-# Third-party plugin files, placed by scripts/install-plugin-assets.mjs from the pinned npm
-# packages. Generated, not authored -- committing 1.8 MB of build output would put a megabyte-scale
-# binary diff in history on every plugin version bump.
-public/plugins/
-src-tauri/target/
+target/
 *.log
 
 # Local environment and secrets
 .env
 .env.*
-!.env.example
 *.db
 *.db-shm
 *.db-wal
-
-# Generated only inside a release runner by scripts/prepare-release-config.mjs
-src-tauri/tauri.release.conf.json
 
 # Editors and OS
 .DS_Store
@@ -32,19 +19,6 @@ src-tauri/tauri.release.conf.json
 .agents/tasks/
 .kiro/
 
-# Demo and generated review artifacts
-.demo-recorder/
-semantic-review/
-
-# Test outputs
-coverage/
-test-results/
-playwright-report/
-
-# A Beekeeper Studio checkout to port from. 284 MB of GPLv3 source plus 544 KB
-# under a COMMERCIAL licence that forbids use here, so the whole tree stays out of
-# git and scripts/check-upstream-paths.mjs asserts that separately. Written with a
-# trailing slash to match a DIRECTORY, and the probe in that script uses the
-# trailing slash too -- `git check-ignore upstream` misses it when the directory
-# does not exist locally, which is exactly the state a fresh clone is in.
+# A Beekeeper Studio checkout to port from. 284 MB of GPLv3 source plus 544 KB under a COMMERCIAL
+# licence that forbids use here, so the whole tree stays out of git.
 /upstream/

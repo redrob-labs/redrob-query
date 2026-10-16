@@ -13,18 +13,18 @@
 <!-- The commands you actually ran, and what they printed. -->
 
 ```
-npm run release:check
-npm test
-npm run build
-npm run rust:fmt && npm run rust:clippy && npm run rust:test
+python3 scripts/check-brand.py
+cargo fmt --all -- --check
+cargo clippy -p redrob-query -p redrob-query-core --all-targets -- -D warnings
+cargo test -p redrob-query-core
 ```
 
 ## Checklist
 
 - [ ] No credentials, connection strings, or real database contents in the diff,
       the tests, or the commit messages.
-- [ ] Read-only guarantees preserved: no new desktop/native mutation command is
-      registered, and saved desktop profiles stay read-only.
+- [ ] Read-only guarantees preserved: typed queries still go through the engine's
+      read-only gate, and writes only through reviewed edits and the structure forms.
 - [ ] If local-storage behaviour changed, `docs/SECURITY.md` says what is now
       stored.
 - [ ] If user-visible strings changed, they name Redrob Query — not DBeaver.
