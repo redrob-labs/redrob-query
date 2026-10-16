@@ -4,20 +4,33 @@ The release workflow's notes point here, so this file is what a download's notes
 follow the `vMAJOR.MINOR.PATCH` tags that trigger a release; while the major is 0 a minor bump is
 where behaviour may change.
 
-## Unreleased
+## 0.3.0 - 2026-10-16
 
 ### Changed
 
-- The release pipeline is the redrob-labs shared shape. Windows installers are Authenticode-signed
-  through Azure Artifact Signing with the job's OpenID Connect login and the organisation's one
-  signing script (`redrob-labs/.github/actions/sign-windows`), run by tauri as its sign command; the
-  self-signed certificate, its secrets and the `NotTrusted` allowance are gone, and every installer
-  must verify as `Valid`. Each platform leg uploads its files as a `release-*` artifact under the
-  launcher-readable names, `latest.json` is written from those files with every updater signature
-  checked against its bytes, and the shared `release-publish` job publishes the release as latest
-  with `SHA256SUMS.txt` and `redrob-launcher.json`. There is no draft any more; a manual run with a
-  `version` input is a dry run that publishes nothing. The gitflow check calls the organisation's
-  reusable workflow, whose back-merge job opens the back-merge pull request itself.
+- **Redrob Query is a native Rust app.** The Tauri 2 + React 19 shell, the browser demo, the
+  Beekeeper plugin host and the ER-diagram plugin are gone; the window is egui 0.36 on wgpu
+  (`apps/redrob-query`) over the same engine, renamed `redrob-query-core`. Profiles, schema browser,
+  tabbed SQL / Mongo JSON editor (colouring, Ctrl+Enter, Ctrl+Shift+F, Ctrl+S, starter queries,
+  read-only batches), virtualised result grid (page sort / filter, column visibility, TSV / JSON
+  export, JSON document view), reviewed cell edits and row deletes through the Changes panel,
+  structure panel with primary and foreign keys and indexes, create-table / add-column forms, and
+  the Ask dock are all native. Workspace persistence keeps 30 tabs and 50 history entries in
+  `workspace.json` (off with `REDROB_QUERY_NO_PREFS`).
+- **Ask talks to the Redrob console directly** with the account Redrob Launcher signed this
+  computer in with (`account.json`, read on every request and watched while the app is open), as
+  the launcher's shared-account contract asks. The Redrob Code daemon path, the pasted-key dialog
+  and the keyring key migration are gone; the console's own error message is shown when it refuses.
+- **Key and index metadata moved into the engine** (`keys.rs`): PostgreSQL catalog, MySQL
+  `information_schema`, SQLite table-valued pragmas, MongoDB index list.
+- **Release and repository shape follow redrob-canvas.** One `Release` workflow builds the three
+  targets from the cargo binary -- Linux tar.gz + deb, macOS arm64 dmg + zip (signed, notarized,
+  stapled), Windows x64 portable zip + a bilingual (English / 한국어) setup (Authenticode-signed) --
+  with `SHA256SUMS.txt` and `redrob-launcher.json` from the shared publish job. Brand assets are
+  built from the design system and pinned in `brand/SOURCES.json`. CI is one thin pull-request
+  workflow: the brand check plus fmt, clippy and the tests of our crates with `--profile ci`.
+- The Tauri updater feed (`latest.json`) is no longer produced; Redrob Launcher installs from the
+  release assets.
 
 ## 0.2.4 - 2026-10-14
 

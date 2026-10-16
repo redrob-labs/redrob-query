@@ -2,149 +2,170 @@
 
 **English** · [한국어](./README.ko.md)
 
-Redrob Query is a JVM-free, AI-assisted database workspace built with Rust 1.94, Tauri 2, React 19, and TypeScript. It is a desktop workspace for PostgreSQL, MySQL, SQLite, and MongoDB that reads by default and edits only where you allow it, plus an interactive browser demo backed only by deterministic in-memory sample data.
+Redrob Query is an agentic database client for PostgreSQL, MySQL, SQLite and MongoDB: one native
+window (Rust, egui on wgpu) that reads by default, edits only where you allow it after you have
+reviewed the change, and drafts queries with an agent beside you. There is no JVM, no browser
+runtime and no web demo. Signing in happens once, in [Redrob Launcher](https://github.com/redrob-labs/redrob-launcher);
+this app reads that account.
 
-The workflow is informed by DBeaver Community, but Redrob Query is a clean implementation. It includes no DBeaver source code or branding and no Eclipse RCP, OSGi, JDBC, Java, or JVM runtime.
+The workflow is informed by DBeaver Community and parts of the engine were ported from Beekeeper
+Studio Community Edition (see [NOTICE](NOTICE) and [UPSTREAM_NOTICES.md](UPSTREAM_NOTICES.md)). It
+includes no Eclipse RCP, OSGi, JDBC, Java or Electron.
 
-## Shipped scope
+## What ships
 
 | Area | Capability |
 |---|---|
-| Profiles | Create, test, edit, connect, disconnect, and remove user profiles; built-in profiles are immutable |
-| PostgreSQL | Identity-verifying TLS, metadata, bounded SQL reads, native scalar decoding, reviewed edits |
-| MySQL | Identity-verifying TLS, metadata, bounded SQL reads, unsigned/decimal/temporal/BIT decoding, reviewed edits |
-| SQLite | File profiles that open read-only (`mode=ro`) unless edits are allowed, metadata, guarded reads, reviewed edits; native demo uses `:memory:` |
-| MongoDB | Standard/SRV profiles, separate `authSource`, collections, bounded 25-document field sampling, strict `find`/`aggregate`/explain JSON |
-| Results | 25/50/100/250-row paging, typed virtualized rows, current-page sort/filter, column visibility, column and row menus, a details panel, execution messages, and visible CSV export |
-| Editing | Off per connection until "Allow edits" is ticked. Edit cells, add and delete rows, create a table or add a column; every change is staged, reviewed and applied in one transaction that rolls back unless each statement changes exactly one row. A result that cannot be edited says why |
-| Query workspace | Connection-owned SQL/MQL tabs, engine starters, saved queries (Save / Ctrl+S), several read-only statements in one run with a result picker, pinned tables, local desktop restoration, bounded execution history, formatting, and shortcuts |
-| Redrob AI | Engine-aware SQL/MQL generation and explanation through model `auto` |
-| Browser demo | Sample PostgreSQL/MySQL/SQLite/Mongo workflows, local AI responses, and atomic in-memory relational edit review |
+| Profiles | Built-in **Demo SQLite** (`:memory:`, works offline) plus your own profiles: create, test, edit, connect, disconnect, remove. Passwords live in the OS keyring, never in a file |
+| PostgreSQL / MySQL | Identity-verifying TLS, schema-grouped tables and views, columns, primary and foreign keys, indexes, bounded read-only SQL, reviewed edits |
+| SQLite | File profiles (read-only `mode=ro` until edits are allowed), tables, columns, keys and indexes through the table-valued pragmas, reviewed edits |
+| MongoDB | Standard and SRV profiles, `authSource`, collections with 25-document field sampling, strict `find` / `aggregate` / `explain` request bodies, collection indexes, a JSON document view |
+| Editor | Tabs per connection, SQL and Mongo JSON colouring, Ctrl+Enter runs the selection or the statement under the cursor (a read-only batch runs statement by statement), Ctrl+Shift+F formats, Ctrl+S saves the text to a file, per-engine starter queries, a Mongo request strip |
+| Results | Virtualised rows, sort and filter on the fetched page, column visibility, cell copy, TSV / JSON copy and save, a row limit per tab |
+| Editing | Double-click a cell to stage a new value, delete rows from the row menu, review the staged set in the Changes panel, Apply runs it in one transaction that rolls back unless every statement changes exactly one row. Needs a single-table result with a one-column primary key on a profile that is not read-only |
+| Structure | Columns with PK / FK / not-null flags, foreign keys, indexes; create a table or add a column from a form over a fixed type list |
+| Ask | Describe the query you want; the active tab's text goes along as context, result rows and credentials never do. Fenced `sql` / `mql` blocks in the answer insert into the editor with one click |
+| Workspace | Up to 30 tabs and 50 history entries restored on start (`workspace.json`), window geometry in `ui.ron`; `REDROB_QUERY_NO_PREFS=1` keeps nothing |
 
-SQL Server is not supported in this release: it is absent from the connection UI and rejected by both profile and AI validation paths.
-
-Desktop connections are read-only until you tick "Allow edits" on the connection. Even then nothing is written until you review the staged changes and press Apply: cell edits become `UPDATE … WHERE <primary key> = ?` with bound values, rows are inserted and deleted the same way, and the whole set runs in one transaction that is undone if any statement does not change exactly one row. Only a plain read of one table with a single-column primary key in the result can be edited. Browser-demo edits change a per-profile in-memory fixture; reload discards them.
+SQL Server is not supported in this release. Writes typed into the editor are refused by the engine's
+read-only gate; the only write paths are the Changes panel and the structure forms.
 
 ## Architecture
 
 ```text
-React 19 + Monaco + TanStack Virtual
-                │
-         Zustand workspace state
-                │ DataBridge
-          ┌─────┴───────────┐
-     DemoBridge         Tauri IPC allowlist
-   (browser memory)              │
-                            redrob-core (Rust)
-                       ┌─────────┼──────────┐
-                 SQLx concrete  MongoDB   Redrob AI
-                 PG/MySQL/SQLite driver   HTTPS client
+apps/redrob-query  (eframe / egui 0.36 on wgpu)
+  profiles · schema · editor · grid · changes · structure · Ask dock
+                │  Workspace  (one method per former command, answered by Pending handles)
+crates/redrob-query-core
+  DataService  ──  SQLx (PostgreSQL / MySQL / SQLite)  ·  mongodb  ·  reqwest (console)
+  query.rs read-only classification · cell_edits.rs · ddl.rs · keys.rs · profile_store.rs · secret.rs
+  account.rs: Redrob Launcher's shared account.json
 ```
 
-See [Architecture](docs/ARCHITECTURE.md), [Security](docs/SECURITY.md), [Demo guide](docs/DEMO.md), and the [DBeaver workflow map](docs/DBEAVER-PORTING-MAP.md).
+See [Architecture](docs/ARCHITECTURE.md), [Security](docs/SECURITY.md) and the
+[DBeaver workflow map](docs/DBEAVER-PORTING-MAP.md).
 
-## Quick start: browser demo
+## Install
 
-The browser demo does not connect to a database or Redrob service and does not persist its workspace.
+Every release carries, under the names Redrob Launcher reads:
+
+| Platform | Assets |
+|---|---|
+| Linux x86_64 | `redrob-query-<version>-linux-x86_64.tar.gz`, `redrob-query-<version>-linux-x86_64.deb` |
+| macOS arm64 | `redrob-query-<version>-macos-arm64.dmg`, `redrob-query-<version>-macos-arm64.zip` (signed, notarized, stapled) |
+| Windows x64 | `redrob-query-<version>-windows-x64-setup.exe` (English + Korean setup), `redrob-query-<version>-windows-x64-portable.zip` (signed) |
+
+plus `SHA256SUMS.txt` and `redrob-launcher.json`. The Windows setup installs per user into
+`%LOCALAPPDATA%\Programs\Redrob Query`; the installed product is **ProductName `Redrob Query`** with
+the executable **`bin\redrob-query.exe`** and the Settings > Apps entry `RedrobQuery`
+(publisher `Redrob`) -- the names Redrob Launcher detects it by. Details:
+[installer/windows/README.md](installer/windows/README.md).
+
+## Build from source
+
+Rust comes from rustup; `rust-toolchain.toml` pins 1.95.0 with rustfmt and Clippy. On Linux the
+shell links the X11 / Wayland / GL development headers and GTK 3 (for the file dialogs):
 
 ```bash
-npm ci
-npm run dev
+sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
+  libgl1-mesa-dev libgtk-3-dev libdbus-1-dev
+cargo run --release -p redrob-query
 ```
 
-Open `http://127.0.0.1:1420`. The demo starts with the connected **Acme Warehouse** sample profile. It supports deterministic metadata and queries, two result pages at the default 50-row size, local AI responses, CSV export, profile lifecycle simulation, and reviewed in-memory relational edits.
+`redrob-query --version` prints the version and exits; it needs no display.
 
-Requirements: Node.js 22.12+ and npm 11+.
-
-## Desktop development
-
-1. Install Node.js 22.12+, npm 11+, and the platform packages from the [Tauri v2 prerequisites guide](https://v2.tauri.app/start/prerequisites/).
-2. Install Rust through rustup; `rust-toolchain.toml` pins Rust 1.94.0, rustfmt, and Clippy.
-3. Install dependencies and launch Tauri:
+### Validation
 
 ```bash
-npm ci
-npm run tauri dev
-```
-
-Build a package for the current host platform with:
-
-```bash
-npm run tauri build
-```
-
-Linux requires the WebKitGTK 4.1, JavaScriptCoreGTK 4.1, libsoup 3, and librsvg development metadata expected by Tauri. Frontend production builds and all `redrob-core` checks run without those packages; only `npm run tauri build` needs them.
-
-`src-tauri/icons/` holds standard Tauri PNG, ICNS, ICO, iOS, and Android icons. Every PNG must be RGBA — `tauri::generate_context!` panics at compile time on anything else — and `npm run release:check` asserts it.
-
-Signed installers are produced only by the **Signed desktop release** workflow, which a pushed `vMAJOR.MINOR.PATCH` tag starts (the tag must equal the version in `package.json`). It builds Linux x64, macOS Intel, macOS Apple Silicon, and Windows x64, signs the updater bundles, notarizes the macOS builds, and Authenticode-signs the Windows installers through the organisation's Azure Artifact Signing account -- the job logs in with OpenID Connect right before bundling and tauri runs the shared `redrob-labs/.github` signing script; no certificate file or client secret exists anywhere. Each leg uploads its files as a `release-*` artifact under the names [Redrob Launcher](https://github.com/redrob-labs/redrob-launcher) installs, `latest.json` is written from them and every updater signature is verified against its bytes, and the shared `release-publish` job then **publishes** the GitHub Release as latest with `SHA256SUMS.txt` and `redrob-launcher.json` beside the installers (a version with a `-` suffix is published as a pre-release, which `releases/latest` does not serve). GitHub Releases is the update channel, so `releases/latest/download/latest.json` serves the newest published version. A manual run of the workflow with a `version` input is a dry run: it builds, signs and verifies every leg and publishes nothing. Missing credentials stop the release rather than publishing unsigned artifacts.
-
-## Desktop local workspace data
-
-Desktop mode stores up to 30 open query tabs and 50 successful first-page history entries in versioned renderer local storage. Only query text and tab/history metadata are stored, never result rows, database credentials, or AI prompts. Empty tab drafts are valid and restored; execution history retains only nonempty queries that completed successfully on the first page. Query text is plaintext and may itself contain sensitive literals, so the history menu provides **Stop saving & clear local data**. That opt-out is stored separately and remains disabled across restarts until the user explicitly re-enables saving. Invalid, duplicate, engine-incompatible, oversized, or corrupt entries are rejected; storage failure is shown instead of claiming a successful save.
-
-Browser-demo tabs and history remain in memory for the current page session only. Selecting, restoring, or loading desktop state never auto-connects or auto-runs a query.
-
-## Validation
-
-```bash
-npm run release:check
-npm run typecheck
-npm test
-npm run test:coverage
-npm run build
-npm audit --audit-level=low
 cargo fmt --all -- --check
-cargo clippy --locked -p redrob-core --all-targets --all-features -- -D warnings
-cargo test --locked -p redrob-core --all-features
-cargo audit --file Cargo.lock
+cargo clippy -p redrob-query -p redrob-query-core --all-targets --locked -- -D warnings
+cargo test -p redrob-query-core --locked
+python3 scripts/check-brand.py
 ```
 
-`npm run release:check` verifies npm, Cargo, Tauri, lockfile, Rust toolchain, product name, bundle identifier, window label, and development URL metadata. Coverage has global regression floors of 85% statements/lines, 75% branches, and 65% functions.
-
-The default Rust core run executes hermetic tests and reports three external connector tests as ignored. It is not live-server evidence. To run the ignored gates, export disposable service URLs and explicitly opt in:
+The default test run is hermetic and reports three connector tests as ignored; they need live
+servers. To run them, export disposable service URLs and opt in:
 
 ```bash
 export REDROB_TEST_POSTGRES_URL='postgresql://…'
 export REDROB_TEST_MYSQL_URL='mysql://…'
 export REDROB_TEST_MONGO_URL='mongodb://…'
 export REDROB_TEST_MONGO_DATABASE='redrob_test' # optional
-cargo test --locked -p redrob-core --all-features -- --ignored
+cargo test -p redrob-query-core --locked -- --ignored
 ```
 
-An explicitly run live test fails when its required URL is absent. Use non-production credentials; the Mongo gate creates and drops only a UUID-named collection. Rust does not automatically load `.env` files.
+### Brand assets
 
-`npm run check` also includes workspace-wide Rust checks and therefore requires native Tauri system packages on Linux.
+Every file under `resources/icons`, `resources/brand` and the installer `res/` folders is built from
+the design system's published files by `scripts/build-brand-assets.py --design-system <path>` and
+pinned by sha256 in `brand/SOURCES.json`; `scripts/check-brand.py` (CI and the release) refuses a
+hand-edited or unpinned file.
+
+### Release
+
+The **Release** workflow (`gh workflow run release.yml --ref main -f tag=vX.Y.Z`) builds the three
+targets from the one cargo binary, signs Windows through Azure Artifact Signing with the job's OpenID
+Connect login, signs and notarizes macOS with the organisation's Developer ID, and the shared
+`redrob-labs/.github` publish job writes `SHA256SUMS.txt` and `redrob-launcher.json` and publishes the
+GitHub Release as latest. The tag must be on `main`, equal the workspace version in `Cargo.toml`, and
+have a `## <version>` section in [CHANGELOG.md](CHANGELOG.md). `-f dry_run=true` builds and signs a
+branch and publishes nothing.
+
+## Local data
+
+| File | What |
+|---|---|
+| `connections.json` | Non-secret profile metadata (the engine's own file, atomic, journaled) |
+| `account.json` | This app's own Redrob sign-in, if the launcher's Connect or you wrote one; wins over the shared file |
+| `workspace.json` | Open tabs (query text only) and the run history; never result rows, passwords or prompts |
+| `ui.ron` | eframe's window geometry and panel sizes |
+
+Directory: `%APPDATA%\Redrob Query` on Windows, `~/Library/Application Support/Redrob Query` on macOS,
+`$XDG_CONFIG_HOME/redrob-query` (`~/.config/redrob-query`) elsewhere; `REDROB_QUERY_CONFIG_DIR`
+overrides it. Query text is plain text and may contain sensitive literals; set
+`REDROB_QUERY_NO_PREFS=1` to keep no workspace or window state.
 
 ## Security summary
 
-- Non-secret profile metadata is stored in plaintext `connections.json`; passwords and the Redrob key use the OS keyring.
-- A secret-free fsynced journal, staged keyring entry, and exclusive profile lock make updates recoverable and fail closed under unsafe recovery or concurrent ownership.
-- Typed queries are reads only: each run accepts read-only statements (several only when every one is read-only, each executed on its own), with PostgreSQL/MySQL read-only transactions and a fail-closed SQLite PRAGMA allowlist. Writes happen only through reviewed edits on a connection that allows them.
-- Mongo requests are strict and bounded; aggregate `$out` and `$merge` are rejected recursively. Metadata merges top-level type/presence/nullability hints from at most 25 documents and is not a complete schema.
-- Enabled PostgreSQL/MySQL TLS verifies certificate identity with public trust roots. Private/self-signed CA configuration is unavailable.
-- Desktop AI sends the prompt and optional active query to Redrob. Result rows and credentials are not attached, but sensitive literals manually included in either text are transmitted.
+- Non-secret profile metadata is stored in plaintext `connections.json`; passwords use the OS keyring.
+- A secret-free fsynced journal, staged keyring entry and exclusive profile lock make updates
+  recoverable and fail closed under unsafe recovery or concurrent ownership.
+- Typed queries are reads only: each run accepts read-only statements (several only when every one
+  is read-only, each executed on its own), with PostgreSQL / MySQL read-only transactions and a
+  fail-closed SQLite PRAGMA allowlist. Writes happen only through reviewed edits and the structure
+  forms, on a profile that is not read-only, with every value bound.
+- Mongo requests are strict and bounded; aggregate `$out` and `$merge` are rejected recursively.
+- Enabled PostgreSQL / MySQL TLS verifies certificate identity with public trust roots.
+- Ask sends the prompt and the active tab's text to the Redrob console with the account's bearer
+  key. Result rows and credentials are not attached, but sensitive literals you typed into either
+  text are transmitted.
 
 Read the complete [security model and limitations](docs/SECURITY.md).
 
+## The Redrob account
+
+Ask uses the account Redrob Launcher signed this computer in with: `account.json` in
+`$XDG_CONFIG_HOME/redrob-shared`, `~/Library/Application Support/ai.redrob.shared` or
+`%APPDATA%\Redrob\Shared` (`REDROB_SHARED_DIR` overrides), read on every request and watched while
+the app is open, as the launcher's `docs/shared-account.md` contract asks. `REDROB_API_KEY` in the
+environment, then this app's own `account.json`, win over it. The key is sent only as a bearer token to
+`{apiBaseUrl}/chat/completions` with model `auto`; the console's own error message is shown when it
+refuses. Without an account the Ask dock says so and offers to open the launcher; this app has no
+sign-in of its own.
+
 ## Current boundaries
 
-- No free-form write SQL: changes go through the reviewed edit and table forms only. Tables need a single-column primary key to be edited; MongoDB results are not editable.
-- Paging is server/bridge bounded, while sorting and filtering apply only to the currently loaded page.
-- No custom CA/client-certificate UI, SSH tunnel, cloud-auth plugin, script runner, ER diagram, administration suite, data-transfer pipeline, compare/migration tooling, driver marketplace, or SQL Server connector.
-- Mongo sampled metadata is a bounded hint, not authoritative collection schema inference.
-- External PostgreSQL/MySQL/Mongo and Redrob API integration require user-supplied services/credentials and are not exercised by the browser demo.
-
-## Redrob AI configuration
-
-**Requires Redrob Code.** Desktop AI talks to the one shared Redrob Code daemon on this machine (`~/.redrob/run/server.json`; started with `redrob service start` when none is running) at:
-
-```text
-<daemon>/v1/chat/completions
-```
-
-Every request carries the daemon's own authorization, `x-redrob-app: query` and a per-run `x-redrob-session`; the request uses model `auto`. The daemon holds the Redrob console key and calls the console with it; this app never has a key of its own and has no direct path to the console, so there is one place masking applies. Sign in once -- in Redrob Code, in Redrob Launcher, or here: **Redrob settings** hands a pasted key to the engine (`PUT /auth/redrob`) and reads whether the engine is signed in from `GET /provider`, saying **Signed in with Redrob Launcher** when that is whose key the engine uses. Without Redrob Code the dialog and every AI request say "Redrob Code is not installed. Install it with Redrob Launcher." with a link to [the launcher's latest release](https://github.com/redrob-labs/redrob-launcher/releases/latest). A key an earlier version of this app saved in the OS keyring is handed to the engine once and deleted. `REDROB_API_KEY` and the launcher shared-account reader are gone. The daemon record and binary come from `redrob-engine-client` (redrob-code `docs/LOCAL-ENGINE-API.md`, section 3); `REDROB_RUN_DIR` and `REDROB_CODE_BIN` point tests at a private daemon. Browser-demo AI is local and deterministic; an entered demo key is not retained or sent.
+- No free-form write SQL: changes go through the reviewed edit set and the table forms. Tables need a
+  one-column primary key to be edited; MongoDB results and composite keys are not editable yet.
+- Sorting and filtering apply to the fetched page (up to the tab's limit), not to the database.
+- No custom CA or client-certificate UI, SSH tunnel, ER diagram, data-transfer pipeline, compare or
+  migration tooling, driver marketplace, or SQL Server connector.
+- Mongo sampled metadata is a bounded hint, not a schema.
 
 ## License and attribution
 
-Redrob Query is licensed under the [GNU General Public License, version 3 or later](LICENSE). It was Apache-2.0 until it began incorporating Beekeeper Studio Community Edition source, which is GPL-3.0-or-later; the stronger copyleft travels with the code. See [NOTICE](NOTICE) for attribution and for the trademark reservation. Third-party components remain subject to their own licenses.
+Redrob Query is licensed under the [GNU General Public License, version 3 or later](LICENSE). It was
+Apache-2.0 until it began incorporating Beekeeper Studio Community Edition source, which is
+GPL-3.0-or-later; the stronger copyleft travels with the code. See [NOTICE](NOTICE) for attribution
+and the trademark reservation, and [UPSTREAM_NOTICES.md](UPSTREAM_NOTICES.md) for the upstream code
+notices. Third-party components remain subject to their own licenses.
