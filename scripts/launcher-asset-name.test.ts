@@ -20,16 +20,14 @@ const V020 = {
   'Redrob.Query_0.2.0_x64_en-US.msi.sig': 'redrob-query-0.2.0-windows-x64.msi.sig',
   'Redrob.Query_0.2.0_x64-setup.exe': 'redrob-query-0.2.0-windows-x64-setup.exe',
   'Redrob.Query_0.2.0_x64-setup.exe.sig': 'redrob-query-0.2.0-windows-x64-setup.exe.sig',
+  'Redrob.Query_0.2.0_aarch64.app.tar.gz': 'redrob-query-0.2.0-macos-aarch64.app.tar.gz',
+  'Redrob.Query_0.2.0_aarch64.app.tar.gz.sig': 'redrob-query-0.2.0-macos-aarch64.app.tar.gz.sig',
+  'Redrob.Query_0.2.0_x64.app.tar.gz': 'redrob-query-0.2.0-macos-x86_64.app.tar.gz',
+  'Redrob.Query_0.2.0_x64.app.tar.gz.sig': 'redrob-query-0.2.0-macos-x86_64.app.tar.gz.sig',
 };
 
-// Updater payloads and the manifest keep the bundler's names.
-const UNTOUCHED = [
-  'Redrob.Query_0.2.0_aarch64.app.tar.gz',
-  'Redrob.Query_0.2.0_aarch64.app.tar.gz.sig',
-  'Redrob.Query_0.2.0_x64.app.tar.gz',
-  'Redrob.Query_0.2.0_x64.app.tar.gz.sig',
-  'latest.json',
-];
+// The manifest keeps its name: it is the updater's fixed entry point.
+const UNTOUCHED = ['latest.json'];
 
 describe('launcherAssetName', () => {
   it.each(Object.entries(V020))('renames %s', (from, to) => {
@@ -64,7 +62,7 @@ describe('launcherAssetName', () => {
 describe('isLauncherInstallable', () => {
   it('accepts every renamed installer', () => {
     const installers = Object.values(V020).filter(
-      (name) => !name.endsWith('.sig') && !name.endsWith('-setup.exe'),
+      (name) => !name.endsWith('.sig') && !name.endsWith('-setup.exe') && !name.endsWith('.app.tar.gz'),
     );
     expect(installers).toHaveLength(5);
     for (const name of installers) expect(isLauncherInstallable(name)).toBe(true);

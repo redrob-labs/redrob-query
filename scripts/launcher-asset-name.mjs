@@ -12,9 +12,11 @@
 // latest.json is then written from the staged names (write-updater-manifest.mjs), so the updater
 // points at exactly the names the publish job uploads.
 //
-// Only installers and their detached .sig files are renamed. The `.app.tar.gz` updater payloads
-// and latest.json keep the bundler's names: nothing installs them by hand, and the launcher has
-// no use for them.
+// Installers, the macOS `.app.tar.gz` updater payloads and their detached .sig files are all
+// renamed, so every file on a release reads `redrob-query-<version>-<os>-<arch><suffix>` (the
+// launcher skips the payloads -- `.app.tar.gz` is not a kind it installs -- but one convention
+// across the asset list is what redrob-recall and the other repositories ship). latest.json keeps
+// its name: it is the updater's fixed entry point.
 
 export const STEM = 'redrob-query';
 
@@ -28,6 +30,9 @@ const TAILS = [
   // Not something the launcher installs (it takes the .msi), renamed so the two Windows
   // files sit next to each other under one stem.
   { arch: 'x64', suffix: '-setup.exe', token: 'windows-x64', ext: '-setup.exe' },
+  // The macOS updater payloads, under the arch tauri-action used to put in their names.
+  { arch: 'aarch64', suffix: '.app.tar.gz', token: 'macos-aarch64', ext: '.app.tar.gz' },
+  { arch: 'x64', suffix: '.app.tar.gz', token: 'macos-x86_64', ext: '.app.tar.gz' },
 ];
 
 const TAURI_NAME = /^Redrob[. ]Query_(?<version>[^_]+)_(?<tail>.+?)(?<sig>\.sig)?$/;

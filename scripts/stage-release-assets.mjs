@@ -7,13 +7,13 @@
 // runner that built the files, instead of being patched on the release afterwards by asset id as
 // an earlier version of this pipeline did:
 //
-//   - installers and their detached `.sig` files take the launcher-readable name
-//     `redrob-query-<version>-<os>-<arch>.<ext>` (launcher-asset-name.mjs);
-//   - the macOS updater payload, which tauri writes as `Redrob Query.app.tar.gz` with neither
-//     version nor architecture, becomes `Redrob.Query_<version>_<arch>.app.tar.gz` -- the name
-//     tauri-action gave it, so an installed client's platform key keeps resolving, and so the two
-//     macOS legs do not overwrite each other in the merged artifact. <arch> comes from the build
-//     target (`aarch64-apple-darwin` -> `aarch64`, `x86_64-apple-darwin` -> `x64`);
+//   - installers, the macOS updater payloads and their detached `.sig` files take the
+//     launcher-readable name `redrob-query-<version>-<os>-<arch>.<ext>` (launcher-asset-name.mjs);
+//   - tauri writes the macOS updater payload as `Redrob Query.app.tar.gz` with neither version nor
+//     architecture; it becomes `redrob-query-<version>-macos-<arch>.app.tar.gz`, the same
+//     convention as every other asset (and what redrob-recall ships), so the two macOS legs do not
+//     overwrite each other in the merged artifact. <arch> comes from the build target
+//     (`aarch64-apple-darwin` -> `macos-aarch64`, `x86_64-apple-darwin` -> `macos-x86_64`);
 //   - anything else keeps the bundler's name with every space replaced by a dot, which is the
 //     name GitHub would store it under anyway -- written out explicitly so latest.json can name
 //     the asset before it exists on the release.
@@ -28,7 +28,7 @@ import { copyFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { isLauncherInstallable, launcherAssetName } from './launcher-asset-name.mjs';
+import { isLauncherInstallable, launcherAssetName, STEM } from './launcher-asset-name.mjs';
 
 // What leaves the bundle directory. Anything else tauri writes (the unpacked .app, the .deb's
 // working tree, NSIS temp files) stays behind.
@@ -36,10 +36,10 @@ export const RELEASE_FILE_SUFFIXES = ['.AppImage', '.deb', '.dmg', '.msi', '-set
 
 const BUNDLER_NAME = /^Redrob[. ]Query_(?<version>[^_]+)_/;
 
-// Rust target triple -> the architecture token tauri-action put in the updater payload's name.
+// Rust target triple -> the launcher os-arch token the updater payload is published under.
 export const PAYLOAD_ARCH = {
-  'aarch64-apple-darwin': 'aarch64',
-  'x86_64-apple-darwin': 'x64',
+  'aarch64-apple-darwin': 'macos-aarch64',
+  'x86_64-apple-darwin': 'macos-x86_64',
 };
 
 const UNVERSIONED_PAYLOAD = /^Redrob[. ]Query(?<suffix>\.app\.tar\.gz(\.sig)?)$/;
@@ -63,7 +63,7 @@ export function stagedName(name, version, target) {
   if (payload) {
     const arch = PAYLOAD_ARCH[target];
     if (!arch) throw new Error(`${name}: no updater payload architecture is defined for target ${target}`);
-    return `Redrob.Query_${version}_${arch}${payload.groups.suffix}`;
+    return `${STEM}-${version}-${arch}${payload.groups.suffix}`;
   }
   const match = BUNDLER_NAME.exec(name);
   if (match && match.groups.version !== version) {
