@@ -1,5 +1,14 @@
 # Architecture
 
+> **0.3.0.** The shell is now a native Rust egui/wgpu app (`apps/redrob-query`) over the engine crate
+> `crates/redrob-query-core`; the React renderer, the Tauri IPC layer and the browser demo described
+> below no longer exist. The shell drives the engine through `redrob_query_core::Workspace` (one
+> method per former Tauri command, answered through `Pending<T>` handles polled once per frame), AI
+> goes straight to the Redrob console with Redrob Launcher's shared account (`account.rs`, `ai.rs`),
+> and key / index metadata lives in `keys.rs`. The engine sections below (`DataService`, query
+> classification, profile storage, secrets, reviewed edits, Mongo bounds) still describe the code as
+> it is; the renderer and IPC sections are history. See the README for the current layout.
+
 Redrob Query 0.1 separates browser-demo behavior, renderer state, native IPC, and database/AI runtime responsibilities. Java and the JVM are not part of the product.
 
 ## Layers

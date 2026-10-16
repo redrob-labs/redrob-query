@@ -54,20 +54,20 @@ ruleset은 pull request가 *어느* 브랜치에서 왔는지를 표현할 수 �
 
 ```bash
 git switch develop && git pull
-git switch -c release/v0.2.0
-# bump the version, update the changelog, run the release check
-# open a pull request into main and merge it, then tag main:
+git switch -c release/0.3.0
+# Cargo.toml의 버전을 올리고 CHANGELOG 절을 쓰고 게이트를 돌립니다
+# develop으로 풀 리퀘스트를 열어 머지하고, develop -> main 풀 리퀘스트(머지 커밋)를 머지한 뒤 main에 태그를 뗍니다:
 git switch main && git pull
-git tag -a v0.2.0 -m "Redrob Query v0.2.0"
-git push origin v0.2.0
-# the tag publishes the GitHub Release itself; the gitflow check then opens the
-# back-merge pull request (sync/back-merge-<sha>) into develop -- merge it
+git tag -a v0.3.0 -m "Redrob Query v0.3.0"
+git push origin refs/tags/v0.3.0:refs/tags/v0.3.0
+gh workflow run release.yml --ref main -f tag=v0.3.0
+# 그다음 main을 develop으로 다시 머지합니다
 ```
 
-태그는 `package.json`의 버전과 같아야 하고, 모든 플랫폼 레그가 빌드·서명·검증을 마치면 릴리스는
-바로 **발행**됩니다 — 승인할 초안이 없습니다. 릴리스 없이 파이프라인만 돌려 보려면 **Signed
-desktop release** 워크플로를 `version` 입력(예: `0.3.0-1`, MSI 번들러 때문에 pre-release 식별자는
-숫자여야 합니다)으로 수동 실행하세요. 모든 레그를 빌드·서명하고 아무것도 발행하지 않습니다.
+태그는 `Cargo.toml`의 워크스페이스 버전과 같아야 하고 `CHANGELOG.md`에 `## <version>` 절이 있어야
+합니다. 모든 플랫폼 레그가 빌드·서명·검증을 마치면 릴리스는 바로 **발행**됩니다 — 승인할 초안이
+없습니다. 릴리스 없이 파이프라인만 돌려 보려면 **Release** 워크플로를 `dry_run=true`로 실행하세요.
+지정한 ref를 빌드·서명하고 아무것도 발행하지 않습니다.
 
 hotfix도 같은 형태이며, `hotfix/*`를 `develop`이 아니라 `main`에서 떼고 양쪽으로 머지합니다.
 
@@ -80,52 +80,44 @@ hotfix도 같은 형태이며, `hotfix/*`를 `develop`이 아니라 `main`에서
 git switch develop && git pull
 git switch -c fix/short-description
 
-npm install
-npm run typecheck
-npm run test
-npm run build
-
 cargo fmt --all
-cargo clippy --all-targets -- -D warnings
+cargo clippy -p redrob-query -p redrob-query-core --all-targets -- -D warnings
+cargo test -p redrob-query-core
+python3 scripts/check-brand.py
 
-npm run release:check   # the release validator, before tagging
+cargo run -p redrob-query     # 앱 실행. 내장 Demo SQLite 프로필은 서버가 필요 없습니다
 
-# open a pull request into develop
+# develop으로 풀 리퀘스트를 엽니다
 ```
 
-브라우저 데모는 의도적으로 결정적인 인메모리 샘플 데이터를 씁니다. 데이터베이스 없이, 누구의
-자격증명도 없이 제품을 보여주기 위해서입니다. 오늘 찍은 스크린샷이 다음 달에 찍은 것과 같도록
-결정적으로 유지하십시오.
+내장 Demo SQLite 프로필은 결정적인 샘플 데이터가 든 인메모리 데이터베이스입니다. 의도적인 것입니다.
+서버도, 누구의 자격 증명도 없이 제품을 보여 주기 위해서입니다. 오늘 찍은 스크린샷이 다음 달에 찍은 것과
+같도록 결정적으로 유지하세요.
 
 ### 커밋
 
-제목은 명령형으로 씁니다. 본문에는 _왜_ 를 적고, 로컬에 저장되는 것이나 앱이 쓸 수 있는 범위를
-건드리는 변경이면 그 사실을 본문에 밝히십시오.
+제목은 명령형으로. 본문에는 _왜_ 바꿨는지를 쓰고, 로컬에 저장되는 것이나 앱이 쓸 수 있는 범위가 바뀌면
+그 사실을 거기에 적습니다.
 
 ## 브랜딩
 
-`src/assets/`의 마크는 Redrob Cowork가 함께 배포하는 것과 같은 Redrob 마크이며, 앱 아이콘은
-그것으로 생성됩니다. 비슷하게 보이는 그림으로 대체하는 것이 제품에 로고가 두 개 생기는 경로입니다.
+모든 브랜드 파일(`resources/icons`, `resources/brand`, 설치 프로그램의 `res/`)은
+`scripts/build-brand-assets.py`가 디자인 시스템 배포물에서 만들고 `brand/SOURCES.json`에 sha256으로
+고정합니다. 비슷하게 그린 그림으로 바꾸는 것이 제품에 로고가 둘 생기는 경로이고,
+`scripts/check-brand.py`가 그것을 거부합니다.
 
 ## CI가 검사하는 것
 
-`.github/workflows/ci.yml`은 모든 pull request와 `main`, `develop`으로의 push에서 돕니다. 시크릿을
-전혀 쓰지 않으므로 포크에서 온 pull request도 여기 브랜치와 완전히 같은 실행을 받습니다. 잡은 둘이고,
-둘 다 머지 전에 필수입니다.
+`.github/workflows/ci.yml`은 모든 풀 리퀘스트에서 돕니다. 시크릿을 쓰지 않으므로 포크에서 온 풀 리퀘스트도
+여기 브랜치와 똑같이 실행됩니다. 작업은 둘입니다.
 
 | 검사 | 실행하는 것 |
 | --- | --- |
-| **릴리스 메타데이터, 타입, 테스트, 빌드** | `npm run release:check`, `npm run typecheck`, `npm test`, `npm run build` |
-| **포맷, clippy, 테스트** | `npm run rust:fmt`, `npm run rust:clippy` (`-D warnings`), `npm run rust:test` |
+| **brand assets** | `python3 scripts/check-brand.py` |
+| **fmt, clippy, test (profile ci)** | `cargo fmt --all -- --check`, `cargo clippy -p redrob-query -p redrob-query-core --all-targets --locked --profile ci -- -D warnings`, 같은 크레이트의 `cargo test`. Rust 입력이 바뀌지 않았거나 풀 리퀘스트가 `main`을 향하면 건너뜁니다 |
 
-알아둘 만한 것은 `npm run release:check`입니다. 여러 파일로 퍼져 있어 조용히 틀어지는 것들을
-고정합니다. `package.json`, `Cargo.toml`, `tauri.conf.json`, `package-lock.json`의 버전, Cargo의
-`rust-version`과 `rust-toolchain.toml`의 일치, Tauri의 `productName`과 `identifier`, 그리고
-`src-tauri/icons/` 아래 모든 PNG가 RGBA인지입니다. 마지막 항목은 겉모습 문제가 아닙니다.
-`tauri::generate_context!`는 RGBA가 아닌 아이콘에서 컴파일 타임에 panic하므로, RGB 아이콘 하나면
-데스크톱 앱이 빌드되지 않습니다.
-
-`npm run check`는 이 전체를 한 명령으로 로컬에서 돌립니다.
+릴리스 워크플로(`.github/workflows/release.yml`)는 브랜드 검사와 `cargo fmt --check`만 다시 돌리고 세
+타깃을 빌드·서명·게시합니다.
 
 ## 의존성 업데이트
 

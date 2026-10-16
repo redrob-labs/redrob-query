@@ -1,0 +1,1494 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// redrob_query_setup -- the branded Windows setup and uninstaller for Redrob Query.
+//
+// Adapted from the Redrob Launcher setup (redrob-labs/redrob-launcher, installer/windows/), itself adapted
+// from the Redrob Canvas and Redrob Browser setup windows; all our own code. The window and the design-system
+// rules are the same. The first screen asks the language (English or Korean) and every later screen follows
+// it; a "desktop shortcut" box is the one option; there is no Redrob Code opt-in.
+//
+// What it is: a native Win32 app, no dependencies beyond the Windows SDK. It renders a small borderless,
+// rounded, DWM-shadowed window with the Redrob Query lockup, a status line and a progress bar.
+//
+// Design system (redrob-design-system):
+//   * Ground "deep" (20-color.md): field is Redrob Black #0A0B0C. type is gray-1 / gray-5; the call to
+//     action is a white pill with black type.
+//   * "Blue acts" (20-color.md): the progress fill is action-primary, Redrob Blue #2B52FF.
+//   * Foot light is `wash-edge` from the brand gradient, pre-rendered into res/background.png from
+//     res/background.html.
+//   * Type is Pretendard (30-typography.md, 35-korean.md: it carries Hangul), embedded in-memory when
+//     available, else Segoe UI Variable with DirectWrite's font fallback for Hangul.
+//   * Motion: every transition under a third of a second (40-surfaces-and-motion.md).
+//
+// Language: the first screen is bilingual and offers English / 한국어. The choice is stored under
+// HKCU\Software\Redrob\Redrob Query\Language (en, ko) so the next setup preselects it. The screen defaults
+// to the value a previous install recorded, else Korean on a Korean Windows, else English; --lang en|ko
+// overrides.
+//
+// Install (per user, no administrator rights):
+//   1. The payload is the release's own signed portable zip (bin\redrob-query.exe and the licence set,
+//      tools/release/stage.py), embedded as RCDATA. It is written to %TEMP% and unpacked with Windows' own
+//      tar.exe (bsdtar, in System32 since Windows 10 1803, reads zip) into %LOCALAPPDATA%\Programs\Redrob
+//      Query.new.
+//   2. The old install, if any, is renamed aside and the new one renamed into place, so a failed update
+//      never leaves half of two versions. A running Redrob Query keeps its files locked; the setup asks the
+//      person to close it, then Retry.
+//   3. The uninstaller (this same app built without a payload) is written into the install folder; the
+//      Start-menu shortcut (with the AppUserModelID ai.redrob.query, which Windows needs to show toast
+//      notifications from an unpackaged app) and, if chosen, the desktop shortcut are made; the
+//      Settings > Apps entry, the App Paths entry (Win+R "redrob-query") and the app's own key
+//      (InstallDir, Language, DesktopShortcutChoice) are written under HKCU.
+//   4. Redrob Query is opened (not with --silent).
+// The steps report no progress of their own, so the bar is a time-based eased ramp capped at ~90% until
+// they finish.
+//
+// Uninstall (Settings > Apps, or the uninstaller directly): confirm, with "Also delete settings" off by
+// default; remove the shortcuts, the registry entries and the install folder. The running uninstaller
+// cannot delete itself, so a hidden PowerShell removes it and the folder once it exits. The shared account
+// and language files (%APPDATA%\Redrob\Shared) belong to every Redrob app and are never touched.
+//
+// Flags:
+//   --lang en|ko         start in that language (skips nothing: the language screen still shows, preselected).
+//   --silent             install (or, with --uninstall, remove) with no window; the exit code is the result.
+//   --delete-data        with --uninstall --silent: also delete the app's settings (connection profiles).
+//   --demo               run the whole install sequence on a timer with NO payload.
+//   --demo-error         show the error state immediately.
+//   --uninstall          remove Redrob Query (what Settings > Apps runs).
+//   --demo-uninstall     the uninstall sequence on a timer, removing nothing.
+//   --render-stages DIR  draw each screen to a PNG in DIR, no window.
+//   (no flag)            install the embedded payload for real.
+
+#ifndef UNICODE
+#define UNICODE
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX  // keep windows.h's min/max macros from breaking std::min/std::max
+#endif
+
+#include <windows.h>
+#include <windowsx.h>
+#include <dwmapi.h>
+#include <d2d1.h>
+#include <d2d1helper.h>
+#include <dwrite.h>
+#include <wincodec.h>
+#include <shellapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <shlguid.h>
+#include <propsys.h>
+#include <propvarutil.h>
+#include <initguid.h>   // so propkey.h DEFINES the PKEY_* keys in this one translation unit
+#include <propkey.h>
+#include <tlhelp32.h>
+#include <string>
+#include <algorithm>
+#include <cctype>
+#include <memory>
+#include <vector>
+
+#include "resource.h"
+#include "build_defs.h"  // generated by build.py: version, resource paths
+
+#pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "dwrite.lib")
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "propsys.lib")
+
+namespace {
+
+// ---- design-system colors (deep ground) -----------------------------------
+constexpr D2D1_COLOR_F kRedrobBlack = {0x0A / 255.0f, 0x0B / 255.0f, 0x0C / 255.0f, 1.0f};
+constexpr D2D1_COLOR_F kInkPrimary  = {0xF8 / 255.0f, 0xF9 / 255.0f, 0xFB / 255.0f, 1.0f}; // gray-1
+constexpr D2D1_COLOR_F kInkMuted    = {0x83 / 255.0f, 0x8A / 255.0f, 0x97 / 255.0f, 1.0f}; // ink-muted dark
+constexpr D2D1_COLOR_F kActionBlue  = {0x2B / 255.0f, 0x52 / 255.0f, 0xFF / 255.0f, 1.0f}; // action-primary
+constexpr D2D1_COLOR_F kTrack       = {0xFF / 255.0f, 0xFF / 255.0f, 0xFF / 255.0f, 0.14f}; // border-subtle on dark
+constexpr D2D1_COLOR_F kDanger      = {0xFF / 255.0f, 0x4B / 255.0f, 0x4B / 255.0f, 1.0f}; // accent-red-3 / status-danger
+constexpr D2D1_COLOR_F kWhite       = {1.0f, 1.0f, 1.0f, 1.0f};
+
+// ---- geometry (logical px at 96 DPI) ---------------------------------------
+constexpr int   kBaseW   = 660;
+constexpr int   kBaseH   = 400;
+constexpr float kRadius  = 14.0f;   // rounded corners
+constexpr float kCaption = 44.0f;   // top drag strip height
+
+// window messages / timers
+constexpr UINT_PTR kTickTimer = 1;
+constexpr UINT     kTickMs     = 16;   // ~60fps for the eased bar / fades
+constexpr UINT_PTR kPayloadMsgDone = (WM_APP + 1);
+constexpr UINT_PTR kUninstallMsgDone = (WM_APP + 2);
+constexpr UINT_PTR kStageMsg = (WM_APP + 3);  // the worker moved on: wParam is the Stage
+
+// Results the install and uninstall workers post. 0 is success; anything else is a Win32 error code, except
+// these, which have their own sentences.
+constexpr DWORD kResultAppRunning = 0xE0000001;   // Redrob Query is open from the install folder
+constexpr DWORD kResultUnpackFailed = 0xE0000002; // tar.exe could not unpack the payload
+constexpr DWORD kResultNoExe = 0xE0000003;        // the unpacked payload has no redrob-query.exe
+
+// Where everything goes. Per user, like every other app that installs without administrator rights.
+constexpr wchar_t kInstallSubdir[] = L"\\Programs\\Redrob Query";  // under %LOCALAPPDATA%
+constexpr wchar_t kAppExeRel[] = L"\\bin\\redrob-query.exe";        // the portable zip's own layout (stage.py)
+constexpr wchar_t kPortableMarker[] = L"\\portable.txt";                // not in this zip; harmless if absent
+constexpr wchar_t kUninstallerName[] = L"\\Uninstall Redrob Query.exe";
+constexpr wchar_t kShortcutName[] = L"\\Redrob Query.lnk";
+constexpr wchar_t kAppUserModelId[] = L"ai.redrob.query";
+// Settings > Apps. Its own key.
+constexpr wchar_t kArpKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RedrobQuery";
+// The app's own key: InstallDir, Language, DesktopShortcutChoice.
+constexpr wchar_t kAppKey[] = L"Software\\Redrob\\Redrob Query";
+constexpr wchar_t kAppPathsKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\redrob-query.exe";
+
+enum class Stage { Preparing, Installing, Opening, Error, Confirm, Removing, Removed, Welcome, Language };
+enum class Mode { Install, Uninstall };
+enum class Lang { En, Ko };
+
+// The language every screen after the first draws in. Set by the language screen (or --lang, or the
+// value a previous install recorded, or the Windows UI language), read by Tr() at every string.
+Lang g_lang = Lang::En;
+inline const wchar_t* Tr(const wchar_t* en, const wchar_t* ko) { return g_lang == Lang::Ko ? ko : en; }
+
+// A tiny COM pointer so cleanup is not a maze of gotos. Move-only: a plain
+// memberwise copy would double-Release (and a function returning one by value
+// would hand back an already-freed interface).
+template <class T> struct ComPtr {
+  T* p = nullptr;
+  ComPtr() = default;
+  ComPtr(const ComPtr&) = delete;
+  ComPtr& operator=(const ComPtr&) = delete;
+  ComPtr(ComPtr&& o) noexcept : p(o.p) { o.p = nullptr; }
+  ComPtr& operator=(ComPtr&& o) noexcept {
+    if (std::addressof(o) != this) { if (p) p->Release(); p = o.p; o.p = nullptr; }
+    return *this;
+  }
+  ~ComPtr() { if (p) p->Release(); }
+  T** operator&() { return &p; }
+  T* operator->() const { return p; }
+  explicit operator bool() const { return p != nullptr; }
+  void reset() { if (p) { p->Release(); p = nullptr; } }
+};
+
+std::wstring g_statusOverride;
+
+// ---------------------------------------------------------------------------
+// The app object. One window, Direct2D render target, DirectWrite text, WIC for
+// the PNG resources, and a worker thread that runs the payload.
+// ---------------------------------------------------------------------------
+class SetupApp {
+ public:
+  SetupApp(bool demo, bool demoError, Mode mode) : demo_(demo), demoError_(demoError), mode_(mode) {}
+
+  int Run(HINSTANCE hinst);
+  // --silent: the same work with no window, for scripted installs.
+  // The process exit code is the worker's result (0 = success). Never opens the app afterwards.
+  int RunSilent(HINSTANCE hinst, bool deleteData);
+
+ private:
+  static LRESULT CALLBACK WndProcThunk(HWND, UINT, WPARAM, LPARAM);
+  LRESULT WndProc(UINT, WPARAM, LPARAM);
+
+  void CreateDeviceResources();
+  void DiscardDeviceResources();
+  void OnPaint();
+  void OnTick();
+  void LayoutText();
+  RECT ToDevice(float x, float y, float w, float h);
+  void computeButtonRects(float minX, float closeX, float cy);
+
+  ComPtr<ID2D1Bitmap> LoadPngResource(int resId, ID2D1RenderTarget* rt);
+  HRESULT DrawScene();  // BeginDraw..EndDraw on rt_, whatever kind of target it is
+ public:
+  // --render-stages <dir>: draw each screen into a PNG with no window, so the layout can be checked
+  // on a machine reached over ssh, where no window can be shown. Returns 0 when every file was written.
+  int RenderStages(HINSTANCE hinst, const std::wstring& dir);
+ private:
+
+  // payload
+  static DWORD WINAPI PayloadThunk(LPVOID self);
+  DWORD RunPayload();
+  DWORD InstallApp();
+  bool ExtractPayload(std::wstring& outPath);
+  bool InstallUninstaller(const std::wstring& dir);
+  void RecordChoices(const std::wstring& dir);
+
+  void StartInstall();
+
+  // uninstall
+  static DWORD WINAPI UninstallThunk(LPVOID self);
+  DWORD RunUninstall();
+  void StartUninstall();
+  void ScheduleSelfCleanup();
+
+  void SetStage(Stage s);
+  void RequestClose(bool force);
+  void ChooseLanguage(Lang l);
+
+  HINSTANCE hinst_ = nullptr;
+  HWND hwnd_ = nullptr;
+  UINT dpi_ = 96;
+  bool demo_ = false;
+  bool demoError_ = false;
+  Mode mode_ = Mode::Install;
+  bool deleteData_ = false;       // the confirm screen's "also delete settings"
+  bool silent_ = false;
+  bool desktopShortcut_ = true;   // the welcome screen's "create a desktop shortcut"; a previous choice is kept
+
+  // Direct2D / DirectWrite / WIC
+  ComPtr<ID2D1Factory>        d2dFactory_;
+  ComPtr<IDWriteFactory>      dwFactory_;
+  ComPtr<IWICImagingFactory>  wicFactory_;
+  ComPtr<ID2D1RenderTarget> rt_;
+  ComPtr<ID2D1Bitmap>         bgBitmap_;
+  ComPtr<ID2D1Bitmap>         lockupBitmap_;
+  ComPtr<IDWriteTextFormat>   fmtStatus_;
+  ComPtr<IDWriteTextFormat>   fmtButton_;
+  ComPtr<IDWriteFontCollection> fontColl_;
+  std::wstring                fontFamily_ = L"Segoe UI Variable Display";
+
+  // state
+  Stage  stage_ = Stage::Preparing;
+  double progress_ = 0.0;      // 0..1 displayed
+  double progressTarget_ = 0.0;
+  ULONGLONG startTick_ = 0;
+  ULONGLONG openedAt_ = 0;
+  ULONGLONG stageTick_ = 0;    // when the current stage began; the install ramps from here
+  bool payloadDone_ = false;
+  DWORD payloadExit_ = 0;
+  HANDLE payloadThread_ = nullptr;
+  std::wstring errorMessage_;
+  std::wstring extractedPayload_;
+  bool closing_ = false;
+
+  // hit-tested button rects (device px), recomputed each paint
+  RECT rcMin_{}, rcClose_{}, rcRetry_{}, rcErrClose_{}, rcCheck_{};
+  bool confirmingQuit_ = false;
+};
+
+SetupApp* g_app = nullptr;
+
+std::wstring StatusText(Stage s) {
+  if (!g_statusOverride.empty()) return g_statusOverride;
+  switch (s) {
+    case Stage::Language:   return L"Choose your language \u00B7 언어를 선택하세요";
+    case Stage::Welcome:    return Tr(L"Install Redrob Query", L"Redrob Query 설치");
+    case Stage::Preparing:  return Tr(L"Preparing\u2026", L"준비 중\u2026");
+    case Stage::Installing: return Tr(L"Installing\u2026", L"설치 중\u2026");
+    case Stage::Opening:    return Tr(L"Opening Redrob Query\u2026", L"Redrob Query 여는 중\u2026");
+    case Stage::Error:      return Tr(L"Something went wrong", L"문제가 생겼어요");
+    case Stage::Confirm:    return Tr(L"Uninstall Redrob Query?", L"Redrob Query를 제거할까요?");
+    case Stage::Removing:   return Tr(L"Removing Redrob Query\u2026", L"Redrob Query 제거 중\u2026");
+    case Stage::Removed:    return Tr(L"Redrob Query has been removed", L"Redrob Query를 제거했어요");
+  }
+  return L"";
+}
+
+// What the error screen says for a worker's result. Retry is on the screen, so each one says what to do.
+std::wstring ResultSentence(DWORD code, bool uninstall) {
+  if (code == kResultAppRunning)
+    return uninstall ? Tr(L"Redrob Query is open. Close it, then press Retry.",
+                          L"Redrob Query가 실행 중이에요. 창을 닫은 뒤 다시 시도를 누르세요.")
+                     : Tr(L"Redrob Query is open. Close it, then press Retry to update it.",
+                          L"Redrob Query가 실행 중이에요. 창을 닫은 뒤 다시 시도를 눌러 업데이트하세요.");
+  if (code == kResultUnpackFailed)
+    return Tr(L"The app files could not be unpacked. Please try again.", L"앱 파일을 풀 수 없었어요. 다시 시도해 주세요.");
+  if (code == kResultNoExe)
+    return Tr(L"This setup file is damaged. Please download it again.", L"이 설치 파일이 손상됐어요. 다시 내려받아 주세요.");
+  if (code == ERROR_DISK_FULL || code == ERROR_HANDLE_DISK_FULL)
+    return Tr(L"There is not enough free disk space. Free some space, then press Retry.",
+              L"디스크 공간이 부족해요. 공간을 비운 뒤 다시 시도를 누르세요.");
+  if (code == ERROR_ACCESS_DENIED || code == ERROR_SHARING_VIOLATION)
+    return Tr(L"A file is in use. Close Redrob Query and anything opened from its folder, then press Retry.",
+              L"파일이 사용 중이에요. Redrob Query와 그 폴더에서 연 것을 모두 닫은 뒤 다시 시도를 누르세요.");
+  const std::wstring n = std::to_wstring(code);
+  if (uninstall)
+    return g_lang == Lang::Ko ? L"Redrob Query를 제거하지 못했어요 (코드 " + n + L"). 다시 시도해 주세요."
+                              : L"Redrob Query could not be removed (code " + n + L"). Please try again.";
+  return g_lang == Lang::Ko ? L"설치를 마치지 못했어요 (코드 " + n + L"). 다시 시도해 주세요."
+                            : L"Setup did not complete (code " + n + L"). Please try again.";
+}
+
+// ---------------------------------------------------------------------------
+
+// The language a previous install recorded (en, ko), or nothing.
+static std::wstring RecordedLanguage() {
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, kAppKey, 0, KEY_READ, &key) != ERROR_SUCCESS) return L"";
+  wchar_t buf[16] = {};
+  DWORD size = sizeof(buf), type = 0;
+  std::wstring out;
+  if (RegQueryValueExW(key, L"Language", nullptr, &type, reinterpret_cast<BYTE*>(buf), &size) == ERROR_SUCCESS && type == REG_SZ)
+    out = buf;
+  RegCloseKey(key);
+  return out;
+}
+
+// The desktop-shortcut choice a previous install recorded: 1, 0, or -1 for none.
+static int RecordedDesktopShortcut() {
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, kAppKey, 0, KEY_READ, &key) != ERROR_SUCCESS) return -1;
+  wchar_t buf[8] = {};
+  DWORD size = sizeof(buf), type = 0;
+  int out = -1;
+  if (RegQueryValueExW(key, L"DesktopShortcutChoice", nullptr, &type, reinterpret_cast<BYTE*>(buf), &size) == ERROR_SUCCESS && type == REG_SZ)
+    out = (buf[0] == L'1') ? 1 : 0;
+  RegCloseKey(key);
+  return out;
+}
+
+// The language to preselect: --lang, else the recorded one, else Korean on a Korean Windows, else English.
+static Lang DefaultLanguage(const std::wstring& flag) {
+  if (lstrcmpiW(flag.c_str(), L"ko") == 0) return Lang::Ko;
+  if (lstrcmpiW(flag.c_str(), L"en") == 0) return Lang::En;
+  const std::wstring recorded = RecordedLanguage();
+  if (lstrcmpiW(recorded.c_str(), L"ko") == 0) return Lang::Ko;
+  if (lstrcmpiW(recorded.c_str(), L"en") == 0) return Lang::En;
+  return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_KOREAN ? Lang::Ko : Lang::En;
+}
+
+int SetupApp::Run(HINSTANCE hinst) {
+  hinst_ = hinst;
+  g_app = this;
+
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  (void)hr;
+
+  D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &d2dFactory_);
+  DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                      reinterpret_cast<IUnknown**>(&dwFactory_));
+  CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                   IID_PPV_ARGS(&wicFactory_));
+
+  WNDCLASSEX wc = {sizeof(wc)};
+  wc.style = CS_HREDRAW | CS_VREDRAW;
+  wc.lpfnWndProc = &SetupApp::WndProcThunk;
+  wc.hInstance = hinst;
+  wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  wc.lpszClassName = L"RedrobQuerySetupWindow";
+  wc.hIcon = LoadIconW(hinst, MAKEINTRESOURCEW(IDI_APPICON));
+  wc.hIconSm = wc.hIcon;
+  RegisterClassEx(&wc);
+
+  // Center on the primary monitor's work area.
+  dpi_ = GetDpiForSystem();
+  int w = MulDiv(kBaseW, dpi_, 96);
+  int h = MulDiv(kBaseH, dpi_, 96);
+  RECT wa{};
+  SystemParametersInfo(SPI_GETWORKAREA, 0, &wa, 0);
+  int x = wa.left + ((wa.right - wa.left) - w) / 2;
+  int y = wa.top + ((wa.bottom - wa.top) - h) / 2;
+
+  // Borderless (WS_POPUP). WS_THICKFRAME is kept out; a DWM shadow is attached
+  // separately so a popup still casts one.
+  hwnd_ = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName,
+                          mode_ == Mode::Uninstall ? Tr(L"Uninstall Redrob Query", L"Redrob Query 제거")
+                                                   : Tr(L"Redrob Query Setup", L"Redrob Query 설치"),
+                          WS_POPUP, x, y, w, h, nullptr, nullptr, hinst, this);
+  if (!hwnd_) return 2;
+
+  // DWM: a real shadow on a borderless window + rounded corners (Win11).
+  MARGINS m = {1, 1, 1, 1};
+  DwmExtendFrameIntoClientArea(hwnd_, &m);
+  DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+  DwmSetWindowAttribute(hwnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+  BOOL dark = TRUE;
+  DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+
+  LayoutText();
+
+  startTick_ = GetTickCount64();
+  if (mode_ == Mode::Uninstall) {
+    SetStage(Stage::Confirm);
+  } else if (demoError_) {
+    errorMessage_ = L"The installer could not be started. Please try again.";
+    SetStage(Stage::Error);
+  } else {
+    // Nothing is installed until the person presses Install. The language comes first: every screen
+    // after it, every later screen follows the choice.
+    const int previous = RecordedDesktopShortcut();
+    if (previous >= 0) desktopShortcut_ = previous == 1;
+    SetStage(Stage::Language);
+  }
+
+  ShowWindow(hwnd_, SW_SHOW);
+  UpdateWindow(hwnd_);
+
+  MSG msg;
+  while (GetMessage(&msg, nullptr, 0, 0) > 0) {
+    TranslateMessage(&msg);
+    DispatchMessage(&msg);
+  }
+  if (payloadThread_) {
+    WaitForSingleObject(payloadThread_, 5000);
+    CloseHandle(payloadThread_);
+  }
+  // Every COM object goes BEFORE CoUninitialize. Left to the destructor, the WIC factory was released after
+  // COM was torn down, and the process died with an access violation on its way out of a successful install.
+  DiscardDeviceResources();
+  fmtStatus_.reset();
+  fmtButton_.reset();
+  fontColl_.reset();
+  wicFactory_.reset();
+  dwFactory_.reset();
+  d2dFactory_.reset();
+  CoUninitialize();
+  return (int)msg.wParam;
+}
+
+void SetupApp::LayoutText() {
+  // Load Pretendard SemiBold from the embedded TTF into a private font
+  // collection; fall back to Segoe UI Variable if the resource is absent.
+  HRSRC res = FindResourceW(hinst_, MAKEINTRESOURCEW(IDR_FONT_SANS), RT_RCDATA);
+  if (res) {
+    HGLOBAL h = LoadResource(hinst_, res);
+    void* data = LockResource(h);
+    DWORD sz = SizeofResource(hinst_, res);
+    if (data && sz) {
+      DWORD nFonts = 0;
+      HANDLE added = AddFontMemResourceEx(data, sz, nullptr, &nFonts);
+      if (added) fontFamily_ = L"Pretendard SemiBold";
+    }
+  }
+  dwFactory_->CreateTextFormat(fontFamily_.c_str(), nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                               DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                               17.0f, L"en-us", &fmtStatus_);
+  if (fmtStatus_) {
+    fmtStatus_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    fmtStatus_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+  }
+  dwFactory_->CreateTextFormat(fontFamily_.c_str(), nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                               DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                               13.0f, L"en-us", &fmtButton_);
+  if (fmtButton_) {
+    fmtButton_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    fmtButton_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+  }
+}
+
+LRESULT CALLBACK SetupApp::WndProcThunk(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  if (msg == WM_NCCREATE) {
+    auto* cs = reinterpret_cast<CREATESTRUCT*>(lp);
+    SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+  }
+  auto* self = reinterpret_cast<SetupApp*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+  if (self) { self->hwnd_ = hwnd; return self->WndProc(msg, wp, lp); }
+  return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+LRESULT SetupApp::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_PAINT: OnPaint(); return 0;
+    case WM_ERASEBKGND: return 1;
+
+    case WM_TIMER:
+      if (wp == kTickTimer) OnTick();
+      return 0;
+
+    case kStageMsg:
+      if (stage_ != Stage::Error) SetStage((Stage)wp);
+      return 0;
+
+    case kPayloadMsgDone: {
+      payloadDone_ = true;
+      payloadExit_ = (DWORD)wp;
+      if (payloadExit_ == 0) {
+        progressTarget_ = 1.0;
+        SetStage(Stage::Opening);
+      } else {
+        errorMessage_ = ResultSentence(payloadExit_, false);
+        SetStage(Stage::Error);
+      }
+      return 0;
+    }
+
+    case kUninstallMsgDone: {
+      const DWORD code = (DWORD)wp;
+      if (code == 0) {
+        progressTarget_ = 1.0;
+        progress_ = 1.0;
+        SetStage(Stage::Removed);
+        if (!demo_) ScheduleSelfCleanup();
+      } else {
+        errorMessage_ = ResultSentence(code, true);
+        SetStage(Stage::Error);
+      }
+      return 0;
+    }
+
+    case WM_GETDPISCALEDSIZE: return TRUE;
+    case WM_DPICHANGED: {
+      dpi_ = HIWORD(wp);
+      RECT* r = reinterpret_cast<RECT*>(lp);
+      SetWindowPos(hwnd_, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+      DiscardDeviceResources();
+      InvalidateRect(hwnd_, nullptr, FALSE);
+      return 0;
+    }
+
+    case WM_SIZE: DiscardDeviceResources(); return 0;
+
+    case WM_LBUTTONDOWN: {
+      POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+      if (PtInRect(&rcClose_, pt)) { RequestClose(false); return 0; }
+      if (PtInRect(&rcMin_, pt)) { ShowWindow(hwnd_, SW_MINIMIZE); return 0; }
+      if (stage_ == Stage::Language) {
+        // The two pills ARE the choice: picking one moves on, in that language.
+        if (PtInRect(&rcRetry_, pt)) { ChooseLanguage(Lang::En); return 0; }
+        if (PtInRect(&rcErrClose_, pt)) { ChooseLanguage(Lang::Ko); return 0; }
+      }
+      if (stage_ == Stage::Confirm) {
+        if (PtInRect(&rcCheck_, pt)) { deleteData_ = !deleteData_; InvalidateRect(hwnd_, nullptr, FALSE); return 0; }
+        if (PtInRect(&rcRetry_, pt)) { StartUninstall(); return 0; }       // "Uninstall"
+        if (PtInRect(&rcErrClose_, pt)) { RequestClose(true); return 0; }  // "Cancel"
+      }
+      if (stage_ == Stage::Welcome) {
+        if (PtInRect(&rcCheck_, pt)) {
+          desktopShortcut_ = !desktopShortcut_;
+          InvalidateRect(hwnd_, nullptr, FALSE);
+          return 0;
+        }
+        if (PtInRect(&rcRetry_, pt)) { StartInstall(); return 0; }              // "Install"
+        if (PtInRect(&rcErrClose_, pt)) { SetStage(Stage::Language); return 0; } // "Back"
+      }
+      if (stage_ == Stage::Removed && PtInRect(&rcRetry_, pt)) { RequestClose(true); return 0; }  // "Close"
+      if (stage_ == Stage::Error && mode_ == Mode::Uninstall && PtInRect(&rcRetry_, pt)) {
+        errorMessage_.clear();
+        SetStage(Stage::Confirm);  // back to the question, so a retry is still a choice
+        return 0;
+      }
+      if (stage_ == Stage::Error && PtInRect(&rcRetry_, pt)) {
+        errorMessage_.clear();
+        StartInstall();
+        return 0;
+      }
+      if (stage_ == Stage::Error && PtInRect(&rcErrClose_, pt)) { RequestClose(true); return 0; }
+      // Anywhere else on the caption strip drags the window.
+      if (pt.y < MulDiv((int)kCaption, dpi_, 96)) {
+        ReleaseCapture();
+        SendMessage(hwnd_, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+      }
+      return 0;
+    }
+
+    case WM_KEYDOWN:
+      if (wp == VK_ESCAPE) { RequestClose(false); return 0; }
+      if (stage_ == Stage::Language) {
+        // Left/Right or E/K pick; Enter keeps the preselected language.
+        if (wp == VK_LEFT || wp == 'E') { ChooseLanguage(Lang::En); return 0; }
+        if (wp == VK_RIGHT || wp == 'K') { ChooseLanguage(Lang::Ko); return 0; }
+        if (wp == VK_RETURN) { ChooseLanguage(g_lang); return 0; }
+        return 0;
+      }
+      if (stage_ == Stage::Confirm && wp == VK_SPACE) {
+        deleteData_ = !deleteData_;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return 0;
+      }
+      if (stage_ == Stage::Confirm && wp == VK_RETURN) { StartUninstall(); return 0; }
+      if (stage_ == Stage::Welcome && wp == VK_SPACE) {
+        desktopShortcut_ = !desktopShortcut_;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return 0;
+      }
+      if (stage_ == Stage::Welcome && wp == VK_RETURN) { StartInstall(); return 0; }
+      if (stage_ == Stage::Welcome && wp == VK_BACK) { SetStage(Stage::Language); return 0; }
+      if (stage_ == Stage::Removed && wp == VK_RETURN) { RequestClose(true); return 0; }
+      return 0;
+
+    case WM_SYSKEYDOWN:
+      if (wp == VK_F4) { RequestClose(false); return 0; }  // Alt+F4
+      return DefWindowProc(hwnd_, msg, wp, lp);
+
+    case WM_CLOSE:
+      RequestClose(false);
+      return 0;
+
+    case WM_DESTROY:
+      KillTimer(hwnd_, kTickTimer);
+      DiscardDeviceResources();
+      PostQuitMessage(0);
+      return 0;
+  }
+  return DefWindowProc(hwnd_, msg, wp, lp);
+}
+
+void SetupApp::RequestClose(bool force) {
+  // While installing, Esc / close ask for confirmation first (do not abandon an
+  // install silently). In demo and error states, close immediately.
+  bool installing = (stage_ == Stage::Installing || stage_ == Stage::Preparing) && !demo_ && !force &&
+                    mode_ == Mode::Install;
+  // A removal cannot be safely abandoned halfway; closing waits for it to finish.
+  if (stage_ == Stage::Removing && !force) return;
+  if (installing) {
+    int r = MessageBoxW(hwnd_,
+        Tr(L"Redrob Query is still installing. Stop the installation and quit?",
+           L"Redrob Query를 아직 설치하고 있어요. 설치를 멈추고 끝낼까요?"),
+        Tr(L"Redrob Query Setup", L"Redrob Query 설치"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+    if (r != IDYES) return;
+  }
+  DestroyWindow(hwnd_);
+}
+
+void SetupApp::SetStage(Stage s) {
+  if (s != stage_) stageTick_ = GetTickCount64();
+  stage_ = s;
+  g_statusOverride.clear();
+  if (s == Stage::Opening) openedAt_ = GetTickCount64();
+  if (s == Stage::Error || s == Stage::Confirm || s == Stage::Removed || s == Stage::Welcome || s == Stage::Language)
+    KillTimer(hwnd_, kTickTimer);
+  if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+// The language screen's answer: from here on every string, including the window title, is in `l`.
+void SetupApp::ChooseLanguage(Lang l) {
+  g_lang = l;
+  if (hwnd_) SetWindowTextW(hwnd_, mode_ == Mode::Uninstall ? Tr(L"Uninstall Redrob Query", L"Redrob Query 제거")
+                                                            : Tr(L"Redrob Query Setup", L"Redrob Query 설치"));
+  SetStage(Stage::Welcome);
+}
+
+// The Install button (and Retry).
+void SetupApp::StartInstall() {
+  progress_ = progressTarget_ = 0.0;
+  startTick_ = GetTickCount64();
+  payloadDone_ = false;
+  SetStage(Stage::Preparing);
+  SetTimer(hwnd_, kTickTimer, kTickMs, nullptr);
+  if (!demo_) {
+    if (payloadThread_) { WaitForSingleObject(payloadThread_, 5000); CloseHandle(payloadThread_); }
+    payloadThread_ = CreateThread(nullptr, 0, &SetupApp::PayloadThunk, this, 0, nullptr);
+  }
+}
+
+static double EaseOut(double t) { return 1 - (1 - t) * (1 - t); }
+
+void SetupApp::OnTick() {
+  ULONGLONG elapsed = GetTickCount64() - startTick_;
+
+  if (mode_ == Mode::Uninstall) {
+    // Removal reports no progress either: the same eased ramp, over ~12s, capped until it finishes.
+    if (stage_ == Stage::Removing) {
+      double t = std::min(1.0, (GetTickCount64() - startTick_) / 12000.0);
+      progressTarget_ = 0.90 * (1 - (1 - t) * (1 - t));
+    }
+  } else if (demo_ && stage_ != Stage::Error) {
+    // Scripted demo, same shape as a real run: Preparing (0-0.8s) -> Installing (0.8-5s, bar to ~0.9)
+    // -> Opening (5-6.5s) -> close.
+    if (elapsed < 800) { if (stage_ != Stage::Preparing) SetStage(Stage::Preparing); progressTarget_ = 0.04; }
+    else if (elapsed < 5000) { if (stage_ != Stage::Installing) SetStage(Stage::Installing);
+      progressTarget_ = 0.90 * EaseOut((elapsed - 800) / 4200.0); }
+    else if (elapsed < 6500) { if (stage_ != Stage::Opening) SetStage(Stage::Opening); progressTarget_ = 1.0; }
+    else { DestroyWindow(hwnd_); return; }
+  } else if (!demo_) {
+    // Real run. Preparing turns into Installing after 0.6s; the bar is a time-based eased ramp, capped
+    // until the worker finishes.
+    if (stage_ == Stage::Preparing && elapsed > 600) SetStage(Stage::Installing);
+    const double since = (double)(GetTickCount64() - stageTick_);
+    if (stage_ == Stage::Installing && !payloadDone_) {
+      progressTarget_ = 0.90 * EaseOut(std::min(1.0, since / 30000.0));  // approach over ~30s
+    }
+    if (stage_ == Stage::Opening) {
+      progressTarget_ = 1.0;
+      // Close on a fixed delay after Opening began: the app has been started (InstallApp), so
+      // there is nothing left for this window to do but get out of the way.
+      if (GetTickCount64() - openedAt_ > 1400) { DestroyWindow(hwnd_); return; }
+    }
+  }
+
+  // Ease displayed progress toward the target (motion < 1/3 s per step).
+  progress_ += (progressTarget_ - progress_) * 0.12;
+  if (progress_ > 0.9999) progress_ = 1.0;
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+// ---- rendering -------------------------------------------------------------
+
+void SetupApp::CreateDeviceResources() {
+  if (rt_) return;
+  RECT rc; GetClientRect(hwnd_, &rc);
+  D2D1_SIZE_U size = D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top);
+  D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+      D2D1_RENDER_TARGET_TYPE_DEFAULT,
+      D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+  ComPtr<ID2D1HwndRenderTarget> hwndRt;
+  HRESULT hr = d2dFactory_->CreateHwndRenderTarget(
+      props, D2D1::HwndRenderTargetProperties(hwnd_, size, D2D1_PRESENT_OPTIONS_NONE), &hwndRt);
+  (void)hr;
+  if (!hwndRt) return;
+  rt_.p = hwndRt.p;  // ID2D1HwndRenderTarget is an ID2D1RenderTarget; rt_ takes the reference
+  hwndRt.p = nullptr;
+  rt_->SetDpi((float)dpi_, (float)dpi_);
+  bgBitmap_ = LoadPngResource(IDR_BACKGROUND_PNG, rt_.p);
+  lockupBitmap_ = LoadPngResource(IDR_LOCKUP_PNG, rt_.p);
+}
+
+void SetupApp::DiscardDeviceResources() {
+  bgBitmap_.reset();
+  lockupBitmap_.reset();
+  rt_.reset();
+}
+
+ComPtr<ID2D1Bitmap> SetupApp::LoadPngResource(int resId, ID2D1RenderTarget* rt) {
+  ComPtr<ID2D1Bitmap> out;
+  HRSRC res = FindResourceW(hinst_, MAKEINTRESOURCEW(resId), RT_RCDATA);
+  if (!res) return out;
+  HGLOBAL h = LoadResource(hinst_, res);
+  void* data = LockResource(h);
+  DWORD sz = SizeofResource(hinst_, res);
+  if (!data || !sz) return out;
+
+  ComPtr<IWICStream> stream;
+  wicFactory_->CreateStream(&stream);
+  stream->InitializeFromMemory((BYTE*)data, sz);
+  ComPtr<IWICBitmapDecoder> dec;
+  if (FAILED(wicFactory_->CreateDecoderFromStream(stream.p, nullptr,
+          WICDecodeMetadataCacheOnLoad, &dec))) return out;
+  ComPtr<IWICBitmapFrameDecode> frame;
+  dec->GetFrame(0, &frame);
+  ComPtr<IWICFormatConverter> conv;
+  wicFactory_->CreateFormatConverter(&conv);
+  conv->Initialize(frame.p, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
+                   nullptr, 0.0, WICBitmapPaletteTypeMedianCut);
+  rt->CreateBitmapFromWicBitmap(conv.p, nullptr, &out);
+  return out;
+}
+
+void SetupApp::OnPaint() {
+  CreateDeviceResources();
+  PAINTSTRUCT ps; BeginPaint(hwnd_, &ps);
+  if (!rt_) { EndPaint(hwnd_, &ps); return; }
+  if (DrawScene() == D2DERR_RECREATE_TARGET) DiscardDeviceResources();
+  EndPaint(hwnd_, &ps);
+}
+
+HRESULT SetupApp::DrawScene() {
+  rt_->BeginDraw();
+  rt_->Clear(kRedrobBlack);
+
+  const float W = (float)kBaseW, H = (float)kBaseH;
+
+  // Background art (deep ground + wash-edge), drawn to fill the window.
+  if (bgBitmap_) {
+    rt_->DrawBitmap(bgBitmap_.p, D2D1::RectF(0, 0, W, H), 1.0f,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+  }
+
+  ComPtr<ID2D1SolidColorBrush> ink, muted, blue, track, danger, white;
+  rt_->CreateSolidColorBrush(kInkPrimary, &ink);
+  rt_->CreateSolidColorBrush(kInkMuted, &muted);
+  rt_->CreateSolidColorBrush(kActionBlue, &blue);
+  rt_->CreateSolidColorBrush(kTrack, &track);
+  rt_->CreateSolidColorBrush(kDanger, &danger);
+  rt_->CreateSolidColorBrush(kWhite, &white);
+
+  // ---- caption glyphs (min / close), top-right -----------------------------
+  const float gl = 14.0f;              // glyph half-size
+  const float cy = kCaption / 2.0f;
+  const float closeX = W - 28.0f;
+  const float minX   = W - 64.0f;
+  computeButtonRects(minX, closeX, cy);
+  // close (x)
+  rt_->DrawLine(D2D1::Point2F(closeX - gl / 2, cy - gl / 2),
+                D2D1::Point2F(closeX + gl / 2, cy + gl / 2), ink.p, 1.6f);
+  rt_->DrawLine(D2D1::Point2F(closeX + gl / 2, cy - gl / 2),
+                D2D1::Point2F(closeX - gl / 2, cy + gl / 2), ink.p, 1.6f);
+  // minimize (-)
+  rt_->DrawLine(D2D1::Point2F(minX - gl / 2, cy),
+                D2D1::Point2F(minX + gl / 2, cy), ink.p, 1.6f);
+
+  // ---- lockup (product mark + name), centred in the upper third ---------------
+  // res/lockup.png, built by installer/windows/build-art.py as the design system builds its product
+  // lockups. Same size and place as the Redrob Query and Redrob Browser setups'.
+  if (lockupBitmap_) {
+    D2D1_SIZE_F ls = lockupBitmap_->GetSize();
+    float lh = 34.0f;                       // >= 18px min screen (10-logo.md)
+    float lw = ls.width * (lh / ls.height);
+    float lx = (W - lw) / 2.0f;
+    float ly = H * 0.30f;
+    rt_->DrawBitmap(lockupBitmap_.p, D2D1::RectF(lx, ly, lx + lw, ly + lh), 1.0f,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+  }
+
+  // ---- status line, centered ------------------------------------------------
+  std::wstring status = StatusText(stage_);
+  D2D1_RECT_F statusRc = D2D1::RectF(40, H * 0.46f, W - 40, H * 0.46f + 30);
+  if (fmtStatus_) rt_->DrawTextW(status.c_str(), (UINT32)status.size(), fmtStatus_.p, statusRc,
+                                 (stage_ == Stage::Error ? danger.p : ink.p));
+
+  ComPtr<ID2D1SolidColorBrush> black;
+  rt_->CreateSolidColorBrush(kRedrobBlack, &black);
+  // A white pill (the one prominent action, black type) and an outline pill, as the error state draws them.
+  auto pill = [&](float x, float y, float w, float h, const wchar_t* label, bool primary) {
+    D2D1_ROUNDED_RECT rr = {D2D1::RectF(x, y, x + w, y + h), h / 2, h / 2};
+    if (primary) rt_->FillRoundedRectangle(rr, white.p);
+    else rt_->DrawRoundedRectangle(rr, track.p, 1.4f);
+    if (fmtButton_) rt_->DrawTextW(label, (UINT32)wcslen(label), fmtButton_.p,
+                                   D2D1::RectF(x, y, x + w, y + h), primary ? black.p : ink.p);
+  };
+  const float pw = 120.0f, ph = 38.0f, py = H * 0.72f;
+
+  // A 16px box and its label, centred together as one row. The whole row is the hit target, not just the box.
+  auto checkRow = [&](const wchar_t* label, bool checked) {
+    float labelW = 200.0f;
+    ComPtr<IDWriteTextLayout> layout;
+    if (fmtButton_ && SUCCEEDED(dwFactory_->CreateTextLayout(label, (UINT32)wcslen(label), fmtButton_.p,
+                                                             W, 24.0f, &layout))) {
+      layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+      DWRITE_TEXT_METRICS tm{};
+      if (SUCCEEDED(layout->GetMetrics(&tm))) labelW = tm.widthIncludingTrailingWhitespace;
+    }
+    const float box = 16.0f, gap = 10.0f, rowY = H * 0.615f;
+    const float rowX = (W - (box + gap + labelW)) / 2.0f;
+    D2D1_ROUNDED_RECT boxRR = {D2D1::RectF(rowX, rowY, rowX + box, rowY + box), 4.0f, 4.0f};
+    if (checked) {
+      rt_->FillRoundedRectangle(boxRR, blue.p);
+      rt_->DrawLine(D2D1::Point2F(rowX + 4.0f, rowY + 8.5f), D2D1::Point2F(rowX + 7.0f, rowY + 11.5f), white.p, 1.8f);
+      rt_->DrawLine(D2D1::Point2F(rowX + 7.0f, rowY + 11.5f), D2D1::Point2F(rowX + 12.5f, rowY + 5.0f), white.p, 1.8f);
+    } else {
+      rt_->DrawRoundedRectangle(boxRR, muted.p, 1.4f);
+    }
+    if (layout) rt_->DrawTextLayout(D2D1::Point2F(rowX + box + gap, rowY + box / 2 - 12.0f), layout.p, ink.p);
+    rcCheck_ = ToDevice(rowX - 6.0f, rowY - 6.0f, box + gap + labelW + 12.0f, box + 12.0f);
+  };
+  auto bodyLine = [&](const wchar_t* body) {
+    // Tall enough for two lines (the language screen says it in both languages).
+    if (fmtButton_) rt_->DrawTextW(body, (UINT32)wcslen(body), fmtButton_.p,
+                                   D2D1::RectF(60, H * 0.52f, W - 60, H * 0.62f), muted.p);
+  };
+  auto twoPills = [&](const wchar_t* primary, const wchar_t* secondary) {
+    const float ux = W / 2.0f - pw - 8.0f, cx = W / 2.0f + 8.0f;
+    rcRetry_ = ToDevice(ux, py, pw, ph);
+    rcErrClose_ = ToDevice(cx, py, pw, ph);
+    pill(ux, py, pw, ph, primary, true);
+    pill(cx, py, pw, ph, secondary, false);
+  };
+
+  if (stage_ == Stage::Language) {
+    // Bilingual by nature: it comes before the choice. The two pills are the choice; the preselected
+    // one (a previous install's answer, or the Windows UI language) is drawn as the primary.
+    bodyLine(L"Setup will continue in this language.\n설치 과정이 이 언어로 진행됩니다.");
+    rcCheck_ = RECT{};
+    const float ux = W / 2.0f - pw - 8.0f, cx = W / 2.0f + 8.0f;
+    rcRetry_ = ToDevice(ux, py, pw, ph);     // English
+    rcErrClose_ = ToDevice(cx, py, pw, ph);  // 한국어
+    pill(ux, py, pw, ph, L"English", g_lang == Lang::En);
+    pill(cx, py, pw, ph, L"한국어", g_lang == Lang::Ko);
+  } else if (stage_ == Stage::Welcome) {
+    bodyLine(Tr(L"Installs for this Windows account. No administrator rights needed.",
+                L"이 Windows 계정에만 설치됩니다. 관리자 권한이 필요하지 않아요."));
+    checkRow(Tr(L"Create a desktop shortcut", L"바탕 화면에 바로 가기 만들기"), desktopShortcut_);
+    twoPills(Tr(L"Install", L"설치"), Tr(L"Back", L"뒤로"));
+  } else if (stage_ == Stage::Confirm) {
+    bodyLine(Tr(L"Redrob Query will be removed from this PC. Your databases are not touched.",
+                L"이 PC에서 Redrob Query를 제거합니다. 데이터베이스는 건드리지 않아요."));
+    checkRow(Tr(L"Also delete its settings and connection profiles", L"설정과 연결 프로필도 삭제"), deleteData_);
+    twoPills(Tr(L"Uninstall", L"제거"), Tr(L"Cancel", L"취소"));
+  } else if (stage_ == Stage::Removed) {
+    const wchar_t* body = deleteData_ ? Tr(L"Its settings and connection profiles were deleted too.", L"설정과 연결 프로필도 삭제했어요.")
+                                      : Tr(L"Its settings stay on this PC for a later install.", L"설정은 다음 설치를 위해 이 PC에 남아 있어요.");
+    if (fmtButton_) rt_->DrawTextW(body, (UINT32)wcslen(body), fmtButton_.p,
+                                   D2D1::RectF(60, H * 0.53f, W - 60, H * 0.59f), muted.p);
+    const float x = (W - pw) / 2.0f;
+    rcRetry_ = ToDevice(x, py, pw, ph);  // Close
+    rcErrClose_ = RECT{};
+    pill(x, py, pw, ph, Tr(L"Close", L"닫기"), true);
+
+  } else if (stage_ != Stage::Error) {
+    // ---- progress bar: thin, rounded, blue fill on a faint track -----------
+    const float barW = W * 0.76f, barH = 6.0f;
+    const float barX = (W - barW) / 2.0f, barY = H * 0.60f;
+    D2D1_ROUNDED_RECT trackRR = {D2D1::RectF(barX, barY, barX + barW, barY + barH), barH / 2, barH / 2};
+    rt_->FillRoundedRectangle(trackRR, track.p);
+    float fillW = (float)(barW * progress_);
+    if (fillW > barH) {
+      D2D1_ROUNDED_RECT fillRR = {D2D1::RectF(barX, barY, barX + fillW, barY + barH), barH / 2, barH / 2};
+      rt_->FillRoundedRectangle(fillRR, blue.p);
+    }
+  } else {
+    // ---- error state: message + Retry (white pill, black type) / Close -----
+    D2D1_RECT_F msgRc = D2D1::RectF(60, H * 0.54f, W - 60, H * 0.66f);
+    if (fmtButton_) rt_->DrawTextW(errorMessage_.c_str(), (UINT32)errorMessage_.size(),
+                                   fmtButton_.p, msgRc, muted.p);
+    // Retry pill (white fill, black type) -- the single prominent CTA.
+    const float pw = 120.0f, ph = 38.0f, py = H * 0.72f;
+    const float rx = W / 2.0f - pw - 8.0f, cx = W / 2.0f + 8.0f;
+    rcRetry_ = ToDevice(rx, py, pw, ph);
+    rcErrClose_ = ToDevice(cx, py, pw, ph);
+    D2D1_ROUNDED_RECT pill = {D2D1::RectF(rx, py, rx + pw, py + ph), ph / 2, ph / 2};
+    rt_->FillRoundedRectangle(pill, white.p);
+    D2D1_RECT_F rtxt = D2D1::RectF(rx, py, rx + pw, py + ph);
+    const wchar_t* retry = Tr(L"Retry", L"다시 시도");
+    if (fmtButton_) rt_->DrawTextW(retry, (UINT32)wcslen(retry), fmtButton_.p, rtxt, black.p);
+    // Close (outline)
+    D2D1_ROUNDED_RECT closeRR = {D2D1::RectF(cx, py, cx + pw, py + ph), ph / 2, ph / 2};
+    rt_->DrawRoundedRectangle(closeRR, track.p, 1.4f);
+    D2D1_RECT_F ctxt = D2D1::RectF(cx, py, cx + pw, py + ph);
+    const wchar_t* close = Tr(L"Close", L"닫기");
+    if (fmtButton_) rt_->DrawTextW(close, (UINT32)wcslen(close), fmtButton_.p, ctxt, ink.p);
+  }
+
+  return rt_->EndDraw();
+}
+
+int SetupApp::RenderStages(HINSTANCE hinst, const std::wstring& dir) {
+  hinst_ = hinst;
+  g_app = this;
+  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &d2dFactory_);
+  DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                      reinterpret_cast<IUnknown**>(&dwFactory_));
+  CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory_));
+  if (!d2dFactory_ || !dwFactory_ || !wicFactory_) return 2;
+  LayoutText();
+  dpi_ = 192;  // 200%: the sharpest the art is drawn for
+  const UINT pw = MulDiv(kBaseW, dpi_, 96), ph = MulDiv(kBaseH, dpi_, 96);
+  int failures = 0;
+  struct Shot { Stage stage; double progress; const wchar_t* name; Lang lang; };
+  const Shot shots[] = {
+    {Stage::Language, 0.0, L"0-language.png", Lang::En},
+    {Stage::Welcome, 0.0, L"1-welcome.png", Lang::En},
+    {Stage::Welcome, 0.0, L"1-welcome-ko.png", Lang::Ko},
+    {Stage::Installing, 0.55, L"2-installing.png", Lang::En},
+    {Stage::Installing, 0.55, L"2-installing-ko.png", Lang::Ko},
+    {Stage::Opening, 1.0, L"3-opening.png", Lang::En},
+    {Stage::Error, 0.0, L"4-error.png", Lang::En},
+    {Stage::Error, 0.0, L"4-error-ko.png", Lang::Ko},
+    {Stage::Confirm, 0.0, L"5-uninstall-confirm.png", Lang::En},
+    {Stage::Confirm, 0.0, L"5-uninstall-confirm-ko.png", Lang::Ko},
+    {Stage::Removing, 0.4, L"6-removing.png", Lang::En},
+    {Stage::Removed, 1.0, L"7-removed.png", Lang::En},
+  };
+  for (const Shot& s : shots) {
+    ComPtr<IWICBitmap> bitmap;
+    if (FAILED(wicFactory_->CreateBitmap(pw, ph, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bitmap))) {
+      ++failures; continue;
+    }
+    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), (float)dpi_, (float)dpi_);
+    DiscardDeviceResources();
+    if (FAILED(d2dFactory_->CreateWicBitmapRenderTarget(bitmap.p, props, &rt_))) { ++failures; continue; }
+    bgBitmap_ = LoadPngResource(IDR_BACKGROUND_PNG, rt_.p);
+    lockupBitmap_ = LoadPngResource(IDR_LOCKUP_PNG, rt_.p);
+    mode_ = (s.stage == Stage::Confirm || s.stage == Stage::Removing || s.stage == Stage::Removed)
+                ? Mode::Uninstall : Mode::Install;
+    stage_ = s.stage;
+    progress_ = s.progress;
+    g_lang = s.lang;
+    if (s.stage == Stage::Error) errorMessage_ = ResultSentence(kResultAppRunning, false);
+    if (FAILED(DrawScene())) { ++failures; continue; }
+
+    const std::wstring path = dir + L"\\" + s.name;
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> encoder;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    bool ok = SUCCEEDED(wicFactory_->CreateStream(&stream)) &&
+              SUCCEEDED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) &&
+              SUCCEEDED(wicFactory_->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
+              SUCCEEDED(encoder->Initialize(stream.p, WICBitmapEncoderNoCache)) &&
+              SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr)) &&
+              SUCCEEDED(frame->Initialize(nullptr)) &&
+              SUCCEEDED(frame->WriteSource(bitmap.p, nullptr)) &&
+              SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
+    if (!ok) ++failures;
+  }
+  DiscardDeviceResources();
+  fmtStatus_.reset();
+  fmtButton_.reset();
+  wicFactory_.reset();
+  dwFactory_.reset();
+  d2dFactory_.reset();
+  CoUninitialize();
+  return failures;
+}
+
+// device-pixel rect from logical (dip) coordinates
+RECT SetupApp::ToDevice(float x, float y, float w, float h) {
+  float s = dpi_ / 96.0f;
+  RECT r;
+  r.left = (LONG)(x * s); r.top = (LONG)(y * s);
+  r.right = (LONG)((x + w) * s); r.bottom = (LONG)((y + h) * s);
+  return r;
+}
+
+void SetupApp::computeButtonRects(float minX, float closeX, float cy) {
+  float s = dpi_ / 96.0f;
+  auto box = [&](float cx) {
+    RECT r; r.left = (LONG)((cx - 16) * s); r.top = (LONG)((cy - 16) * s);
+    r.right = (LONG)((cx + 16) * s); r.bottom = (LONG)((cy + 16) * s); return r;
+  };
+  rcMin_ = box(minX);
+  rcClose_ = box(closeX);
+}
+
+// ---- payload ---------------------------------------------------------------
+
+DWORD WINAPI SetupApp::PayloadThunk(LPVOID self) {
+  return reinterpret_cast<SetupApp*>(self)->RunPayload();
+}
+
+// %LOCALAPPDATA%, or empty.
+static std::wstring LocalAppData() {
+  wchar_t local[MAX_PATH];
+  if (FAILED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, local))) return L"";
+  return local;
+}
+
+static std::wstring KnownFolder(REFKNOWNFOLDERID id) {
+  PWSTR p = nullptr;
+  std::wstring out;
+  if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &p))) out = p;
+  CoTaskMemFree(p);
+  return out;
+}
+
+static std::wstring InstallDir() {
+  const std::wstring local = LocalAppData();
+  return local.empty() ? L"" : local + kInstallSubdir;
+}
+
+static bool Exists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+// The one subfolder of `dir` that holds `rel` (a path starting with a backslash), or empty.
+static std::wstring SingleSubfolderWith(const std::wstring& dir, const wchar_t* rel) {
+  std::wstring found;
+  WIN32_FIND_DATAW fd;
+  HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+  if (find == INVALID_HANDLE_VALUE) return found;
+  do {
+    const std::wstring name = fd.cFileName;
+    if (name == L"." || name == L".." || !(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+    const std::wstring sub = dir + L"\\" + name;
+    if (Exists(sub + rel)) { found = sub; break; }
+  } while (FindNextFileW(find, &fd));
+  FindClose(find);
+  return found;
+}
+
+// Write one RCDATA resource to `path`. False if the resource is missing or the write was short.
+static bool WriteResource(HINSTANCE hinst, int id, const std::wstring& path) {
+  HRSRC res = FindResourceW(hinst, MAKEINTRESOURCEW(id), RT_RCDATA);
+  if (!res) return false;
+  HGLOBAL h = LoadResource(hinst, res);
+  const void* data = LockResource(h);
+  const DWORD sz = SizeofResource(hinst, res);
+  if (!data || !sz) return false;
+  HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (f == INVALID_HANDLE_VALUE) return false;
+  DWORD written = 0;
+  const BOOL ok = WriteFile(f, data, sz, &written, nullptr);
+  CloseHandle(f);
+  if (!ok || written != sz) { DeleteFileW(path.c_str()); return false; }
+  return true;
+}
+
+bool SetupApp::ExtractPayload(std::wstring& outPath) {
+  wchar_t tmp[MAX_PATH];
+  GetTempPathW(MAX_PATH, tmp);
+  wchar_t name[MAX_PATH];
+  if (!GetTempFileNameW(tmp, L"rcs", 0, name)) return false;
+  const std::wstring zip = std::wstring(name) + L".zip";
+  DeleteFileW(name);  // the 0-byte file GetTempFileName created
+  if (!WriteResource(hinst_, IDR_PAYLOAD, zip)) return false;
+  outPath = zip;
+  return true;
+}
+
+// Delete a directory tree. Paths are checked by the callers to be inside the install folder or our own
+// data folders; this never runs on anything it was not given. `keep` (a full path) is left in place.
+static DWORD DeleteTree(const std::wstring& dir, const std::wstring& keep = L"") {
+  DWORD firstError = 0;
+  WIN32_FIND_DATAW fd;
+  HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+  if (find != INVALID_HANDLE_VALUE) {
+    do {
+      const std::wstring name = fd.cFileName;
+      if (name == L"." || name == L"..") continue;
+      const std::wstring path = dir + L"\\" + name;
+      if (!keep.empty() && lstrcmpiW(path.c_str(), keep.c_str()) == 0) continue;
+      DWORD err = 0;
+      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        // A junction is removed as a link; its target is not followed.
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) err = RemoveDirectoryW(path.c_str()) ? 0 : GetLastError();
+        else err = DeleteTree(path, keep);
+      } else {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
+          SetFileAttributesW(path.c_str(), fd.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY);
+        err = DeleteFileW(path.c_str()) ? 0 : GetLastError();
+      }
+      if (err && !firstError) firstError = err;
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+  }
+  if (!RemoveDirectoryW(dir.c_str())) {
+    const DWORD err = GetLastError();
+    // The kept file, or a missing folder, is not a failure.
+    if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND && err != ERROR_DIR_NOT_EMPTY && !firstError)
+      firstError = err;
+    if (err == ERROR_DIR_NOT_EMPTY && keep.empty() && !firstError) firstError = err;
+  }
+  return firstError;
+}
+
+// Whether a process is running from inside `dir` (Redrob Query itself).
+static bool AnythingRunningFrom(const std::wstring& dir) {
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snap == INVALID_HANDLE_VALUE) return false;
+  const std::wstring prefix = dir + L"\\";
+  const DWORD self = GetCurrentProcessId();
+  bool found = false;
+  PROCESSENTRY32W pe = {sizeof(pe)};
+  for (BOOL ok = Process32FirstW(snap, &pe); ok && !found; ok = Process32NextW(snap, &pe)) {
+    if (pe.th32ProcessID == self) continue;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+    if (!h) continue;
+    wchar_t path[MAX_PATH];
+    DWORD len = MAX_PATH;
+    if (QueryFullProcessImageNameW(h, 0, path, &len) && _wcsnicmp(path, prefix.c_str(), prefix.size()) == 0)
+      found = true;
+    CloseHandle(h);
+  }
+  CloseHandle(snap);
+  return found;
+}
+
+// Run a command hidden and wait. Returns its exit code, or the CreateProcess error.
+static DWORD RunHidden(std::wstring cmd, const wchar_t* cwd = nullptr) {
+  STARTUPINFOW si = {sizeof(si)};
+  si.dwFlags = STARTF_USESHOWWINDOW;
+  si.wShowWindow = SW_HIDE;
+  PROCESS_INFORMATION pi = {};
+  if (!CreateProcessW(nullptr, &cmd[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, cwd, &si, &pi))
+    return GetLastError();
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD exitCode = 1;
+  GetExitCodeProcess(pi.hProcess, &exitCode);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return exitCode;
+}
+
+// A shortcut to the app. It carries the AppUserModelID ai.redrob.query: Windows needs it to show
+// toast notifications from an unpackaged app and to group the taskbar button (the MSI's ShortcutProperty
+// for the same thing failed with "Warning 1946" on some machines; IPropertyStore is the direct way).
+static bool MakeShortcut(const std::wstring& lnk, const std::wstring& target, const std::wstring& workDir) {
+  ComPtr<IShellLinkW> link;
+  if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) return false;
+  link->SetPath(target.c_str());
+  link->SetWorkingDirectory(workDir.c_str());
+  link->SetIconLocation(target.c_str(), 0);
+  link->SetDescription(Tr(L"Install and update the Redrob apps", L"Redrob 앱을 설치하고 업데이트합니다"));
+  ComPtr<IPropertyStore> store;
+  if (SUCCEEDED(link->QueryInterface(IID_PPV_ARGS(&store)))) {
+    PROPVARIANT pv;
+    if (SUCCEEDED(InitPropVariantFromString(kAppUserModelId, &pv))) {
+      store->SetValue(PKEY_AppUserModel_ID, pv);
+      store->Commit();
+      PropVariantClear(&pv);
+    }
+  }
+  ComPtr<IPersistFile> file;
+  if (FAILED(link->QueryInterface(IID_PPV_ARGS(&file)))) return false;
+  return SUCCEEDED(file->Save(lnk.c_str(), TRUE));
+}
+
+static bool SetArpString(HKEY key, const wchar_t* name, const std::wstring& value) {
+  return RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+                        (DWORD)((value.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
+}
+
+static ULONGLONG TreeSizeBytes(const std::wstring& dir) {
+  ULONGLONG total = 0;
+  WIN32_FIND_DATAW fd;
+  HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+  if (find == INVALID_HANDLE_VALUE) return 0;
+  do {
+    const std::wstring name = fd.cFileName;
+    if (name == L"." || name == L"..") continue;
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) total += TreeSizeBytes(dir + L"\\" + name);
+    } else {
+      total += ((ULONGLONG)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+    }
+  } while (FindNextFileW(find, &fd));
+  FindClose(find);
+  return total;
+}
+
+// The Settings > Apps entry. Everything Windows shows there: name, version, publisher, icon, size.
+static bool WriteArpEntry(const std::wstring& dir) {
+  HKEY key = nullptr;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kArpKey, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS)
+    return false;
+  const std::wstring exe = dir + kAppExeRel;
+  const std::wstring uninstaller = dir + kUninstallerName;
+  bool ok = SetArpString(key, L"DisplayName", L"Redrob Query") &&
+            SetArpString(key, L"DisplayVersion", REDROB_VER_WSTR) &&
+            SetArpString(key, L"Publisher", L"Redrob") &&
+            SetArpString(key, L"DisplayIcon", L"\"" + exe + L"\",0") &&
+            SetArpString(key, L"InstallLocation", dir) &&
+            SetArpString(key, L"URLInfoAbout", L"https://redrob.ai") &&
+            SetArpString(key, L"HelpLink", L"https://github.com/redrob-labs/redrob-query") &&
+            SetArpString(key, L"URLUpdateInfo", L"https://github.com/redrob-labs/redrob-query/releases") &&
+            SetArpString(key, L"UninstallString", L"\"" + uninstaller + L"\" --uninstall");
+  const DWORD one = 1;
+  const DWORD sizeKb = (DWORD)std::min<ULONGLONG>(TreeSizeBytes(dir) / 1024, 0xFFFFFFFFull);
+  RegSetValueExW(key, L"NoModify", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&one), sizeof(one));
+  RegSetValueExW(key, L"NoRepair", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&one), sizeof(one));
+  RegSetValueExW(key, L"EstimatedSize", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&sizeKb), sizeof(sizeKb));
+  RegCloseKey(key);
+  return ok;
+}
+
+// The payload-less build of this app (IDR_UNINSTALLER) goes into the install folder; Settings > Apps runs it.
+bool SetupApp::InstallUninstaller(const std::wstring& dir) {
+  return WriteResource(hinst_, IDR_UNINSTALLER, dir + kUninstallerName);
+}
+
+static std::wstring StartMenuShortcut() {
+  const std::wstring programs = KnownFolder(FOLDERID_Programs);
+  return programs.empty() ? L"" : programs + kShortcutName;
+}
+
+static std::wstring DesktopShortcut() {
+  const std::wstring desktop = KnownFolder(FOLDERID_Desktop);
+  return desktop.empty() ? L"" : desktop + kShortcutName;
+}
+
+// What the next setup preselects: the install
+// folder, the language, the desktop-shortcut choice; and the App Paths entry for Win+R "redrob-query".
+void SetupApp::RecordChoices(const std::wstring& dir) {
+  HKEY key = nullptr;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kAppKey, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
+    SetArpString(key, L"InstallDir", dir);
+    SetArpString(key, L"Language", g_lang == Lang::Ko ? L"ko" : L"en");
+    SetArpString(key, L"DesktopShortcutChoice", desktopShortcut_ ? L"1" : L"0");
+    RegCloseKey(key);
+  }
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kAppPathsKey, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
+    SetArpString(key, nullptr, dir + kAppExeRel);
+    RegCloseKey(key);
+  }
+}
+
+// The install proper. Unpack beside the old install, then swap, so neither a failed unpack nor a locked
+// file leaves a half-updated folder behind.
+DWORD SetupApp::InstallApp() {
+  const std::wstring dir = InstallDir();
+  if (dir.empty()) return ERROR_PATH_NOT_FOUND;
+  if (AnythingRunningFrom(dir)) return kResultAppRunning;
+
+  std::wstring zip;
+  if (!ExtractPayload(zip)) return ERROR_RESOURCE_DATA_NOT_FOUND;
+
+  const std::wstring parent = LocalAppData() + L"\\Programs";
+  CreateDirectoryW(parent.c_str(), nullptr);
+  const std::wstring staging = dir + L".new";
+  const std::wstring aside = dir + L".old";
+  DeleteTree(staging);  // leftovers of an interrupted earlier run
+  DeleteTree(aside);
+  if (!CreateDirectoryW(staging.c_str(), nullptr)) { DeleteFileW(zip.c_str()); return GetLastError(); }
+
+  // System32's tar is bsdtar, which reads zip. Its full path, so a tar.exe elsewhere on PATH is never used.
+  wchar_t sys[MAX_PATH];
+  GetSystemDirectoryW(sys, MAX_PATH);
+  const DWORD tarExit = RunHidden(L"\"" + std::wstring(sys) + L"\\tar.exe\" -x -f \"" + zip + L"\" -C \"" +
+                                  staging + L"\"");
+  DeleteFileW(zip.c_str());
+  if (tarExit != 0) { DeleteTree(staging); return kResultUnpackFailed; }
+  // The portable zip wraps its files in one folder (redrob-query-<version>-windows-<arch>-portable\).
+  // Lift that folder's contents up so the exe sits in the install folder itself.
+  if (!Exists(staging + kAppExeRel)) {
+    const std::wstring inner = SingleSubfolderWith(staging, kAppExeRel);
+    if (inner.empty()) { DeleteTree(staging); return kResultNoExe; }
+    const std::wstring lifted = dir + L".lift";
+    DeleteTree(lifted);
+    if (!MoveFileExW(inner.c_str(), lifted.c_str(), 0)) { const DWORD err = GetLastError(); DeleteTree(staging); return err; }
+    DeleteTree(staging);
+    if (!MoveFileExW(lifted.c_str(), staging.c_str(), 0)) { const DWORD err = GetLastError(); DeleteTree(lifted); return err; }
+  }
+  // A portable marker, if a zip ever carried one, would make the app run portable; it is dropped
+  // (settings next to itself, no self-update). An installed copy must not have it.
+  DeleteFileW((staging + kPortableMarker).c_str());
+
+  // Swap. The rename fails, rather than half-copying, if anything still holds a file in the old folder.
+  if (Exists(dir)) {
+    if (!MoveFileExW(dir.c_str(), aside.c_str(), 0)) {
+      const DWORD err = GetLastError();
+      DeleteTree(staging);
+      return err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION ? kResultAppRunning : err;
+    }
+  }
+  if (!MoveFileExW(staging.c_str(), dir.c_str(), 0)) {
+    const DWORD err = GetLastError();
+    if (Exists(aside)) MoveFileExW(aside.c_str(), dir.c_str(), 0);  // put the old install back
+    DeleteTree(staging);
+    return err;
+  }
+  DeleteTree(aside);
+
+  // The rest is best effort: the app is installed and runs without any of it.
+  InstallUninstaller(dir);
+  const std::wstring exe = dir + kAppExeRel;
+  const std::wstring start = StartMenuShortcut();
+  if (!start.empty()) MakeShortcut(start, exe, dir);
+  const std::wstring desktop = DesktopShortcut();
+  if (!desktop.empty()) {
+    if (desktopShortcut_) MakeShortcut(desktop, exe, dir);
+    else DeleteFileW(desktop.c_str());  // an update where the box was unticked removes the old one
+  }
+  RecordChoices(dir);
+  WriteArpEntry(dir);
+  SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);  // refresh shortcut icons
+
+  if (!silent_) ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, dir.c_str(), SW_SHOWNORMAL);
+  return 0;
+}
+
+DWORD WINAPI SetupApp::UninstallThunk(LPVOID self) {
+  return reinterpret_cast<SetupApp*>(self)->RunUninstall();
+}
+
+void SetupApp::StartUninstall() {
+  progress_ = progressTarget_ = 0.0;
+  startTick_ = GetTickCount64();
+  SetStage(Stage::Removing);
+  SetTimer(hwnd_, kTickTimer, kTickMs, nullptr);
+  if (payloadThread_) { WaitForSingleObject(payloadThread_, 5000); CloseHandle(payloadThread_); }
+  payloadThread_ = CreateThread(nullptr, 0, &SetupApp::UninstallThunk, this, 0, nullptr);
+}
+
+// Remove what InstallApp made. The uninstaller itself is still running from the install folder, so it
+// is kept here and removed by ScheduleSelfCleanup once this window closes.
+DWORD SetupApp::RunUninstall() {
+  if (demo_) {
+    Sleep(3000);
+    PostMessage(hwnd_, kUninstallMsgDone, 0, 0);
+    return 0;
+  }
+  const std::wstring dir = InstallDir();
+  if (dir.empty()) { PostMessage(hwnd_, kUninstallMsgDone, (WPARAM)ERROR_PATH_NOT_FOUND, 0); return 1; }
+  if (AnythingRunningFrom(dir)) { PostMessage(hwnd_, kUninstallMsgDone, (WPARAM)kResultAppRunning, 0); return 1; }
+
+  const std::wstring start = StartMenuShortcut();
+  if (!start.empty()) DeleteFileW(start.c_str());
+  const std::wstring desktop = DesktopShortcut();
+  if (!desktop.empty()) DeleteFileW(desktop.c_str());
+  RegDeleteTreeW(HKEY_CURRENT_USER, kArpKey);
+  RegDeleteTreeW(HKEY_CURRENT_USER, kAppPathsKey);
+  // The folder is gone, so the record of it goes too; the language and the shortcut choice
+  // stay so the next install preselects them.
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, kAppKey, 0, KEY_WRITE, &key) == ERROR_SUCCESS) {
+    RegDeleteValueW(key, L"InstallDir");
+    RegCloseKey(key);
+  }
+
+  wchar_t self[MAX_PATH];
+  GetModuleFileNameW(nullptr, self, MAX_PATH);
+  DWORD err = Exists(dir) ? DeleteTree(dir, self) : 0;
+
+  if (deleteData_) {
+    // Where Redrob Query keeps its state on Windows: %APPDATA%\Redrob Query (connection profiles,
+    // workspace, eframe's ui.ron; apps/redrob-query/src/services.rs). Passwords live in the Windows
+    // Credential Manager and are removed by the app, not here. Its registry key goes too.
+    // %APPDATA%\Redrob\Shared (the launcher's sign-in every Redrob app reads) stays.
+    const std::wstring roaming = KnownFolder(FOLDERID_RoamingAppData);
+    if (!roaming.empty()) DeleteTree(roaming + L"\\Redrob Query");
+    RegDeleteTreeW(HKEY_CURRENT_USER, kAppKey);
+  }
+  SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+  PostMessage(hwnd_, kUninstallMsgDone, (WPARAM)err, 0);
+  return err;
+}
+
+// Once removed, this exe is the last thing left. A running exe cannot delete itself, so a hidden
+// PowerShell waits for this process to exit, then removes it and the install folder. Only when this copy
+// runs from the install folder: a copy started anywhere else is never deleted.
+void SetupApp::ScheduleSelfCleanup() {
+  wchar_t self[MAX_PATH];
+  if (!GetModuleFileNameW(nullptr, self, MAX_PATH)) return;
+  const std::wstring dir = InstallDir();
+  const std::wstring me = self;
+  if (dir.size() < 4 || _wcsnicmp(me.c_str(), (dir + L"\\").c_str(), dir.size() + 1) != 0) return;
+  std::wstring cmd = L"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command \"Wait-Process -Id " +
+                     std::to_wstring(GetCurrentProcessId()) +
+                     L" -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '" + me +
+                     L"' -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '" + dir +
+                     L"' -Recurse -Force -ErrorAction SilentlyContinue\"";
+  STARTUPINFOW si = {sizeof(si)};
+  si.dwFlags = STARTF_USESHOWWINDOW;
+  si.wShowWindow = SW_HIDE;
+  PROCESS_INFORMATION pi = {};
+  // From the parent folder: a process whose working directory is the install folder would hold it open.
+  const std::wstring parent = LocalAppData() + L"\\Programs";
+  if (CreateProcessW(nullptr, &cmd[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, parent.c_str(), &si, &pi)) {
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+  }
+}
+
+int SetupApp::RunSilent(HINSTANCE hinst, bool deleteData) {
+  hinst_ = hinst;
+  silent_ = true;
+  deleteData_ = deleteData;
+  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // the shortcut writer is COM
+  DWORD result;
+  if (mode_ == Mode::Uninstall) {
+    result = RunUninstall();  // hwnd_ is null: its PostMessage lands on this thread's queue, unread
+    if (result == 0) ScheduleSelfCleanup();
+  } else {
+    result = InstallApp();
+  }
+  CoUninitialize();
+  return (int)result;
+}
+
+DWORD SetupApp::RunPayload() {
+  PostMessage(hwnd_, kStageMsg, (WPARAM)Stage::Installing, 0);
+  const DWORD result = InstallApp();
+  PostMessage(hwnd_, kPayloadMsgDone, (WPARAM)result, 0);
+  return result;
+}
+
+}  // namespace
+
+// ---- entry point -----------------------------------------------------------
+
+int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
+  bool demo = false, demoError = false;
+  bool silent = false, deleteData = false, explicitInstall = false;
+  std::wstring renderDir, lang;
+  Mode mode = Mode::Install;
+  int argc = 0;
+  LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+  for (int i = 1; i < argc; ++i) {
+    if (lstrcmpiW(argv[i], L"--demo") == 0) { demo = true; explicitInstall = true; }
+    else if (lstrcmpiW(argv[i], L"--demo-error") == 0) { demo = true; demoError = true; explicitInstall = true; }
+    else if (lstrcmpiW(argv[i], L"--uninstall") == 0) mode = Mode::Uninstall;
+    else if (lstrcmpiW(argv[i], L"--demo-uninstall") == 0) { demo = true; mode = Mode::Uninstall; }
+    else if (lstrcmpiW(argv[i], L"--silent") == 0) silent = true;
+    else if (lstrcmpiW(argv[i], L"--delete-data") == 0) deleteData = true;
+    else if (lstrcmpiW(argv[i], L"--lang") == 0 && i + 1 < argc) lang = argv[++i];
+    else if (lstrcmpiW(argv[i], L"--render-stages") == 0 && i + 1 < argc) renderDir = argv[++i];
+  }
+  if (argv) LocalFree(argv);
+  g_lang = DefaultLanguage(lang);
+
+#ifdef REDROB_NO_PAYLOAD
+  // The uninstaller carries nothing to install, so opened by a double-click it offers removal, not an
+  // Install button that could only fail.
+  if (!explicitInstall) mode = Mode::Uninstall;
+#endif
+
+  SetupApp app(demo, demoError, mode);
+  if (!renderDir.empty()) return app.RenderStages(hinst, renderDir);
+  if (silent && !demo) return app.RunSilent(hinst, deleteData);
+  return app.Run(hinst);
+}

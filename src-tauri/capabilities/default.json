@@ -1,6 +1,0 @@
-{
-  "identifier": "default",
-  "description": "Core Redrob Query desktop capability",
-  "windows": ["main"],
-  "permissions": ["core:default"]
-}
