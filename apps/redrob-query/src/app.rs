@@ -136,12 +136,22 @@ impl QueryApp {
         }
         self.tab_counter += 1;
         let mut tab = match text {
-            Some(text) => QueryTab::new(format!("{} {}", profile.name, self.tab_counter), text, Some(profile)),
+            Some(text) => QueryTab::new(
+                format!("{} {}", profile.name, self.tab_counter),
+                text,
+                Some(profile),
+            ),
             None => QueryTab::for_connection(profile, self.tab_counter),
         };
         tab.focus_editor = true;
         if self.tabs.len() >= crate::workspace::MAX_TABS {
-            self.notify(format!("At most {} tabs are kept; close one first.", crate::workspace::MAX_TABS), true);
+            self.notify(
+                format!(
+                    "At most {} tabs are kept; close one first.",
+                    crate::workspace::MAX_TABS
+                ),
+                true,
+            );
             return;
         }
         self.tabs.push(tab);
@@ -203,7 +213,13 @@ impl QueryApp {
         for event in changes_events {
             match event {
                 ChangesEvent::Applied(result) => {
-                    self.notify(format!("Applied {} row change(s) in {} ms", result.rows_affected, result.elapsed_ms), false);
+                    self.notify(
+                        format!(
+                            "Applied {} row change(s) in {} ms",
+                            result.rows_affected, result.elapsed_ms
+                        ),
+                        false,
+                    );
                     // Re-run the tab so the grid shows the committed state.
                     if let Some(tab) = self.tabs.get_mut(self.active) {
                         if let Some(grid) = &mut tab.result {
@@ -243,7 +259,10 @@ impl QueryApp {
         }
 
         for index in 0..self.tabs.len() {
-            let profile = self.tabs[index].connection_id.and_then(|id| self.profiles.profile(id)).cloned();
+            let profile = self.tabs[index]
+                .connection_id
+                .and_then(|id| self.profiles.profile(id))
+                .cloned();
             self.tabs[index].poll(&self.workspace, profile.as_ref());
             for finished in self.tabs[index].take_finished() {
                 self.history.push(HistoryEntry {
@@ -267,18 +286,25 @@ impl QueryApp {
     fn handle_schema_events(&mut self, events: Vec<SchemaEvent>) {
         for event in events {
             match event {
-                SchemaEvent::Select { connection_id, node } => {
+                SchemaEvent::Select {
+                    connection_id,
+                    node,
+                } => {
                     if let Some(kind) = self.profiles.profile(connection_id).map(|p| p.kind) {
-                        self.structure.show_table(&self.workspace, connection_id, kind, node);
+                        self.structure
+                            .show_table(&self.workspace, connection_id, kind, node);
                         self.show_structure = true;
                     }
                 }
-                SchemaEvent::Preview { connection_id, node } => {
+                SchemaEvent::Preview {
+                    connection_id,
+                    node,
+                } => {
                     if let Some(profile) = self.profiles.profile(connection_id).cloned() {
                         let query = preview_query(profile.kind, &node);
                         self.open_tab_for(&profile, Some(query));
                         if let Some(tab) = self.tabs.get_mut(self.active) {
-                            tab.title = node.name.clone();
+                            tab.title.clone_from(&node.name);
                             tab.run_now(&self.workspace, None);
                         }
                     }
@@ -308,7 +334,11 @@ impl QueryApp {
                 } else {
                     let weak = ui.visuals().weak_text_color();
                     theme::status_dot(ui, weak);
-                    if ui.small_button("Sign in with Redrob Launcher").on_hover_text(self.account.describe_paths()).clicked() {
+                    if ui
+                        .small_button("Sign in with Redrob Launcher")
+                        .on_hover_text(self.account.describe_paths())
+                        .clicked()
+                    {
                         let _ = webbrowser::open(Workspace::launcher_url());
                     }
                 }
@@ -334,7 +364,11 @@ impl QueryApp {
                     .iter()
                     .filter(|p| self.profiles.is_connected(p.id))
                     .count();
-                ui.label(RichText::new(format!("{connected} connected · {} tabs", self.tabs.len())).small().weak());
+                ui.label(
+                    RichText::new(format!("{connected} connected · {} tabs", self.tabs.len()))
+                        .small()
+                        .weak(),
+                );
             });
         });
     }
@@ -351,7 +385,11 @@ impl QueryApp {
                         let mut title = tab.title.clone();
                         if tab.is_running() {
                             title.push_str(" ⟳");
-                        } else if tab.result.as_ref().is_some_and(|g| g.has_changes()) {
+                        } else if tab
+                            .result
+                            .as_ref()
+                            .is_some_and(crate::grid::ResultGrid::has_changes)
+                        {
                             title.push_str(" •");
                         }
                         let selected = index == self.active;
@@ -374,7 +412,11 @@ impl QueryApp {
                             }
                         });
                     }
-                    if ui.button("＋").on_hover_text("New tab on the selected profile").clicked() {
+                    if ui
+                        .button("＋")
+                        .on_hover_text("New tab on the selected profile")
+                        .clicked()
+                    {
                         new_tab = true;
                     }
                 });
@@ -425,9 +467,14 @@ impl QueryApp {
                     ui.label(RichText::new("Nothing has run yet.").weak());
                 }
                 for entry in self.history.iter().rev() {
-                    let one_line: String = entry.query.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let one_line: String =
+                        entry.query.split_whitespace().collect::<Vec<_>>().join(" ");
                     let shown: String = one_line.chars().take(90).collect();
-                    let colour = if entry.ok { ui.visuals().text_color() } else { theme::DANGER };
+                    let colour = if entry.ok {
+                        ui.visuals().text_color()
+                    } else {
+                        theme::DANGER
+                    };
                     let response = ui.add(
                         egui::Label::new(RichText::new(shown).monospace().small().color(colour))
                             .sense(egui::Sense::click())
@@ -441,7 +488,8 @@ impl QueryApp {
                     if response.double_clicked() {
                         rerun = Some(entry.clone());
                     }
-                    response.on_hover_text(format!("{}\n\nDouble-click to open in a tab", entry.query));
+                    response
+                        .on_hover_text(format!("{}\n\nDouble-click to open in a tab", entry.query));
                     ui.separator();
                 }
             });
@@ -460,14 +508,23 @@ impl QueryApp {
         if self.tabs.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.3);
-                ui.label(RichText::new("Connect a profile on the left, then open a query tab.").weak());
-                ui.label(RichText::new("The built-in Demo SQLite database works offline.").small().weak());
+                ui.label(
+                    RichText::new("Connect a profile on the left, then open a query tab.").weak(),
+                );
+                ui.label(
+                    RichText::new("The built-in Demo SQLite database works offline.")
+                        .small()
+                        .weak(),
+                );
             });
             return;
         }
         let active = self.active.min(self.tabs.len() - 1);
         self.active = active;
-        let profile = self.tabs[active].connection_id.and_then(|id| self.profiles.profile(id)).cloned();
+        let profile = self.tabs[active]
+            .connection_id
+            .and_then(|id| self.profiles.profile(id))
+            .cloned();
         let read_only = profile.as_ref().is_none_or(|p| p.read_only);
         let collections: Vec<MetadataNode> = profile
             .as_ref()
@@ -481,7 +538,12 @@ impl QueryApp {
             .default_size(260.0)
             .size_range(120.0..=f32::INFINITY)
             .show(ui, |ui| {
-                notice = self.tabs[active].editor_ui(ui, &self.workspace, profile.as_ref(), &collections);
+                notice = self.tabs[active].editor_ui(
+                    ui,
+                    &self.workspace,
+                    profile.as_ref(),
+                    &collections,
+                );
             });
         if let Some(text) = notice {
             self.notify(text, false);
@@ -503,7 +565,8 @@ impl QueryApp {
                 .resizable(true)
                 .default_size(160.0)
                 .show(ui, |ui| {
-                    self.changes.ui(ui, &self.workspace, grid, tab.source.as_ref(), read_only);
+                    self.changes
+                        .ui(ui, &self.workspace, grid, tab.source.as_ref(), read_only);
                 });
         }
         egui::CentralPanel::default().show(ui, |ui| match &mut tab.result {

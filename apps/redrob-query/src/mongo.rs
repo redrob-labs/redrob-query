@@ -37,7 +37,11 @@ impl MongoStrip {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Collection").small());
             egui::ComboBox::from_id_salt("mongo-collection")
-                .selected_text(if self.collection.is_empty() { "choose…" } else { self.collection.as_str() })
+                .selected_text(if self.collection.is_empty() {
+                    "choose…"
+                } else {
+                    self.collection.as_str()
+                })
                 .width(180.0)
                 .show_ui(ui, |ui| {
                     for node in collections {
@@ -47,7 +51,11 @@ impl MongoStrip {
             ui.selectable_value(&mut self.operation, MongoOperation::Find, "find");
             ui.selectable_value(&mut self.operation, MongoOperation::Aggregate, "aggregate");
             ui.checkbox(&mut self.explain, "explain");
-            if ui.button("Insert template").on_hover_text("Replace the editor text with a request for this collection").clicked() {
+            if ui
+                .button("Insert template")
+                .on_hover_text("Replace the editor text with a request for this collection")
+                .clicked()
+            {
                 template = Some(self.template());
             }
         });
@@ -57,7 +65,11 @@ impl MongoStrip {
     pub fn template(&self) -> String {
         let collection = serde_json::Value::String(self.collection.clone());
         // `explain` is a verbosity, as the engine reads it (query_planner | execution_stats | all_plans_execution).
-        let explain = if self.explain { ",\n  \"explain\": \"execution_stats\"" } else { "" };
+        let explain = if self.explain {
+            ",\n  \"explain\": \"execution_stats\""
+        } else {
+            ""
+        };
         match self.operation {
             MongoOperation::Find => format!(
                 "{{\n  \"collection\": {collection},\n  \"operation\": \"find\",\n  \"filter\": {{}},\n  \"sort\": {{ \"_id\": 1 }},\n  \"limit\": 50{explain}\n}}"
@@ -70,9 +82,10 @@ impl MongoStrip {
 
     /// Picks up the collection named in the editor text, so the strip follows a typed query.
     pub fn sync_from(&mut self, text: &str) {
-        if let Ok(serde_json::Value::Object(body)) = serde_json::from_str::<serde_json::Value>(text) {
+        if let Ok(serde_json::Value::Object(body)) = serde_json::from_str::<serde_json::Value>(text)
+        {
             if let Some(serde_json::Value::String(name)) = body.get("collection") {
-                self.collection = name.clone();
+                self.collection.clone_from(name);
             }
             self.operation = match body.get("operation").and_then(|v| v.as_str()) {
                 Some("aggregate") => MongoOperation::Aggregate,

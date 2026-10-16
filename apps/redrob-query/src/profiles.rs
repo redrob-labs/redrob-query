@@ -1,6 +1,6 @@
 //! The Profiles tree and the connection form.
 //!
-//! Built-in profiles (the Demo SQLite database) are immutable; user profiles can be added, edited,
+//! Built-in profiles (the Demo `SQLite` database) are immutable; user profiles can be added, edited,
 //! tested and removed. Passwords go to the OS keyring through the engine and are never kept here
 //! beyond the form's own text field, which is cleared when the form closes.
 
@@ -71,9 +71,9 @@ impl ProfilesPanel {
     }
 
     pub fn connect(&mut self, workspace: &Workspace, id: Uuid) {
-        if !self.connects.contains_key(&id) {
-            self.connects.insert(id, workspace.connect(id));
-        }
+        self.connects
+            .entry(id)
+            .or_insert_with(|| workspace.connect(id));
     }
 
     /// Drains finished operations; call once per frame before drawing.
@@ -156,12 +156,12 @@ impl ProfilesPanel {
                 Err(error) => events.push(ProfilesEvent::Notice(error.to_string(), true)),
             }
         }
-        if let Some(form) = &mut self.form {
-            if let Some(saved) = form.poll(events) {
-                self.form = None;
-                self.selected = Some(saved.id);
-                self.refresh(workspace);
-            }
+        if let Some(form) = &mut self.form
+            && let Some(saved) = form.poll(events)
+        {
+            self.form = None;
+            self.selected = Some(saved.id);
+            self.refresh(workspace);
         }
     }
 
@@ -169,10 +169,18 @@ impl ProfilesPanel {
         ui.horizontal(|ui| {
             ui.heading("Profiles");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("＋ New").on_hover_text("Add a connection profile").clicked() {
+                if ui
+                    .button("＋ New")
+                    .on_hover_text("Add a connection profile")
+                    .clicked()
+                {
                     self.form = Some(ProfileForm::new_profile());
                 }
-                if ui.small_button("⟳").on_hover_text("Reload profiles").clicked() {
+                if ui
+                    .small_button("⟳")
+                    .on_hover_text("Reload profiles")
+                    .clicked()
+                {
                     self.refresh(workspace);
                 }
             });
@@ -223,9 +231,9 @@ impl ProfilesPanel {
                     }
                 }
                 RowAction::Disconnect => {
-                    if !self.disconnects.contains_key(&id) {
-                        self.disconnects.insert(id, workspace.disconnect(id));
-                    }
+                    self.disconnects
+                        .entry(id)
+                        .or_insert_with(|| workspace.disconnect(id));
                 }
                 RowAction::Edit => {
                     if let Some(profile) = self.profile(id).cloned() {
@@ -450,7 +458,11 @@ impl ProfileForm {
     }
 
     fn over(profile: ConnectionProfile, editing: bool) -> Self {
-        let port_text = profile.config.port.map(|p| p.to_string()).unwrap_or_default();
+        let port_text = profile
+            .config
+            .port
+            .map(|p| p.to_string())
+            .unwrap_or_default();
         let auth_source = profile
             .config
             .options
@@ -602,39 +614,67 @@ impl ProfileForm {
                 if self.profile.kind == DatabaseKind::SQLite {
                     ui.label("File");
                     ui.horizontal(|ui| {
-                        let path = self.profile.config.file_path.get_or_insert_with(String::new);
-                        ui.add(egui::TextEdit::singleline(path).desired_width(220.0).hint_text(":memory:"));
-                        if ui.button("Browse…").clicked() {
-                            if let Some(picked) = rfd::FileDialog::new()
+                        let path = self
+                            .profile
+                            .config
+                            .file_path
+                            .get_or_insert_with(String::new);
+                        ui.add(
+                            egui::TextEdit::singleline(path)
+                                .desired_width(220.0)
+                                .hint_text(":memory:"),
+                        );
+                        if ui.button("Browse…").clicked()
+                            && let Some(picked) = rfd::FileDialog::new()
                                 .add_filter("SQLite", &["db", "sqlite", "sqlite3"])
                                 .pick_file()
-                            {
-                                *path = picked.display().to_string();
-                            }
+                        {
+                            *path = picked.display().to_string();
                         }
                     });
                     ui.end_row();
                 } else {
                     ui.label("Host");
-                    ui.add(egui::TextEdit::singleline(self.profile.config.host.get_or_insert_with(String::new)).desired_width(300.0));
+                    ui.add(
+                        egui::TextEdit::singleline(
+                            self.profile.config.host.get_or_insert_with(String::new),
+                        )
+                        .desired_width(300.0),
+                    );
                     ui.end_row();
                     if !(self.profile.kind == DatabaseKind::MongoDb && self.profile.config.srv) {
                         ui.label("Port");
-                        ui.add(egui::TextEdit::singleline(&mut self.port_text).desired_width(100.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.port_text).desired_width(100.0),
+                        );
                         ui.end_row();
                     }
                     ui.label("Database");
-                    ui.add(egui::TextEdit::singleline(self.profile.config.database.get_or_insert_with(String::new)).desired_width(300.0));
+                    ui.add(
+                        egui::TextEdit::singleline(
+                            self.profile.config.database.get_or_insert_with(String::new),
+                        )
+                        .desired_width(300.0),
+                    );
                     ui.end_row();
                     ui.label("User");
-                    ui.add(egui::TextEdit::singleline(self.profile.config.username.get_or_insert_with(String::new)).desired_width(300.0));
+                    ui.add(
+                        egui::TextEdit::singleline(
+                            self.profile.config.username.get_or_insert_with(String::new),
+                        )
+                        .desired_width(300.0),
+                    );
                     ui.end_row();
                     ui.label("Password");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.password)
                             .password(true)
                             .desired_width(300.0)
-                            .hint_text(if self.editing { "unchanged unless typed" } else { "" }),
+                            .hint_text(if self.editing {
+                                "unchanged unless typed"
+                            } else {
+                                ""
+                            }),
                     );
                     ui.end_row();
                     ui.label("Options");
@@ -647,12 +687,19 @@ impl ProfileForm {
                     ui.end_row();
                     if self.profile.kind == DatabaseKind::MongoDb {
                         ui.label("authSource");
-                        ui.add(egui::TextEdit::singleline(&mut self.auth_source).desired_width(200.0).hint_text("admin"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.auth_source)
+                                .desired_width(200.0)
+                                .hint_text("admin"),
+                        );
                         ui.end_row();
                     }
                 }
                 ui.label("Edits");
-                ui.checkbox(&mut self.profile.read_only, "Read-only (uncheck to allow reviewed edits)");
+                ui.checkbox(
+                    &mut self.profile.read_only,
+                    "Read-only (uncheck to allow reviewed edits)",
+                );
                 ui.end_row();
             });
 
@@ -670,15 +717,24 @@ impl ProfileForm {
                 self.error = None;
                 self.test_result = None;
                 match self.profile.validate() {
-                    Ok(()) => self.test = Some(workspace.test_connection(self.profile.clone(), self.secret())),
+                    Ok(()) => {
+                        self.test =
+                            Some(workspace.test_connection(self.profile.clone(), self.secret()))
+                    }
                     Err(error) => self.error = Some(error.to_string()),
                 }
             }
-            if ui.add_enabled(!busy, theme::primary_button("Save")).clicked() {
+            if ui
+                .add_enabled(!busy, theme::primary_button("Save"))
+                .clicked()
+            {
                 self.commit_fields();
                 self.error = None;
                 match self.profile.validate() {
-                    Ok(()) => self.save = Some(workspace.save_profile(self.profile.clone(), self.secret())),
+                    Ok(()) => {
+                        self.save =
+                            Some(workspace.save_profile(self.profile.clone(), self.secret()))
+                    }
                     Err(error) => self.error = Some(error.to_string()),
                 }
             }

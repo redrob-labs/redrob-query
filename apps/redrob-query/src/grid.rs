@@ -16,14 +16,6 @@ use crate::theme;
 const ROW_HEIGHT: f32 = 22.0;
 const MAX_CELL_CHARS: usize = 200;
 
-/// A staged edit of one cell, by row index in the page and column index.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StagedCell {
-    pub row: usize,
-    pub column: usize,
-    pub value: DataValue,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortDirection {
     Ascending,
@@ -153,7 +145,8 @@ impl ResultGrid {
 
     /// The page as a JSON array of objects, in display order.
     pub fn to_json(&self) -> String {
-        let documents: Vec<serde_json::Value> = self.order.iter().map(|&row| self.row_json(row)).collect();
+        let documents: Vec<serde_json::Value> =
+            self.order.iter().map(|&row| self.row_json(row)).collect();
         serde_json::to_string_pretty(&documents).unwrap_or_default()
     }
 
@@ -191,14 +184,20 @@ impl ResultGrid {
             }
             ui.label(RichText::new(summary).small());
             if stats.truncated {
-                ui.label(RichText::new("truncated at the limit").small().color(theme::CAUTION));
+                ui.label(
+                    RichText::new("truncated at the limit")
+                        .small()
+                        .color(theme::CAUTION),
+                );
             }
             if self.editable {
                 ui.label(RichText::new("editable").small().color(theme::SUCCESS))
                     .on_hover_text(format!("Primary key: {}", self.key_columns.join(", ")));
             } else {
                 ui.label(RichText::new("read-only").small().weak())
-                    .on_hover_text("Edits need one table with a primary key and a writable profile");
+                    .on_hover_text(
+                        "Edits need one table with a primary key and a writable profile",
+                    );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("Export", |ui| {
@@ -211,13 +210,19 @@ impl ResultGrid {
                         ui.close();
                     }
                     if ui.button("Save TSV…").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().set_file_name("result.tsv").save_file() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name("result.tsv")
+                            .save_file()
+                        {
                             let _ = std::fs::write(path, self.to_tsv());
                         }
                         ui.close();
                     }
                     if ui.button("Save JSON…").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().set_file_name("result.json").save_file() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name("result.json")
+                            .save_file()
+                        {
                             let _ = std::fs::write(path, self.to_json());
                         }
                         ui.close();
@@ -262,7 +267,12 @@ impl ResultGrid {
             .show(ui, |ui| {
                 let text = self.to_json();
                 let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, wrap: f32| {
-                    let job = crate::highlight::layout(ui, text.as_str(), crate::highlight::Dialect::MongoJson, wrap);
+                    let job = crate::highlight::layout(
+                        ui,
+                        text.as_str(),
+                        crate::highlight::Dialect::MongoJson,
+                        wrap,
+                    );
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
                 let mut shown = text;
@@ -317,7 +327,11 @@ impl ResultGrid {
                         };
                         let label = RichText::new(format!("{}{arrow}", column.name)).strong();
                         let response = ui
-                            .add(egui::Label::new(label).sense(egui::Sense::click()).truncate())
+                            .add(
+                                egui::Label::new(label)
+                                    .sense(egui::Sense::click())
+                                    .truncate(),
+                            )
                             .on_hover_text(format!("{} · click to sort", column.data_type));
                         if response.clicked() {
                             sort_click = Some(c);
@@ -333,14 +347,21 @@ impl ResultGrid {
                     row.set_selected(self.selected_row == Some(page_row));
                     row.col(|ui| {
                         let text = RichText::new((page_row + 1).to_string()).small().weak();
-                        let text = if deleted { text.strikethrough().color(theme::DANGER) } else { text };
+                        let text = if deleted {
+                            text.strikethrough().color(theme::DANGER)
+                        } else {
+                            text
+                        };
                         let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
                         if response.clicked() {
                             select_row = Some(page_row);
                         }
                         response.context_menu(|ui| {
                             if ui.button("Copy row as JSON").clicked() {
-                                ui.ctx().copy_text(serde_json::to_string_pretty(&self.row_json(page_row)).unwrap_or_default());
+                                ui.ctx().copy_text(
+                                    serde_json::to_string_pretty(&self.row_json(page_row))
+                                        .unwrap_or_default(),
+                                );
                                 ui.close();
                             }
                             if editable {
@@ -390,7 +411,11 @@ impl ResultGrid {
                             } else if matches!(value, Some(DataValue::Null) | None) {
                                 text = text.weak().italics();
                             }
-                            let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()).truncate());
+                            let response = ui.add(
+                                egui::Label::new(text)
+                                    .sense(egui::Sense::click())
+                                    .truncate(),
+                            );
                             if response.clicked() {
                                 select_row = Some(page_row);
                             }
@@ -400,12 +425,15 @@ impl ResultGrid {
                             if let Some(value) = value {
                                 let full = format_value(value);
                                 if full.chars().count() > MAX_CELL_CHARS || full.contains('\n') {
-                                    response.clone().on_hover_text(full.chars().take(2000).collect::<String>());
+                                    response
+                                        .clone()
+                                        .on_hover_text(full.chars().take(2000).collect::<String>());
                                 }
                             }
                             response.context_menu(|ui| {
                                 if ui.button("Copy value").clicked() {
-                                    ui.ctx().copy_text(value.map(format_value).unwrap_or_default());
+                                    ui.ctx()
+                                        .copy_text(value.map(format_value).unwrap_or_default());
                                     ui.close();
                                 }
                                 if editable && !deleted && ui.button("Edit cell").clicked() {
@@ -431,7 +459,9 @@ impl ResultGrid {
         }
         if let Some(c) = sort_click {
             self.sort = match self.sort {
-                Some((s, SortDirection::Ascending)) if s == c => Some((c, SortDirection::Descending)),
+                Some((s, SortDirection::Ascending)) if s == c => {
+                    Some((c, SortDirection::Descending))
+                }
                 Some((s, SortDirection::Descending)) if s == c => None,
                 _ => Some((c, SortDirection::Ascending)),
             };
@@ -459,10 +489,10 @@ impl ResultGrid {
             }
             None => {}
         }
-        if let Some(row) = toggle_delete {
-            if !self.deleted.remove(&row) {
-                self.deleted.insert(row);
-            }
+        if let Some(row) = toggle_delete
+            && !self.deleted.remove(&row)
+        {
+            self.deleted.insert(row);
         }
     }
 
@@ -531,11 +561,15 @@ pub fn parse_value(text: &str, original: &DataValue) -> DataValue {
             "false" | "f" | "0" | "no" => DataValue::Boolean(false),
             _ => DataValue::Text(text.to_owned()),
         },
-        DataValue::Integer(_) if trimmed.parse::<i128>().is_ok() => DataValue::Integer(trimmed.to_owned()),
+        DataValue::Integer(_) if trimmed.parse::<i128>().is_ok() => {
+            DataValue::Integer(trimmed.to_owned())
+        }
         DataValue::Float(_) => trimmed
             .parse::<f64>()
             .map_or_else(|_| DataValue::Text(text.to_owned()), DataValue::Float),
-        DataValue::Decimal(_) if trimmed.parse::<f64>().is_ok() => DataValue::Decimal(trimmed.to_owned()),
+        DataValue::Decimal(_) if trimmed.parse::<f64>().is_ok() => {
+            DataValue::Decimal(trimmed.to_owned())
+        }
         DataValue::Uuid(_) => trimmed
             .parse()
             .map_or_else(|_| DataValue::Text(text.to_owned()), DataValue::Uuid),
@@ -543,10 +577,14 @@ pub fn parse_value(text: &str, original: &DataValue) -> DataValue {
         DataValue::Time(_) => DataValue::Time(trimmed.to_owned()),
         DataValue::DateTime(_) => DataValue::DateTime(trimmed.to_owned()),
         DataValue::Binary(_) => DataValue::Binary(trimmed.trim_start_matches("base64:").to_owned()),
-        DataValue::Json(_) => serde_json::from_str(trimmed)
-            .map_or_else(|_| DataValue::Json(serde_json::Value::String(text.to_owned())), DataValue::Json),
-        DataValue::Bson(_) => serde_json::from_str(trimmed)
-            .map_or_else(|_| DataValue::Bson(serde_json::Value::String(text.to_owned())), DataValue::Bson),
+        DataValue::Json(_) => serde_json::from_str(trimmed).map_or_else(
+            |_| DataValue::Json(serde_json::Value::String(text.to_owned())),
+            DataValue::Json,
+        ),
+        DataValue::Bson(_) => serde_json::from_str(trimmed).map_or_else(
+            |_| DataValue::Bson(serde_json::Value::String(text.to_owned())),
+            DataValue::Bson,
+        ),
         // A NULL cell has no type to parse into: numbers become numbers, the rest text.
         DataValue::Null if trimmed.parse::<i64>().is_ok() => DataValue::Integer(trimmed.to_owned()),
         _ => DataValue::Text(text.to_owned()),
@@ -558,9 +596,10 @@ pub fn value_json(value: &DataValue) -> serde_json::Value {
     match value {
         DataValue::Null => serde_json::Value::Null,
         DataValue::Boolean(b) => serde_json::Value::Bool(*b),
-        DataValue::Integer(s) => s
-            .parse::<i64>()
-            .map_or_else(|_| serde_json::Value::String(s.clone()), serde_json::Value::from),
+        DataValue::Integer(s) => s.parse::<i64>().map_or_else(
+            |_| serde_json::Value::String(s.clone()),
+            serde_json::Value::from,
+        ),
         DataValue::Float(f) => serde_json::Number::from_f64(*f)
             .map_or(serde_json::Value::Null, serde_json::Value::Number),
         DataValue::Json(v) | DataValue::Bson(v) => v.clone(),

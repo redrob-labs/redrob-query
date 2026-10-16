@@ -179,7 +179,7 @@ impl QueryTab {
     }
 
     fn start(&mut self, workspace: &Workspace, connection_id: Uuid, query: String) {
-        self.running_text = query.clone();
+        self.running_text.clone_from(&query);
         self.run = Some(workspace.execute_query(QueryRequest {
             connection_id,
             query,
@@ -231,19 +231,25 @@ impl QueryTab {
     /// Ctrl+S: write the tab's text to its file, asking for one the first time.
     pub fn save_to_file(&mut self, save_as: bool) -> Option<String> {
         if save_as || self.file.is_none() {
-            let extension = if self.dialect == Dialect::MongoJson { "json" } else { "sql" };
+            let extension = if self.dialect == Dialect::MongoJson {
+                "json"
+            } else {
+                "sql"
+            };
             let picked = rfd::FileDialog::new()
-                .set_file_name(format!("{}.{extension}", self.title.replace(' ', "-").to_lowercase()))
+                .set_file_name(format!(
+                    "{}.{extension}",
+                    self.title.replace(' ', "-").to_lowercase()
+                ))
                 .save_file()?;
             self.file = Some(picked);
         }
         let path = self.file.clone()?;
         match std::fs::write(&path, &self.text) {
             Ok(()) => {
-                self.title = path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| self.title.clone());
+                if let Some(stem) = path.file_stem() {
+                    self.title = stem.to_string_lossy().into_owned();
+                }
                 Some(format!("Saved {}", path.display()))
             }
             Err(error) => {
@@ -277,44 +283,85 @@ impl QueryTab {
         ui.horizontal(|ui| {
             let running = self.run.is_some();
             let can_run = self.connection_id.is_some() && !running;
-            if ui.add_enabled(can_run, theme::primary_button("▶ Run")).on_hover_text("Ctrl+Enter: the selection or the statement under the cursor").clicked() {
+            if ui
+                .add_enabled(can_run, theme::primary_button("▶ Run"))
+                .on_hover_text("Ctrl+Enter: the selection or the statement under the cursor")
+                .clicked()
+            {
                 self.run_now(workspace, None);
             }
             if running {
                 ui.spinner();
                 if !self.queue.is_empty() || self.ran_in_batch > 0 {
-                    ui.label(RichText::new(format!("statement {} of {}", self.ran_in_batch + 1, self.ran_in_batch + 1 + self.queue.len())).small());
+                    ui.label(
+                        RichText::new(format!(
+                            "statement {} of {}",
+                            self.ran_in_batch + 1,
+                            self.ran_in_batch + 1 + self.queue.len()
+                        ))
+                        .small(),
+                    );
                 }
             }
             if ui.button("Format").on_hover_text("Ctrl+Shift+F").clicked() {
                 self.format_text();
             }
-            if ui.button("Save").on_hover_text("Ctrl+S: save the text to a file").clicked() {
+            if ui
+                .button("Save")
+                .on_hover_text("Ctrl+S: save the text to a file")
+                .clicked()
+            {
                 notice = self.save_to_file(false);
             }
             ui.label(RichText::new("Limit").small());
-            ui.add(egui::DragValue::new(&mut self.limit).range(1..=10_000).speed(10));
+            ui.add(
+                egui::DragValue::new(&mut self.limit)
+                    .range(1..=10_000)
+                    .speed(10),
+            );
             if let Some(profile) = profile {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let classification = if self.dialect == Dialect::Sql {
-                        Some(classify_sql(&highlight::statement_at(&self.text, self.cursor_char, self.dialect)))
+                        Some(classify_sql(&highlight::statement_at(
+                            &self.text,
+                            self.cursor_char,
+                            self.dialect,
+                        )))
                     } else {
                         None
                     };
                     if let Some(c) = classification {
                         let (text, colour) = match c {
                             QueryClassification::ReadOnly => ("read-only", theme::SUCCESS),
-                            QueryClassification::Mutation => ("mutation (use the grid to edit)", theme::CAUTION),
-                            QueryClassification::Destructive => ("destructive (refused)", theme::DANGER),
-                            QueryClassification::TransactionControl => ("transaction control (refused)", theme::CAUTION),
+                            QueryClassification::Mutation => {
+                                ("mutation (use the grid to edit)", theme::CAUTION)
+                            }
+                            QueryClassification::Destructive => {
+                                ("destructive (refused)", theme::DANGER)
+                            }
+                            QueryClassification::TransactionControl => {
+                                ("transaction control (refused)", theme::CAUTION)
+                            }
                             QueryClassification::Unknown => ("unknown (refused)", theme::CAUTION),
                         };
                         ui.label(RichText::new(text).small().color(colour));
                     }
-                    ui.label(RichText::new(format!("{} · {}", profile.name, crate::profiles::kind_name(profile.kind))).small().weak());
+                    ui.label(
+                        RichText::new(format!(
+                            "{} · {}",
+                            profile.name,
+                            crate::profiles::kind_name(profile.kind)
+                        ))
+                        .small()
+                        .weak(),
+                    );
                 });
             } else {
-                ui.label(RichText::new("no connection: connect a profile, then open a tab from it").small().color(theme::CAUTION));
+                ui.label(
+                    RichText::new("no connection: connect a profile, then open a tab from it")
+                        .small()
+                        .color(theme::CAUTION),
+                );
             }
         });
         if self.dialect == Dialect::MongoJson
@@ -387,8 +434,12 @@ pub fn single_table_of(sql: &str, kind: DatabaseKind) -> Option<(Option<String>,
     if words.first().copied() != Some("SELECT") {
         return None;
     }
-    if words.iter().any(|w| matches!(*w, "JOIN" | "UNION" | "GROUP" | "DISTINCT" | "INTERSECT" | "EXCEPT"))
-        || upper.matches("SELECT").count() != 1
+    if words.iter().any(|w| {
+        matches!(
+            *w,
+            "JOIN" | "UNION" | "GROUP" | "DISTINCT" | "INTERSECT" | "EXCEPT"
+        )
+    }) || upper.matches("SELECT").count() != 1
         || upper.contains(" FROM (")
     {
         return None;

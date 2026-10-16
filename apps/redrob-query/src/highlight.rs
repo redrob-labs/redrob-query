@@ -33,28 +33,149 @@ impl Dialect {
 }
 
 const SQL_KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL", "AS", "ON", "JOIN", "LEFT",
-    "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "GROUP", "BY", "ORDER", "HAVING", "LIMIT", "OFFSET",
-    "ASC", "DESC", "DISTINCT", "UNION", "ALL", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE",
-    "CREATE", "TABLE", "INDEX", "VIEW", "DROP", "ALTER", "ADD", "COLUMN", "PRIMARY", "KEY", "FOREIGN",
-    "REFERENCES", "UNIQUE", "DEFAULT", "CHECK", "CONSTRAINT", "BEGIN", "COMMIT", "ROLLBACK",
-    "TRANSACTION", "WITH", "RECURSIVE", "CASE", "WHEN", "THEN", "ELSE", "END", "EXISTS", "BETWEEN",
-    "LIKE", "ILIKE", "CAST", "COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "TRUE",
-    "FALSE", "EXPLAIN", "ANALYZE", "SHOW", "DESCRIBE", "PRAGMA", "RETURNING", "USING", "NATURAL",
-    "OVER", "PARTITION", "WINDOW", "ROWS", "RANGE", "FETCH", "FIRST", "NEXT", "ONLY", "TOP",
-    "INTERSECT", "EXCEPT", "TRUNCATE", "GRANT", "REVOKE", "IF", "REPLACE", "TEMPORARY", "TEMP",
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "AND",
+    "OR",
+    "NOT",
+    "IN",
+    "IS",
+    "NULL",
+    "AS",
+    "ON",
+    "JOIN",
+    "LEFT",
+    "RIGHT",
+    "INNER",
+    "OUTER",
+    "FULL",
+    "CROSS",
+    "GROUP",
+    "BY",
+    "ORDER",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "ASC",
+    "DESC",
+    "DISTINCT",
+    "UNION",
+    "ALL",
+    "INSERT",
+    "INTO",
+    "VALUES",
+    "UPDATE",
+    "SET",
+    "DELETE",
+    "CREATE",
+    "TABLE",
+    "INDEX",
+    "VIEW",
+    "DROP",
+    "ALTER",
+    "ADD",
+    "COLUMN",
+    "PRIMARY",
+    "KEY",
+    "FOREIGN",
+    "REFERENCES",
+    "UNIQUE",
+    "DEFAULT",
+    "CHECK",
+    "CONSTRAINT",
+    "BEGIN",
+    "COMMIT",
+    "ROLLBACK",
+    "TRANSACTION",
+    "WITH",
+    "RECURSIVE",
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "END",
+    "EXISTS",
+    "BETWEEN",
+    "LIKE",
+    "ILIKE",
+    "CAST",
+    "COUNT",
+    "SUM",
+    "AVG",
+    "MIN",
+    "MAX",
+    "COALESCE",
+    "NULLIF",
+    "TRUE",
+    "FALSE",
+    "EXPLAIN",
+    "ANALYZE",
+    "SHOW",
+    "DESCRIBE",
+    "PRAGMA",
+    "RETURNING",
+    "USING",
+    "NATURAL",
+    "OVER",
+    "PARTITION",
+    "WINDOW",
+    "ROWS",
+    "RANGE",
+    "FETCH",
+    "FIRST",
+    "NEXT",
+    "ONLY",
+    "TOP",
+    "INTERSECT",
+    "EXCEPT",
+    "TRUNCATE",
+    "GRANT",
+    "REVOKE",
+    "IF",
+    "REPLACE",
+    "TEMPORARY",
+    "TEMP",
 ];
 
 /// Clause-leading keywords the formatter starts a new line at (GROUP/ORDER carry their BY,
 /// INSERT its INTO, UNION its ALL, and a LEFT/RIGHT/INNER/FULL/CROSS its JOIN).
 const SQL_CLAUSES: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "UNION", "VALUES",
-    "SET", "RETURNING", "INSERT", "UPDATE", "DELETE", "ON", "WITH", "INTERSECT", "EXCEPT",
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "GROUP",
+    "ORDER",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "UNION",
+    "VALUES",
+    "SET",
+    "RETURNING",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "ON",
+    "WITH",
+    "INTERSECT",
+    "EXCEPT",
 ];
 
 const MQL_KEYWORDS: &[&str] = &[
-    "collection", "operation", "filter", "projection", "sort", "limit", "explain", "pipeline", "find",
-    "aggregate", "true", "false", "null",
+    "collection",
+    "operation",
+    "filter",
+    "projection",
+    "sort",
+    "limit",
+    "explain",
+    "pipeline",
+    "find",
+    "aggregate",
+    "true",
+    "false",
+    "null",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -175,7 +296,9 @@ fn lex(text: &str, dialect: Dialect) -> Vec<(Token, std::ops::Range<usize>)> {
             } else {
                 Token::Identifier
             }
-        } else if c.is_ascii_digit() || (c == b'.' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+        } else if c.is_ascii_digit()
+            || (c == b'.' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit))
+        {
             while i < bytes.len()
                 && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.' || bytes[i] == b'_')
             {
@@ -184,7 +307,10 @@ fn lex(text: &str, dialect: Dialect) -> Vec<(Token, std::ops::Range<usize>)> {
             Token::Number
         } else if c.is_ascii_alphabetic() || c == b'_' || c == b'$' || c >= 0x80 {
             while i < bytes.len()
-                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$' || bytes[i] >= 0x80)
+                && (bytes[i].is_ascii_alphanumeric()
+                    || bytes[i] == b'_'
+                    || bytes[i] == b'$'
+                    || bytes[i] >= 0x80)
             {
                 i += 1;
             }
@@ -250,15 +376,24 @@ fn format_sql(text: &str) -> String {
         .collect();
     for (index, (token, piece)) in tokens.iter().enumerate() {
         let upper = piece.to_ascii_uppercase();
-        let word = if *token == Token::Keyword { upper.as_str() } else { piece };
-        let previous = index.checked_sub(1).map(|i| tokens[i].1.to_ascii_uppercase());
+        let word = if *token == Token::Keyword {
+            upper.as_str()
+        } else {
+            piece
+        };
+        let previous = index
+            .checked_sub(1)
+            .map(|i| tokens[i].1.to_ascii_uppercase());
         let starts_clause = *token == Token::Keyword
             && depth == 0
             && index > 0
             && (SQL_CLAUSES.contains(&word)
                 || (word == "JOIN"
                     && !previous.as_deref().is_some_and(|p| {
-                        matches!(p, "LEFT" | "RIGHT" | "INNER" | "FULL" | "CROSS" | "OUTER" | "NATURAL")
+                        matches!(
+                            p,
+                            "LEFT" | "RIGHT" | "INNER" | "FULL" | "CROSS" | "OUTER" | "NATURAL"
+                        )
                     }))
                 || (matches!(word, "LEFT" | "RIGHT" | "INNER" | "FULL" | "CROSS")
                     && tokens.get(index + 1).is_some_and(|(_, n)| {
@@ -269,7 +404,16 @@ fn format_sql(text: &str) -> String {
             && previous.as_deref().is_some_and(|p| {
                 matches!(
                     p,
-                    "GROUP" | "ORDER" | "INSERT" | "UNION" | "LEFT" | "RIGHT" | "INNER" | "FULL" | "CROSS" | "OUTER"
+                    "GROUP"
+                        | "ORDER"
+                        | "INSERT"
+                        | "UNION"
+                        | "LEFT"
+                        | "RIGHT"
+                        | "INNER"
+                        | "FULL"
+                        | "CROSS"
+                        | "OUTER"
                 )
             });
         if starts_clause && !is_second_word && !out.is_empty() {
@@ -282,11 +426,11 @@ fn format_sql(text: &str) -> String {
             pending_space = false;
         }
         let tight_before = matches!(*piece, "," | ")" | ";" | ".")
-            || (*piece == "(" && previous.as_deref().is_some_and(|p| {
-                // A call: `count(` not `IN (`.
-                p.chars().all(|c| c.is_alphanumeric() || c == '_')
-                    && !SQL_KEYWORDS.contains(&p.as_str())
-            }));
+            || (*piece == "("
+                && previous.as_deref().is_some_and(|p| {
+                    // A call: `count(` not `IN (`.
+                    p.chars().all(|c| c.is_alphanumeric() || c == '_') && !SQL_KEYWORDS.contains(&p)
+                }));
         let tight_after = out.ends_with('(') || out.ends_with('.');
         if pending_space && !tight_before && !tight_after {
             out.push(' ');
@@ -348,12 +492,7 @@ pub fn statement_at(text: &str, cursor_char: usize, dialect: Dialect) -> String 
     if statement.is_empty() {
         // The cursor sits right after a ';': take the statement before it.
         let before: String = chars[..start.saturating_sub(1)].iter().collect();
-        return before
-            .rsplit(';')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_owned();
+        return before.rsplit(';').next().unwrap_or("").trim().to_owned();
     }
     statement.to_owned()
 }

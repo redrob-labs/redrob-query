@@ -59,7 +59,11 @@ impl SchemaBrowser {
 
     pub fn forget(&mut self, connection_id: Uuid) {
         self.trees.remove(&connection_id);
-        if self.selected.as_ref().is_some_and(|(id, _)| *id == connection_id) {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|(id, _)| *id == connection_id)
+        {
             self.selected = None;
         }
     }
@@ -164,7 +168,7 @@ impl SchemaBrowser {
             }
             let grouped = groups.len() > 1 || groups.first().is_some_and(|(s, _)| !s.is_empty());
             for (schema, nodes) in groups {
-                let mut body = |ui: &mut Ui| {
+                let body = |ui: &mut Ui| {
                     for node in nodes {
                         let expanded = tree.expanded.get(&node.id).copied().unwrap_or(false);
                         let is_selected = selected
@@ -187,10 +191,8 @@ impl SchemaBrowser {
                                     to_load.push(node.id.clone());
                                 }
                             }
-                            let response = ui.selectable_label(
-                                is_selected,
-                                format!("{glyph} {}", node.name),
-                            );
+                            let response =
+                                ui.selectable_label(is_selected, format!("{glyph} {}", node.name));
                             if response.clicked() {
                                 selected = Some((connection_id, node.id.clone()));
                                 events.push(SchemaEvent::Select {
@@ -219,19 +221,17 @@ impl SchemaBrowser {
                             });
                         });
                         if expanded {
-                            ui.indent(("cols", &node.id), |ui| {
-                                match tree.children.get(&node.id) {
-                                    Some(children) => {
-                                        for column in children {
-                                            column_row(ui, column);
-                                        }
+                            ui.indent(("cols", &node.id), |ui| match tree.children.get(&node.id) {
+                                Some(children) => {
+                                    for column in children {
+                                        column_row(ui, column);
                                     }
-                                    None => {
-                                        ui.horizontal(|ui| {
-                                            ui.spinner();
-                                            ui.label(RichText::new("Loading…").weak().small());
-                                        });
-                                    }
+                                }
+                                None => {
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label(RichText::new("Loading…").weak().small());
+                                    });
                                 }
                             });
                         }
@@ -245,7 +245,7 @@ impl SchemaBrowser {
                     }))
                     .id_salt(("schema-group", connection_id, &schema))
                     .default_open(true)
-                    .show(ui, |ui| body(ui));
+                    .show(ui, body);
                 } else {
                     body(ui);
                 }
@@ -283,7 +283,11 @@ fn column_row(ui: &mut Ui, column: &MetadataNode) {
 /// `schema`/`table` out of a root node id (`table:<schema>.<name>` or `table:<name>`,
 /// `collection:<name>`), the way the engine addresses them.
 pub fn split_table_id(node: &MetadataNode, kind: DatabaseKind) -> (Option<String>, String) {
-    let schema = node.attributes.get("schema").cloned().filter(|s| !s.is_empty());
+    let schema = node
+        .attributes
+        .get("schema")
+        .cloned()
+        .filter(|s| !s.is_empty());
     match kind {
         DatabaseKind::PostgreSql | DatabaseKind::MySql => (schema, node.name.clone()),
         _ => (None, node.name.clone()),

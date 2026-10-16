@@ -140,6 +140,7 @@ pub struct AiClient {
 
 impl AiClient {
     /// Reads the account by the contract's precedence; `own_file` is this app's own `account.json`.
+    #[must_use]
     pub fn new(own_file: Option<PathBuf>) -> Self {
         Self::with_resolver(Arc::new(move || {
             account::current_account(own_file.as_deref().map(Path::new))
@@ -219,11 +220,9 @@ impl AiClient {
         account: &SharedAccount,
         builder: reqwest::RequestBuilder,
     ) -> reqwest::RequestBuilder {
-        let mut bearer = HeaderValue::from_str(&format!(
-            "Bearer {}",
-            account.api_key.expose_secret()
-        ))
-        .unwrap_or_else(|_| HeaderValue::from_static("Bearer"));
+        let mut bearer =
+            HeaderValue::from_str(&format!("Bearer {}", account.api_key.expose_secret()))
+                .unwrap_or_else(|_| HeaderValue::from_static("Bearer"));
         bearer.set_sensitive(true);
         builder
             .header(reqwest::header::AUTHORIZATION, bearer)
@@ -277,6 +276,12 @@ pub enum AiKeySource {
     Launcher,
     /// No account is signed in.
     None,
+}
+
+impl Default for AiKeyStatus {
+    fn default() -> Self {
+        Self::signed_out()
+    }
 }
 
 impl AiKeyStatus {
@@ -371,7 +376,7 @@ fn classify_failure(status: StatusCode, body: &[u8]) -> DataError {
     }
 }
 
-/// The OpenAI-compatible request body: snake_case on the wire, whatever the models use in-app.
+/// The OpenAI-compatible request body: `snake_case` on the wire, whatever the models use in-app.
 #[derive(Serialize)]
 struct WireRequest<'a> {
     model: &'a str,
@@ -447,10 +452,7 @@ fn parse_response(bytes: &[u8]) -> Result<AiChatResponse> {
     Ok(AiChatResponse {
         id: wire.id,
         model: wire.model,
-        message: AiMessage {
-            role,
-            content,
-        },
+        message: AiMessage { role, content },
         usage: wire.usage.map(|usage| AiUsage {
             prompt_tokens: usage.prompt,
             completion_tokens: usage.completion,
@@ -541,13 +543,13 @@ mod tests {
                         continue;
                     };
                     log.lock().unwrap().push(request.clone());
-                    let answer = if request.header("authorization") != Some(expected.as_str()) {
+                    let answer = if request.header("authorization") == Some(expected.as_str()) {
+                        answer(&request)
+                    } else {
                         reply(
                             401,
                             json!({"error": {"message": "invalid api key"}}).to_string(),
                         )
-                    } else {
-                        answer(&request)
                     };
                     let length = answer.declared_length.unwrap_or(answer.body.len());
                     let _ = write!(

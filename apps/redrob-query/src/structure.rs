@@ -37,7 +37,13 @@ pub struct Target {
 }
 
 impl StructurePanel {
-    pub fn show_table(&mut self, workspace: &Workspace, connection_id: Uuid, kind: DatabaseKind, node: MetadataNode) {
+    pub fn show_table(
+        &mut self,
+        workspace: &Workspace,
+        connection_id: Uuid,
+        kind: DatabaseKind,
+        node: MetadataNode,
+    ) {
         let (schema, table) = split_table_id(&node, kind);
         self.columns = None;
         self.keys = None;
@@ -54,7 +60,11 @@ impl StructurePanel {
     }
 
     pub fn forget(&mut self, connection_id: Uuid) {
-        if self.target.as_ref().is_some_and(|t| t.connection_id == connection_id) {
+        if self
+            .target
+            .as_ref()
+            .is_some_and(|t| t.connection_id == connection_id)
+        {
             *self = Self::default();
         }
     }
@@ -110,9 +120,19 @@ impl StructurePanel {
             ui.heading("Structure");
             if let Some(target) = &self.target {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if target.kind != DatabaseKind::MongoDb && ui.small_button("＋ Column").on_hover_text("Add a column to this table").clicked() {
+                    if target.kind != DatabaseKind::MongoDb
+                        && ui
+                            .small_button("＋ Column")
+                            .on_hover_text("Add a column to this table")
+                            .clicked()
+                    {
                         let (schema, table) = split_table_id(&target.node, target.kind);
-                        self.form = Some(TableChangeForm::add_column(target.connection_id, target.kind, schema, table));
+                        self.form = Some(TableChangeForm::add_column(
+                            target.connection_id,
+                            target.kind,
+                            schema,
+                            table,
+                        ));
                     }
                 });
             }
@@ -147,8 +167,16 @@ impl StructurePanel {
                                 for column in columns {
                                     let is_key = keys.primary.contains(&column.name);
                                     let name = RichText::new(&column.name).monospace();
-                                    ui.label(if is_key { name.color(theme::REDROB_BLUE) } else { name });
-                                    ui.label(RichText::new(column.data_type.clone().unwrap_or_default()).small().weak());
+                                    ui.label(if is_key {
+                                        name.color(theme::REDROB_BLUE)
+                                    } else {
+                                        name
+                                    });
+                                    ui.label(
+                                        RichText::new(column.data_type.clone().unwrap_or_default())
+                                            .small()
+                                            .weak(),
+                                    );
                                     let mut flags = Vec::new();
                                     if is_key {
                                         flags.push("PK");
@@ -156,7 +184,11 @@ impl StructurePanel {
                                     if column.nullable == Some(false) {
                                         flags.push("not null");
                                     }
-                                    if keys.foreign.iter().any(|fk| fk.columns.contains(&column.name)) {
+                                    if keys
+                                        .foreign
+                                        .iter()
+                                        .any(|fk| fk.columns.contains(&column.name))
+                                    {
                                         flags.push("FK");
                                     }
                                     ui.label(RichText::new(flags.join(" · ")).small());
@@ -177,10 +209,17 @@ impl StructurePanel {
                                 fk.referenced_columns.join(", ")
                             );
                             if !fk.on_delete.is_empty() && fk.on_delete != "NO ACTION" {
-                                line.push_str(&format!(" on delete {}", fk.on_delete.to_lowercase()));
+                                line.push_str(&format!(
+                                    " on delete {}",
+                                    fk.on_delete.to_lowercase()
+                                ));
                             }
                             ui.label(RichText::new(line).monospace().small())
-                                .on_hover_text(if fk.name.is_empty() { "unnamed constraint".to_owned() } else { fk.name.clone() });
+                                .on_hover_text(if fk.name.is_empty() {
+                                    "unnamed constraint".to_owned()
+                                } else {
+                                    fk.name.clone()
+                                });
                         }
                     }
                     if !keys.indexes.is_empty() {
@@ -195,9 +234,17 @@ impl StructurePanel {
                             }
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(&index.name).monospace().small());
-                                ui.label(RichText::new(format!("({})", index.columns.join(", "))).small().weak());
+                                ui.label(
+                                    RichText::new(format!("({})", index.columns.join(", ")))
+                                        .small()
+                                        .weak(),
+                                );
                                 if !tags.is_empty() {
-                                    ui.label(RichText::new(tags.join(", ")).small().color(theme::REDROB_BLUE));
+                                    ui.label(
+                                        RichText::new(tags.join(", "))
+                                            .small()
+                                            .color(theme::REDROB_BLUE),
+                                    );
                                 }
                             });
                         }
@@ -209,7 +256,13 @@ impl StructurePanel {
         if let Some(form) = &mut self.form {
             let mut keep = true;
             let mut submit = false;
-            form.ui(ui.ctx(), &mut keep, &mut submit, read_only_profile, self.apply.is_some());
+            form.ui(
+                ui.ctx(),
+                &mut keep,
+                &mut submit,
+                read_only_profile,
+                self.apply.is_some(),
+            );
             if submit {
                 match form.change() {
                     Ok(change) => {
@@ -223,11 +276,6 @@ impl StructurePanel {
                 self.form = None;
             }
         }
-    }
-
-    /// Opens the create-table form for a connection (from the schema browser's header).
-    pub fn new_table(&mut self, connection_id: Uuid, kind: DatabaseKind, schema: Option<String>) {
-        self.form = Some(TableChangeForm::create_table(connection_id, kind, schema));
     }
 }
 
@@ -261,24 +309,12 @@ pub struct TableChangeForm {
 }
 
 impl TableChangeForm {
-    fn create_table(connection_id: Uuid, kind: DatabaseKind, schema: Option<String>) -> Self {
-        Self {
-            connection_id,
-            kind,
-            schema: schema.unwrap_or_default(),
-            table: String::new(),
-            create: true,
-            columns: vec![ColumnRow {
-                name: "id".to_owned(),
-                column_type: ColumnType::Integer,
-                nullable: false,
-                primary_key: true,
-            }],
-            error: None,
-        }
-    }
-
-    fn add_column(connection_id: Uuid, kind: DatabaseKind, schema: Option<String>, table: String) -> Self {
+    fn add_column(
+        connection_id: Uuid,
+        kind: DatabaseKind,
+        schema: Option<String>,
+        table: String,
+    ) -> Self {
         Self {
             connection_id,
             kind,
@@ -296,7 +332,7 @@ impl TableChangeForm {
         } else {
             format!(
                 "added column {} to {}",
-                self.columns.first().map(|c| c.name.as_str()).unwrap_or(""),
+                self.columns.first().map_or("", |c| c.name.as_str()),
                 self.table
             )
         }
@@ -346,8 +382,19 @@ impl TableChangeForm {
         Ok(change)
     }
 
-    fn ui(&mut self, ctx: &egui::Context, keep: &mut bool, submit: &mut bool, read_only: bool, busy: bool) {
-        let title = if self.create { "Create table" } else { "Add column" };
+    fn ui(
+        &mut self,
+        ctx: &egui::Context,
+        keep: &mut bool,
+        submit: &mut bool,
+        read_only: bool,
+        busy: bool,
+    ) {
+        let title = if self.create {
+            "Create table"
+        } else {
+            "Add column"
+        };
         let mut open = true;
         egui::Window::new(title)
             .collapsible(false)
@@ -356,54 +403,83 @@ impl TableChangeForm {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .open(&mut open)
             .show(ctx, |ui| {
-                egui::Grid::new("ddl-head").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                    if matches!(self.kind, DatabaseKind::PostgreSql | DatabaseKind::MySql) {
-                        ui.label("Schema");
-                        ui.add(egui::TextEdit::singleline(&mut self.schema).desired_width(200.0).hint_text("default"));
+                egui::Grid::new("ddl-head")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        if matches!(self.kind, DatabaseKind::PostgreSql | DatabaseKind::MySql) {
+                            ui.label("Schema");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.schema)
+                                    .desired_width(200.0)
+                                    .hint_text("default"),
+                            );
+                            ui.end_row();
+                        }
+                        ui.label("Table");
+                        ui.add_enabled(
+                            self.create,
+                            egui::TextEdit::singleline(&mut self.table).desired_width(300.0),
+                        );
                         ui.end_row();
-                    }
-                    ui.label("Table");
-                    ui.add_enabled(self.create, egui::TextEdit::singleline(&mut self.table).desired_width(300.0));
-                    ui.end_row();
-                });
+                    });
                 ui.add_space(6.0);
-                ui.label(RichText::new(if self.create { "Columns" } else { "Column" }).small().strong());
+                ui.label(
+                    RichText::new(if self.create { "Columns" } else { "Column" })
+                        .small()
+                        .strong(),
+                );
                 let mut remove: Option<usize> = None;
                 let create = self.create;
                 let count = self.columns.len();
-                egui::Grid::new("ddl-columns").num_columns(5).spacing([10.0, 4.0]).show(ui, |ui| {
-                    ui.label(RichText::new("Name").small().weak());
-                    ui.label(RichText::new("Type").small().weak());
-                    ui.label(RichText::new("Nullable").small().weak());
-                    ui.label(RichText::new("Primary").small().weak());
-                    ui.label("");
-                    ui.end_row();
-                    for (index, column) in self.columns.iter_mut().enumerate() {
-                        ui.add(egui::TextEdit::singleline(&mut column.name).desired_width(160.0));
-                        egui::ComboBox::from_id_salt(("ddl-type", index))
-                            .selected_text(type_name(column.column_type))
-                            .show_ui(ui, |ui| {
-                                for t in [
-                                    ColumnType::Text,
-                                    ColumnType::Integer,
-                                    ColumnType::Decimal,
-                                    ColumnType::Boolean,
-                                    ColumnType::Date,
-                                    ColumnType::Timestamp,
-                                ] {
-                                    ui.selectable_value(&mut column.column_type, t, type_name(t));
-                                }
-                            });
-                        ui.add_enabled(!column.primary_key, egui::Checkbox::without_text(&mut column.nullable));
-                        ui.add_enabled(create, egui::Checkbox::without_text(&mut column.primary_key));
-                        if create && count > 1 && ui.small_button("✕").clicked() {
-                            remove = Some(index);
-                        } else if !create {
-                            ui.label("");
-                        }
+                egui::Grid::new("ddl-columns")
+                    .num_columns(5)
+                    .spacing([10.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Name").small().weak());
+                        ui.label(RichText::new("Type").small().weak());
+                        ui.label(RichText::new("Nullable").small().weak());
+                        ui.label(RichText::new("Primary").small().weak());
+                        ui.label("");
                         ui.end_row();
-                    }
-                });
+                        for (index, column) in self.columns.iter_mut().enumerate() {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut column.name).desired_width(160.0),
+                            );
+                            egui::ComboBox::from_id_salt(("ddl-type", index))
+                                .selected_text(type_name(column.column_type))
+                                .show_ui(ui, |ui| {
+                                    for t in [
+                                        ColumnType::Text,
+                                        ColumnType::Integer,
+                                        ColumnType::Decimal,
+                                        ColumnType::Boolean,
+                                        ColumnType::Date,
+                                        ColumnType::Timestamp,
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut column.column_type,
+                                            t,
+                                            type_name(t),
+                                        );
+                                    }
+                                });
+                            ui.add_enabled(
+                                !column.primary_key,
+                                egui::Checkbox::without_text(&mut column.nullable),
+                            );
+                            ui.add_enabled(
+                                create,
+                                egui::Checkbox::without_text(&mut column.primary_key),
+                            );
+                            if create && count > 1 && ui.small_button("✕").clicked() {
+                                remove = Some(index);
+                            } else if !create {
+                                ui.label("");
+                            }
+                            ui.end_row();
+                        }
+                    });
                 if let Some(index) = remove {
                     self.columns.remove(index);
                 }
@@ -417,14 +493,20 @@ impl TableChangeForm {
                     ui.label(RichText::new(statement).monospace().small().weak());
                 }
                 if read_only {
-                    ui.label(RichText::new("This profile is read-only; the change will be refused.").color(theme::CAUTION));
+                    ui.label(
+                        RichText::new("This profile is read-only; the change will be refused.")
+                            .color(theme::CAUTION),
+                    );
                 }
                 if let Some(error) = &self.error {
                     ui.label(RichText::new(error).color(theme::DANGER));
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!busy && !read_only, theme::primary_button("Apply")).clicked() {
+                    if ui
+                        .add_enabled(!busy && !read_only, theme::primary_button("Apply"))
+                        .clicked()
+                    {
                         *submit = true;
                     }
                     if ui.button("Cancel").clicked() {

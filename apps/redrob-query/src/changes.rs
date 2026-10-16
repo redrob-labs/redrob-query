@@ -41,7 +41,9 @@ pub fn build_edit_set(grid: &ResultGrid, source: &ResultSource) -> Result<CellEd
     let (key, key_index) = editable_key(grid).map_err(str::to_owned)?;
     let key_of = |row: usize| -> Result<DataValue, String> {
         match grid.page.rows.get(row).and_then(|r| r.get(key_index)) {
-            Some(DataValue::Null) | None => Err(format!("row {} has no primary key value", row + 1)),
+            Some(DataValue::Null) | None => {
+                Err(format!("row {} has no primary key value", row + 1))
+            }
             Some(value) => Ok(value.clone()),
         }
     };
@@ -106,7 +108,10 @@ impl ChangesPanel {
             match result {
                 Ok(outcome) => {
                     self.last = Some((
-                        format!("Applied: {} rows changed in {} ms", outcome.rows_affected, outcome.elapsed_ms),
+                        format!(
+                            "Applied: {} rows changed in {} ms",
+                            outcome.rows_affected, outcome.elapsed_ms
+                        ),
                         true,
                     ));
                     events.push(ChangesEvent::Applied(outcome));
@@ -178,7 +183,10 @@ impl ChangesPanel {
                         "{} row update(s), {} delete(s) on {}{} keyed by {}",
                         set.rows.len(),
                         set.deletes.len(),
-                        set.schema.as_deref().map(|s| format!("{s}.")).unwrap_or_default(),
+                        set.schema
+                            .as_deref()
+                            .map(|s| format!("{s}."))
+                            .unwrap_or_default(),
                         set.table,
                         set.primary_key
                     ))
@@ -191,13 +199,21 @@ impl ChangesPanel {
         }
         ui.horizontal(|ui| {
             let can_apply = set.is_ok() && grid.has_changes() && !self.busy() && !read_only_profile;
-            if ui.add_enabled(can_apply, theme::primary_button("Apply")).clicked()
+            if ui
+                .add_enabled(can_apply, theme::primary_button("Apply"))
+                .clicked()
                 && let Ok(set) = set
             {
                 self.last = None;
                 self.apply = Some(workspace.apply_cell_edits(source.connection_id, set));
             }
-            if ui.add_enabled(grid.has_changes() && !self.busy(), egui::Button::new("Discard")).clicked() {
+            if ui
+                .add_enabled(
+                    grid.has_changes() && !self.busy(),
+                    egui::Button::new("Discard"),
+                )
+                .clicked()
+            {
                 grid.clear_changes();
                 self.last = None;
             }

@@ -3,6 +3,16 @@
 //! Usage: `redrob-query [--version]`
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+// Stylistic pedantic lints the shell does not follow: egui code reads better with a few bool flags
+// per panel, `format!` pushed onto a status string, and `if`/`match` shapes mirroring the widgets.
+#![allow(
+    clippy::format_push_string,
+    clippy::struct_excessive_bools,
+    clippy::match_same_arms,
+    clippy::single_match_else,
+    clippy::semicolon_if_nothing_returned,
+    clippy::if_same_then_else
+)]
 
 mod account;
 mod ai_dock;
@@ -22,7 +32,8 @@ mod workspace;
 use app::QueryApp;
 
 /// The 256px app icon from the brand pipeline (resources/icons, pinned in brand/SOURCES.json).
-const ICON_PNG: &[u8] = include_bytes!("../../../resources/icons/hicolor/256x256/apps/redrob-query.png");
+const ICON_PNG: &[u8] =
+    include_bytes!("../../../resources/icons/hicolor/256x256/apps/redrob-query.png");
 
 /// The main window: 1440 × 900 (eframe shrinks it to the monitor), at least 900 × 560.
 fn native_options() -> eframe::NativeOptions {

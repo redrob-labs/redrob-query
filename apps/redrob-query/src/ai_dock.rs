@@ -88,10 +88,18 @@ impl AiDock {
                 }
             }
             AiKeySource::Launcher => {
-                ui.label(RichText::new(format!("{} · via Redrob Launcher", self.status.label)).small().weak());
+                ui.label(
+                    RichText::new(format!("{} · via Redrob Launcher", self.status.label))
+                        .small()
+                        .weak(),
+                );
             }
             AiKeySource::Own => {
-                ui.label(RichText::new(format!("{} · this app's own key", self.status.label)).small().weak());
+                ui.label(
+                    RichText::new(format!("{} · this app's own key", self.status.label))
+                        .small()
+                        .weak(),
+                );
             }
         }
         ui.separator();
@@ -144,9 +152,16 @@ impl AiDock {
                 }),
         );
         let submit = response.has_focus()
-            && ui.input(|i| i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl));
+            && ui.input(|i| {
+                i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
+            });
         ui.horizontal(|ui| {
-            if (ui.add_enabled(can_ask && !self.prompt.trim().is_empty(), theme::primary_button("Ask (Ctrl+Enter)")).clicked()
+            if (ui
+                .add_enabled(
+                    can_ask && !self.prompt.trim().is_empty(),
+                    theme::primary_button("Ask (Ctrl+Enter)"),
+                )
+                .clicked()
                 || (submit && can_ask))
                 && let Some((kind, language, text)) = active
             {
@@ -155,7 +170,13 @@ impl AiDock {
         });
     }
 
-    fn ask(&mut self, workspace: &Workspace, kind: DatabaseKind, language: QueryLanguage, active: String) {
+    fn ask(
+        &mut self,
+        workspace: &Workspace,
+        kind: DatabaseKind,
+        language: QueryLanguage,
+        active: String,
+    ) {
         let prompt = self.prompt.trim().to_owned();
         if prompt.is_empty() {
             return;
@@ -191,10 +212,15 @@ fn render_answer(ui: &mut Ui, index: usize, text: &str, events: &mut Vec<AiEvent
         if block {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(RichText::new(piece.trim()).monospace().small()).wrap());
+                    ui.add(
+                        egui::Label::new(RichText::new(piece.trim()).monospace().small()).wrap(),
+                    );
                 });
                 ui.horizontal(|ui| {
-                    if ui.add(theme::primary_button("Insert into editor")).clicked() {
+                    if ui
+                        .add(theme::primary_button("Insert into editor"))
+                        .clicked()
+                    {
                         events.push(AiEvent::Insert(piece.trim().to_owned()));
                     }
                     if ui.small_button("Copy").clicked() {
@@ -210,7 +236,7 @@ fn render_answer(ui: &mut Ui, index: usize, text: &str, events: &mut Vec<AiEvent
     }
 }
 
-/// Splits markdown into `(is_code_block, text)` pieces by ``` fences; the language tag is dropped.
+/// Splits markdown into `(is_code_block, text)` pieces by triple-backtick fences; the language tag is dropped.
 pub fn split_fences(text: &str) -> Vec<(bool, String)> {
     let mut pieces = Vec::new();
     let mut in_block = false;

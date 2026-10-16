@@ -71,7 +71,10 @@ impl SharedAccount {
     /// `<apiBaseUrl>/chat/completions`, the OpenAI-compatible route the console serves.
     #[must_use]
     pub fn chat_completions_url(&self) -> String {
-        format!("{}/chat/completions", self.api_base_url.trim_end_matches('/'))
+        format!(
+            "{}/chat/completions",
+            self.api_base_url.trim_end_matches('/')
+        )
     }
 
     /// What the status line shows: the account, and whose key it is. Never the key.
@@ -108,9 +111,7 @@ pub fn shared_dir_with(os: &str, env: impl Fn(&str) -> Option<OsString>) -> Opti
     if let Some(dir) = env(SHARED_DIR_ENV).filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir));
     }
-    let home = env("HOME")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from);
+    let home = env("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
     match os {
         "macos" => home.map(|h| h.join("Library/Application Support/ai.redrob.shared")),
         "windows" => env("APPDATA")

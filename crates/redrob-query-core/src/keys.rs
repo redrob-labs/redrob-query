@@ -329,13 +329,12 @@ pub(crate) async fn sqlite_table_keys(pool: &SqlitePool, table: &str) -> Result<
         })
         .collect();
 
-    let index_rows = sqlx::query(
-        "SELECT name, \"unique\", origin FROM pragma_index_list(?) ORDER BY seq",
-    )
-    .bind(table)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| failed(&e))?;
+    let index_rows =
+        sqlx::query("SELECT name, \"unique\", origin FROM pragma_index_list(?) ORDER BY seq")
+            .bind(table)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| failed(&e))?;
     let mut indexes = Vec::with_capacity(index_rows.len());
     for row in &index_rows {
         let name: String = row.try_get(0).map_err(|e| failed(&e))?;

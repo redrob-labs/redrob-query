@@ -175,7 +175,9 @@ impl Workspace {
         profile: ConnectionProfile,
         secret: Option<String>,
     ) -> Pending<ConnectionStatus> {
-        self.spawn(|service| async move { service.test_connection(&profile, secret.as_deref()).await })
+        self.spawn(
+            |service| async move { service.test_connection(&profile, secret.as_deref()).await },
+        )
     }
 
     pub fn connect(&self, id: Uuid) -> Pending<ConnectionStatus> {
@@ -200,7 +202,9 @@ impl Workspace {
         table: String,
     ) -> Pending<Vec<String>> {
         self.spawn(move |service| async move {
-            service.primary_key_columns(connection_id, schema, table).await
+            service
+                .primary_key_columns(connection_id, schema, table)
+                .await
         })
     }
 
@@ -211,7 +215,9 @@ impl Workspace {
         schema: Option<String>,
         table: String,
     ) -> Pending<TableKeys> {
-        self.spawn(move |service| async move { service.table_keys(connection_id, schema, table).await })
+        self.spawn(
+            move |service| async move { service.table_keys(connection_id, schema, table).await },
+        )
     }
 
     // ---- queries ----------------------------------------------------------------------------
@@ -234,7 +240,9 @@ impl Workspace {
 
     /// Create a table or add a column from the form. Types come from a fixed list (`ddl`).
     pub fn apply_table_change(&self, connection_id: Uuid, change: TableChange) -> Pending<()> {
-        self.spawn(move |service| async move { service.apply_table_change(connection_id, change).await })
+        self.spawn(
+            move |service| async move { service.apply_table_change(connection_id, change).await },
+        )
     }
 
     /// Apply a change set the person reviewed in the changes panel. The engine checks the profile
@@ -244,7 +252,9 @@ impl Workspace {
         connection_id: Uuid,
         edits: CellEditSet,
     ) -> Pending<MutationResult> {
-        self.spawn(move |service| async move { service.apply_cell_edits(connection_id, edits).await })
+        self.spawn(
+            move |service| async move { service.apply_cell_edits(connection_id, edits).await },
+        )
     }
 
     // ---- AI and account ---------------------------------------------------------------------

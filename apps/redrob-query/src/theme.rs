@@ -6,7 +6,8 @@ use egui::Color32;
 
 /// `--blue-6`, Redrob Blue: the one accent. Buttons that act, the selected tab, the caret.
 pub const REDROB_BLUE: Color32 = Color32::from_rgb(0x2B, 0x52, 0xFF);
-/// `--redrob-black`: the deep ground behind the brand lockup.
+/// `--redrob-black`: the deep ground behind the brand lockup (kept for the About surface).
+#[allow(dead_code)]
 pub const REDROB_BLACK: Color32 = Color32::from_rgb(0x0A, 0x0B, 0x0C);
 /// `--red-6`, danger: destructive classifications and failed runs.
 pub const DANGER: Color32 = Color32::from_rgb(0xE5, 0x3E, 0x3E);
