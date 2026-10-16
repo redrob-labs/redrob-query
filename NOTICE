@@ -56,6 +56,16 @@ under the Apache License 2.0. Its architecture and user workflows informed this
 product's design. No DBeaver source code, binaries, plugins, branding, Eclipse
 RCP/OSGi components, JDBC drivers, Java, or JVM is distributed here.
 
+## Bundled fonts
+
+Inter, Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter),
+and JetBrains Mono, Copyright 2020 The JetBrains Mono Project Authors
+(https://github.com/JetBrains/JetBrainsMono), are embedded in the desktop binary
+as its interface and code typefaces (apps/redrob-query/assets/fonts). Both are
+licensed under the SIL Open Font License, Version 1.1; the licence texts travel
+beside the font files (OFL-Inter.txt, OFL-JetBrainsMono.txt). The same files are
+what Redrob Canvas draws with, so the two apps share one look.
+
 Third-party components remain subject to their respective licenses.
 
 ## Trademarks
