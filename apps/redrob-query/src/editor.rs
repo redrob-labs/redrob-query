@@ -126,7 +126,11 @@ impl QueryTab {
 
     pub fn for_connection(profile: &ConnectionProfile, index: usize) -> Self {
         let text = highlight::starter_query(profile.kind).to_owned();
-        Self::new(tf("Query {n}", &[("n", &index.to_string())]), text, Some(profile))
+        Self::new(
+            tf("Query {n}", &[("n", &index.to_string())]),
+            text,
+            Some(profile),
+        )
     }
 
     pub fn is_running(&self) -> bool {
@@ -361,10 +365,13 @@ impl QueryTab {
                 self.file = Some(path);
             }
             Err(error) => self.message(
-                tf("Could not open {path}: {error}", &[
-                    ("path", &path.display().to_string()),
-                    ("error", &error.to_string()),
-                ]),
+                tf(
+                    "Could not open {path}: {error}",
+                    &[
+                        ("path", &path.display().to_string()),
+                        ("error", &error.to_string()),
+                    ],
+                ),
                 true,
             ),
         }
@@ -389,7 +396,9 @@ impl QueryTab {
             };
             self.file = Some(picked);
         }
-        let Some(path) = self.file.clone() else { return };
+        let Some(path) = self.file.clone() else {
+            return;
+        };
         match std::fs::write(&path, &self.text) {
             Ok(()) => {
                 if let Some(stem) = path.file_stem() {
@@ -453,7 +462,9 @@ impl QueryTab {
             let can_run = self.connection_id.is_some() && !running;
             if ui
                 .add_enabled(can_run, theme::primary_button(ui, t("▶ Run")))
-                .on_hover_text(t("Ctrl+Enter: the selection or the statement under the cursor"))
+                .on_hover_text(t(
+                    "Ctrl+Enter: the selection or the statement under the cursor",
+                ))
                 .clicked()
             {
                 self.run_now(workspace, None);
@@ -466,11 +477,7 @@ impl QueryTab {
                 self.run_all(workspace);
             }
             if running {
-                if ui
-                    .button(t("Cancel"))
-                    .on_hover_text(t("Esc"))
-                    .clicked()
-                {
+                if ui.button(t("Cancel")).on_hover_text(t("Esc")).clicked() {
                     self.cancel();
                 }
                 if !self.queue.is_empty() || self.ran_in_batch > 0 {
@@ -479,10 +486,7 @@ impl QueryTab {
                             "statement {i} of {n}",
                             &[
                                 ("i", &(self.ran_in_batch + 1).to_string()),
-                                (
-                                    "n",
-                                    &(self.ran_in_batch + 1 + self.queue.len()).to_string(),
-                                ),
+                                ("n", &(self.ran_in_batch + 1 + self.queue.len()).to_string()),
                             ],
                         ))
                         .small(),
@@ -556,9 +560,8 @@ impl QueryTab {
         if self.focus_editor {
             output.response.request_focus();
             if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), output.response.id) {
-                let range = egui::text::CCursorRange::one(egui::text::CCursor::new(
-                    self.cursor_char,
-                ));
+                let range =
+                    egui::text::CCursorRange::one(egui::text::CCursor::new(self.cursor_char));
                 state.cursor.set_char_range(Some(range));
                 state.store(ui.ctx(), output.response.id);
                 output.cursor_range = Some(range);
@@ -573,9 +576,8 @@ impl QueryTab {
             .filter(|r| !r.is_empty())
             .map(|r| r.slice_str(&self.text).to_owned());
         let focused = output.response.has_focus();
-        let run = ui.input_mut(|i| {
-            focused && i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)
-        });
+        let run =
+            ui.input_mut(|i| focused && i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
         let format = ui.input_mut(|i| {
             focused
                 && i.consume_key(
@@ -628,7 +630,12 @@ impl QueryTab {
                             self.view = view;
                         }
                         if count > 0 {
-                            theme::badge(ui, &count.to_string(), count_colour, egui::Color32::WHITE);
+                            theme::badge(
+                                ui,
+                                &count.to_string(),
+                                count_colour,
+                                egui::Color32::WHITE,
+                            );
                         }
                         ui.add_space(4.0);
                     }
@@ -726,8 +733,10 @@ impl QueryTab {
                                 .color(tokens.text_faint),
                         );
                         ui.add(
-                            egui::Label::new(RichText::new(&message.text).monospace().color(colour))
-                                .wrap(),
+                            egui::Label::new(
+                                RichText::new(&message.text).monospace().color(colour),
+                            )
+                            .wrap(),
                         );
                     });
                 }

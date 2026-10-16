@@ -108,9 +108,10 @@ pub fn sql_preview(kind: DatabaseKind, set: &CellEditSet) -> Result<Vec<String>,
 fn literal(value: &DataValue) -> String {
     match value {
         DataValue::Null => "NULL".to_owned(),
-        DataValue::Boolean(_) | DataValue::Integer(_) | DataValue::Float(_) | DataValue::Decimal(_) => {
-            format_value(value)
-        }
+        DataValue::Boolean(_)
+        | DataValue::Integer(_)
+        | DataValue::Float(_)
+        | DataValue::Decimal(_) => format_value(value),
         other => format!("'{}'", format_value(other).replace('\'', "''")),
     }
 }
@@ -170,17 +171,12 @@ impl ChangesPanel {
     ) {
         let tokens = Tokens::of(ui);
         if let Some((text, ok)) = &self.last {
-            ui.label(RichText::new(text).color(if *ok {
-                tokens.success
-            } else {
-                tokens.danger
-            }));
+            ui.label(RichText::new(text).color(if *ok { tokens.success } else { tokens.danger }));
         }
         let Some(source) = source else {
             ui.add_space(8.0);
             ui.label(
-                RichText::new(t("Edits need a result from one table."))
-                    .color(tokens.text_faint),
+                RichText::new(t("Edits need a result from one table.")).color(tokens.text_faint),
             );
             return;
         };
@@ -211,30 +207,32 @@ impl ChangesPanel {
             .exact_size(theme::STATUS_HEIGHT + 8.0)
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 4)))
             .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let can_apply = set.is_ok() && grid.has_changes() && !self.busy() && !read_only_profile;
-                if ui
-                    .add_enabled(can_apply, theme::primary_button(ui, t("Apply")))
-                    .clicked()
-                    && let Ok(set) = &set
-                {
-                    self.last = None;
-                    self.apply = Some(workspace.apply_cell_edits(source.connection_id, set.clone()));
-                }
-                if ui
-                    .add_enabled(
-                        grid.has_changes() && !self.busy(),
-                        egui::Button::new(t("Discard")),
-                    )
-                    .clicked()
-                {
-                    grid.clear_changes();
-                    self.last = None;
-                }
-                if self.busy() {
-                    ui.spinner();
-                }
-            });
+                ui.horizontal(|ui| {
+                    let can_apply =
+                        set.is_ok() && grid.has_changes() && !self.busy() && !read_only_profile;
+                    if ui
+                        .add_enabled(can_apply, theme::primary_button(ui, t("Apply")))
+                        .clicked()
+                        && let Ok(set) = &set
+                    {
+                        self.last = None;
+                        self.apply =
+                            Some(workspace.apply_cell_edits(source.connection_id, set.clone()));
+                    }
+                    if ui
+                        .add_enabled(
+                            grid.has_changes() && !self.busy(),
+                            egui::Button::new(t("Discard")),
+                        )
+                        .clicked()
+                    {
+                        grid.clear_changes();
+                        self.last = None;
+                    }
+                    if self.busy() {
+                        ui.spinner();
+                    }
+                });
             });
         egui::ScrollArea::vertical()
             .id_salt("changes")

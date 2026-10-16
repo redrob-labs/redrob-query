@@ -41,8 +41,6 @@ pub struct ProfilesPanel {
     pub form: Option<ProfileForm>,
     confirm_remove: Option<Uuid>,
     pub load_warnings: Vec<String>,
-    /// The list arrived at least once (the empty state waits for it).
-    pub loaded: bool,
 }
 
 impl ProfilesPanel {
@@ -59,7 +57,6 @@ impl ProfilesPanel {
             form: None,
             confirm_remove: None,
             load_warnings: workspace.profile_load_warnings(),
-            loaded: false,
         }
     }
 
@@ -112,18 +109,12 @@ impl ProfilesPanel {
         self.selected.and_then(|id| self.profile(id))
     }
 
-    /// Whether there are only built-in profiles (the first-run empty state).
-    pub fn only_built_in(&self) -> bool {
-        self.loaded && self.profiles.iter().all(|p| p.built_in)
-    }
-
     /// Drains finished operations; call once per frame before drawing.
     pub fn poll(&mut self, workspace: &Workspace, events: &mut Vec<ProfilesEvent>) {
         if let Some(list) = &mut self.list
             && let Some(result) = list.poll()
         {
             self.list = None;
-            self.loaded = true;
             match result {
                 Ok(mut profiles) => {
                     profiles.sort_by(|a, b| {
@@ -315,7 +306,9 @@ impl ProfilesPanel {
     }
 
     fn remove_modal(&mut self, ctx: &egui::Context, workspace: &Workspace) {
-        let Some(id) = self.confirm_remove else { return };
+        let Some(id) = self.confirm_remove else {
+            return;
+        };
         let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
         let modal = egui::Modal::new(egui::Id::new("remove-profile")).show(ctx, |ui| {
             ui.set_width(380.0);
@@ -404,9 +397,7 @@ impl ProfilesPanel {
                     if ui.small_button(t("Query")).clicked() {
                         action = Some((profile.id, RowAction::Connect));
                     }
-                } else if profile.capabilities.connect
-                    && ui.small_button(t("Connect")).clicked()
-                {
+                } else if profile.capabilities.connect && ui.small_button(t("Connect")).clicked() {
                     action = Some((profile.id, RowAction::Connect));
                 }
             });
@@ -418,7 +409,11 @@ impl ProfilesPanel {
 fn group_label(ui: &mut Ui, text: &str) {
     let tokens = Tokens::of(ui);
     ui.add_space(4.0);
-    ui.label(RichText::new(text.to_uppercase()).small().color(tokens.text_faint));
+    ui.label(
+        RichText::new(text.to_uppercase())
+            .small()
+            .color(tokens.text_faint),
+    );
 }
 
 enum RowAction {
@@ -566,7 +561,10 @@ impl ProfileForm {
                         events.push(ProfilesEvent::Notice(warning, false));
                     }
                     events.push(ProfilesEvent::Notice(
-                        tf("Saved connection \"{name}\"", &[("name", &outcome.profile.name)]),
+                        tf(
+                            "Saved connection \"{name}\"",
+                            &[("name", &outcome.profile.name)],
+                        ),
                         false,
                     ));
                     self.password.clear();

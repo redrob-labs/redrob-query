@@ -9,8 +9,8 @@ use redrob_query_core::{
 };
 use uuid::Uuid;
 
-use crate::schema::split_table_id;
 use crate::i18n::t;
+use crate::schema::split_table_id;
 use crate::theme::{self, Tokens};
 
 pub enum StructureEvent {
@@ -426,9 +426,13 @@ impl TableChangeForm {
                     });
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(if self.create { t("Columns") } else { t("Column") })
-                        .small()
-                        .strong(),
+                    RichText::new(if self.create {
+                        t("Columns")
+                    } else {
+                        t("Column")
+                    })
+                    .small()
+                    .strong(),
                 );
                 let mut remove: Option<usize> = None;
                 let create = self.create;
@@ -495,8 +499,10 @@ impl TableChangeForm {
                 }
                 if read_only {
                     ui.label(
-                        RichText::new(t("This connection is read-only; the change will be refused."))
-                            .color(Tokens::of(ui).warning),
+                        RichText::new(t(
+                            "This connection is read-only; the change will be refused.",
+                        ))
+                        .color(Tokens::of(ui).warning),
                     );
                 }
                 if let Some(error) = &self.error {

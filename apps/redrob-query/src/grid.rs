@@ -245,10 +245,14 @@ impl ResultGrid {
                         &[("key", &self.key_columns.join(", "))],
                     ));
             } else {
-                ui.label(RichText::new(t("read-only")).small().color(tokens.text_faint))
-                    .on_hover_text(t(
-                        "Edits need one table with a primary key and a writable connection",
-                    ));
+                ui.label(
+                    RichText::new(t("read-only"))
+                        .small()
+                        .color(tokens.text_faint),
+                )
+                .on_hover_text(t(
+                    "Edits need one table with a primary key and a writable connection",
+                ));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button(t("Export"), |ui| {
@@ -324,10 +328,7 @@ impl ResultGrid {
                 &[("first", &first.to_string()), ("last", &last.to_string())],
             );
             if self.order.len() != fetched {
-                summary.push_str(&tf(
-                    " · {n} shown",
-                    &[("n", &self.order.len().to_string())],
-                ));
+                summary.push_str(&tf(" · {n} shown", &[("n", &self.order.len().to_string())]));
             }
             summary.push_str(&tf(
                 " · {ms} ms",

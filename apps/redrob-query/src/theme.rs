@@ -1,6 +1,6 @@
 //! The shell's look, the same system Redrob Canvas draws with: one set of colour and shape tokens
 //! per ground (dark, light), one egui style built from them at start-up and never reset by a view,
-//! and one font set (Inter for the interface, JetBrains Mono for SQL and grid cells, a system CJK
+//! and one font set (Inter for the interface, `JetBrains Mono` for SQL and grid cells, a system CJK
 //! face as the fallback for Hangul, Han and Kana) installed once.
 //!
 //! The dark ground is the Pro (Medium Gray) palette, the light ground Pro (Light); both come from
@@ -10,7 +10,10 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
+use egui::{
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
+    Visuals,
+};
 
 /// Redrob Blue (`--blue-6`): the one brand accent, for the primary button and the selected tab.
 pub const REDROB_BLUE: Color32 = Color32::from_rgb(0x2B, 0x52, 0xFF);
@@ -93,9 +96,9 @@ pub struct Tokens {
     pub danger: Color32,
     pub warning: Color32,
     pub success: Color32,
-    pub radius_sm: f32,
-    pub radius: f32,
-    pub radius_lg: f32,
+    pub radius_sm: u8,
+    pub radius: u8,
+    pub radius_lg: u8,
     /// The tab strip above a panel's content.
     pub tab_strip: Color32,
     /// The selected list row.
@@ -131,9 +134,9 @@ impl Tokens {
         danger: Color32::from_rgb(236, 91, 98),
         warning: Color32::from_rgb(232, 176, 70),
         success: Color32::from_rgb(92, 196, 132),
-        radius_sm: 3.0,
-        radius: 4.0,
-        radius_lg: 6.0,
+        radius_sm: 3,
+        radius: 4,
+        radius_lg: 6,
         tab_strip: Color32::from_rgb(74, 74, 74),
         row_selected: Color32::from_rgb(107, 107, 107),
         row_stripe: Color32::from_rgb(46, 46, 46),
@@ -165,9 +168,9 @@ impl Tokens {
         danger: Color32::from_rgb(200, 48, 56),
         warning: Color32::from_rgb(176, 112, 10),
         success: Color32::from_rgb(28, 140, 84),
-        radius_sm: 3.0,
-        radius: 4.0,
-        radius_lg: 6.0,
+        radius_sm: 3,
+        radius: 4,
+        radius_lg: 6,
         tab_strip: Color32::from_rgb(226, 226, 226),
         row_selected: Color32::from_rgb(204, 204, 204),
         row_stripe: Color32::from_rgb(244, 244, 244),
@@ -199,8 +202,8 @@ impl Tokens {
         v.hyperlink_color = t.accent;
         v.warn_fg_color = t.warning;
         v.error_fg_color = t.danger;
-        v.window_corner_radius = CornerRadius::same(t.radius_lg as u8);
-        v.menu_corner_radius = CornerRadius::same(t.radius as u8);
+        v.window_corner_radius = CornerRadius::same(t.radius_lg);
+        v.menu_corner_radius = CornerRadius::same(t.radius);
         v.window_shadow = egui::Shadow {
             offset: [0, 10],
             blur: 32,
@@ -220,7 +223,7 @@ impl Tokens {
         v.handle_shape = egui::style::HandleShape::Circle;
         v.striped = true;
         v.indent_has_left_vline = false;
-        let r = CornerRadius::same(t.radius_sm as u8);
+        let r = CornerRadius::same(t.radius_sm);
         let w = &mut v.widgets;
         w.noninteractive.bg_fill = t.card;
         w.noninteractive.weak_bg_fill = t.card;
@@ -322,7 +325,7 @@ const CJK_CANDIDATES: &[&str] = &[
     "C:\\Windows\\Fonts\\YuGothR.ttc",
 ];
 
-/// The font set: Inter first in the proportional family, JetBrains Mono first in the monospace
+/// The font set: Inter first in the proportional family, `JetBrains Mono` first in the monospace
 /// family, the `medium` and `semibold` weights as named families, egui's defaults behind them for
 /// symbols and emoji, and the system CJK fallback last in every family.
 pub fn font_definitions() -> FontDefinitions {
@@ -355,16 +358,19 @@ pub fn font_definitions() -> FontDefinitions {
     for (family, primary) in [("medium", "Inter-Medium"), ("semibold", "Inter-SemiBold")] {
         let mut stack = vec![primary.to_owned()];
         stack.extend(fallback.iter().cloned());
-        fonts.families.insert(FontFamily::Name(family.into()), stack);
+        fonts
+            .families
+            .insert(FontFamily::Name(family.into()), stack);
     }
     if let Some((path, bytes)) = CJK_CANDIDATES
         .iter()
         .find_map(|path| std::fs::read(path).ok().map(|bytes| (*path, bytes)))
     {
         log::info!("CJK fallback font: {path}");
-        fonts
-            .font_data
-            .insert("system-cjk".to_owned(), Arc::new(FontData::from_owned(bytes)));
+        fonts.font_data.insert(
+            "system-cjk".to_owned(),
+            Arc::new(FontData::from_owned(bytes)),
+        );
         for stack in fonts.families.values_mut() {
             stack.push("system-cjk".to_owned());
         }
@@ -374,7 +380,7 @@ pub fn font_definitions() -> FontDefinitions {
     fonts
 }
 
-/// Inter SemiBold at `size` (headings, the brand).
+/// Inter `SemiBold` at `size` (headings, the brand).
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
@@ -411,7 +417,10 @@ pub fn panel_frame(ui: &egui::Ui) -> egui::Frame {
     egui::Frame::NONE
         .fill(visuals.panel_fill)
         .inner_margin(egui::Margin::same(8))
-        .stroke(Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color))
+        .stroke(Stroke::new(
+            1.0,
+            visuals.widgets.noninteractive.bg_stroke.color,
+        ))
 }
 
 /// A bar frame (top bar, status line): the chrome fill and the separator, no inner margin.
@@ -419,25 +428,22 @@ pub fn bar_frame(ui: &egui::Ui) -> egui::Frame {
     let visuals = ui.visuals();
     egui::Frame::NONE
         .fill(visuals.panel_fill)
-        .stroke(Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color))
+        .stroke(Stroke::new(
+            1.0,
+            visuals.widgets.noninteractive.bg_stroke.color,
+        ))
 }
 
 /// A small rounded badge: `text` on `fill` (a count, read-only / read-write).
 pub fn badge(ui: &mut egui::Ui, text: &str, fill: Color32, text_colour: Color32) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        FontId::proportional(10.0),
-        text_colour,
-    );
+    let galley =
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), FontId::proportional(10.0), text_colour);
     let size = galley.size() + egui::vec2(10.0, 3.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.painter().rect_filled(rect, CornerRadius::same(9), fill);
     ui.painter()
-        .rect_filled(rect, CornerRadius::same((size.y / 2.0) as u8), fill);
-    ui.painter().galley(
-        rect.center() - galley.size() / 2.0,
-        galley,
-        text_colour,
-    );
+        .galley(rect.center() - galley.size() / 2.0, galley, text_colour);
     response
 }
 
@@ -459,13 +465,4 @@ pub fn chip(ui: &mut egui::Ui, dot: Option<Color32>, text: &str) -> egui::Respon
             });
         })
         .response
-}
-
-/// The colour for a message that may be an error.
-pub fn tone_for_error(ui: &egui::Ui, is_error: bool) -> Color32 {
-    if is_error {
-        Tokens::of(ui).danger
-    } else {
-        ui.visuals().text_color()
-    }
 }

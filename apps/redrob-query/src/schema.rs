@@ -219,7 +219,7 @@ impl SchemaBrowser {
             }
             let grouped = groups.len() > 1 || groups.first().is_some_and(|(s, _)| !s.is_empty());
             for (schema, nodes) in groups {
-                let mut body = |ui: &mut Ui| {
+                let body = |ui: &mut Ui| {
                     for node in nodes {
                         let expanded = tree.expanded.get(&node.id).copied().unwrap_or(false);
                         let is_selected = selected
@@ -285,8 +285,7 @@ impl SchemaBrowser {
                                         }),
                                         None => {
                                             tree.ddl_wanted.push(node.id.clone());
-                                            if !tree.loading.contains_key(&Some(node.id.clone()))
-                                            {
+                                            if !tree.loading.contains_key(&Some(node.id.clone())) {
                                                 to_load.push(node.id.clone());
                                             }
                                         }
@@ -383,7 +382,7 @@ fn column_row(ui: &mut Ui, column: &MetadataNode) -> Option<String> {
     insert
 }
 
-/// The database the tree is rooted at: the configured database, the SQLite file name, or the host.
+/// The database the tree is rooted at: the configured database, the `SQLite` file name, or the host.
 fn database_name(profile: &ConnectionProfile) -> String {
     let c = &profile.config;
     match profile.kind {
@@ -391,8 +390,10 @@ fn database_name(profile: &ConnectionProfile) -> String {
             .file_path
             .as_deref()
             .and_then(|p| std::path::Path::new(p).file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| ":memory:".to_owned()),
+            .map_or_else(
+                || ":memory:".to_owned(),
+                |n| n.to_string_lossy().into_owned(),
+            ),
         _ => c
             .database
             .clone()

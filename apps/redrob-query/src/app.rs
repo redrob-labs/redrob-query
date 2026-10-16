@@ -50,7 +50,10 @@ impl Status {
 
 /// The shortcuts the shell owns, for Help > Shortcuts and the menus.
 const SHORTCUTS: &[(&str, &str)] = &[
-    ("Ctrl+Enter", "Run the selection or the statement under the cursor"),
+    (
+        "Ctrl+Enter",
+        "Run the selection or the statement under the cursor",
+    ),
     ("F5", "Run the whole text"),
     ("Esc", "Cancel the run in flight"),
     ("Ctrl+T", "New query tab on the active connection"),
@@ -59,7 +62,10 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+F", "Format the query"),
     ("Ctrl+O", "Open a .sql file into the tab"),
     ("Ctrl+S / Ctrl+Shift+S", "Save the tab's text / save as"),
-    ("Ctrl+C", "Copy the selected cell, or the selected rows as TSV"),
+    (
+        "Ctrl+C",
+        "Copy the selected cell, or the selected rows as TSV",
+    ),
     ("Ctrl+Shift+A", "Show or hide the Ask dock"),
     ("Ctrl+N", "New connection"),
     ("Double-click", "Schema tree: insert the name at the caret"),
@@ -499,10 +505,10 @@ impl QueryApp {
             self.show_ai = !self.show_ai;
             self.dirty_since_save = true;
         }
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F5)) {
-            if let Some(tab) = self.tabs.get_mut(self.active) {
-                tab.run_all(&self.workspace);
-            }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F5))
+            && let Some(tab) = self.tabs.get_mut(self.active)
+        {
+            tab.run_all(&self.workspace);
         }
         if ctx.input(|i| i.key_pressed(Key::Escape))
             && let Some(tab) = self.tabs.get_mut(self.active)
@@ -541,7 +547,7 @@ impl QueryApp {
             self.open_file();
         }
         // Ctrl+C with no text field focused copies from the grid.
-        let text_focused = ctx.memory(|m| m.focused()).is_some();
+        let text_focused = ctx.memory(egui::Memory::focused).is_some();
         if !text_focused
             && ctx.input_mut(|i| i.consume_key(cmd, Key::C))
             && let Some(grid) = self.tabs.get(self.active).and_then(|t| t.result.as_ref())
@@ -679,12 +685,9 @@ impl QueryApp {
     }
 
     fn query_menu(&mut self, ui: &mut Ui) {
-        let (can_run, running) = self
-            .tabs
-            .get(self.active)
-            .map_or((false, false), |t| {
-                (t.connection_id.is_some() && !t.is_running(), t.is_running())
-            });
+        let (can_run, running) = self.tabs.get(self.active).map_or((false, false), |t| {
+            (t.connection_id.is_some() && !t.is_running(), t.is_running())
+        });
         if Self::menu_item(ui, t("Run"), "Ctrl+Enter", can_run)
             && let Some(tab) = self.tabs.get_mut(self.active)
         {
@@ -722,7 +725,10 @@ impl QueryApp {
             self.dirty_since_save = true;
             ui.close();
         }
-        if ui.checkbox(&mut self.show_history, t("History panel")).changed() {
+        if ui
+            .checkbox(&mut self.show_history, t("History panel"))
+            .changed()
+        {
             ui.close();
         }
         if ui
@@ -754,7 +760,12 @@ impl QueryApp {
         if Self::menu_item(ui, t("Report an issue…"), "", true) {
             let _ = webbrowser::open("https://github.com/redrob-labs/redrob-query/issues");
         }
-        if Self::menu_item(ui, &tf("About {app}", &[("app", services::APP_NAME)]), "", true) {
+        if Self::menu_item(
+            ui,
+            &tf("About {app}", &[("app", services::APP_NAME)]),
+            "",
+            true,
+        ) {
             self.about_open = true;
         }
     }
@@ -801,12 +812,11 @@ impl QueryApp {
         // The account chip.
         let status = &self.account.status;
         if status.signed_in() {
-            theme::chip(ui, Some(tokens.success), &status.label)
-                .on_hover_text(format!(
-                    "{}\n{}",
-                    t("Signed in with Redrob Launcher"),
-                    self.account.describe_paths()
-                ));
+            theme::chip(ui, Some(tokens.success), &status.label).on_hover_text(format!(
+                "{}\n{}",
+                t("Signed in with Redrob Launcher"),
+                self.account.describe_paths()
+            ));
         } else if ui
             .small_button(t("Connect Redrob"))
             .on_hover_text(format!(
@@ -946,11 +956,8 @@ impl QueryApp {
                                 let body = egui::TextStyle::Body.resolve(ui.style());
                                 let small = egui::TextStyle::Small.resolve(ui.style());
                                 let mut job = egui::text::LayoutJob::default();
-                                let title_colour = if selected {
-                                    tokens.accent
-                                } else {
-                                    tokens.text
-                                };
+                                let title_colour =
+                                    if selected { tokens.accent } else { tokens.text };
                                 job.append(
                                     &tab.title,
                                     0.0,
@@ -1029,9 +1036,11 @@ impl QueryApp {
             });
         });
         ui.label(
-            RichText::new(t("Click to insert into the editor; double-click opens a tab."))
-                .small()
-                .color(tokens.text_faint),
+            RichText::new(t(
+                "Click to insert into the editor; double-click opens a tab.",
+            ))
+            .small()
+            .color(tokens.text_faint),
         );
         let mut insert: Option<String> = None;
         let mut open: Option<HistoryEntry> = None;
@@ -1046,11 +1055,7 @@ impl QueryApp {
                     let one_line: String =
                         entry.query.split_whitespace().collect::<Vec<_>>().join(" ");
                     let shown: String = one_line.chars().take(90).collect();
-                    let colour = if entry.ok {
-                        tokens.text
-                    } else {
-                        tokens.danger
-                    };
+                    let colour = if entry.ok { tokens.text } else { tokens.danger };
                     let response = ui.add(
                         egui::Label::new(RichText::new(shown).monospace().small().color(colour))
                             .sense(egui::Sense::click())
@@ -1216,7 +1221,8 @@ impl QueryApp {
                 [icon.width as usize, icon.height as usize],
                 &icon.rgba,
             );
-            self.about_icon = Some(ctx.load_texture("about-icon", image, egui::TextureOptions::LINEAR));
+            self.about_icon =
+                Some(ctx.load_texture("about-icon", image, egui::TextureOptions::LINEAR));
         }
         let mut open = self.about_open;
         egui::Window::new(tf("About {app}", &[("app", services::APP_NAME)]))
@@ -1281,8 +1287,13 @@ impl eframe::App for QueryApp {
                     .as_ref()
                     .is_some_and(|p| self.profiles.is_connected(p.id));
                 let mut events = Vec::new();
-                self.schema
-                    .ui(ui, &self.workspace, profile.as_ref(), connected, &mut events);
+                self.schema.ui(
+                    ui,
+                    &self.workspace,
+                    profile.as_ref(),
+                    connected,
+                    &mut events,
+                );
                 self.handle_schema_events(events);
             });
         if self.show_ai {
