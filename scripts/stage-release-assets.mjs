@@ -106,9 +106,10 @@ export async function stageReleaseAssets(bundleDir, outDir, version, target) {
 
   // Every installer must land on a name Redrob Launcher reads. Judged on the final names, so a
   // bundler rename upstream, or a new leg whose arch is not in the table, fails here instead of
-  // shipping a release the launcher cannot see.
+  // shipping a release the launcher cannot see. The Korean MSI is the one installer the launcher
+  // is meant not to read (it installs the en-US twin); it ships for manual download.
   const unreadable = [...staged.keys()].filter(
-    (name) => /\.(AppImage|deb|dmg|msi)$/.test(name) && !isLauncherInstallable(name),
+    (name) => /\.(AppImage|deb|dmg|msi)$/.test(name) && !name.endsWith('-ko-KR.msi') && !isLauncherInstallable(name),
   );
   if (unreadable.length > 0) {
     throw new Error(`installers Redrob Launcher cannot read:\n- ${unreadable.join('\n- ')}`);

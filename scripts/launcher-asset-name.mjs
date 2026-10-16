@@ -27,6 +27,10 @@ const TAILS = [
   { arch: 'aarch64', suffix: '.dmg', token: 'macos-aarch64', ext: '.dmg' },
   { arch: 'x64', suffix: '.dmg', token: 'macos-x86_64', ext: '.dmg' },
   { arch: 'x64', suffix: '_en-US.msi', token: 'windows-x64', ext: '.msi' },
+  // WiX builds one MSI per language. The launcher installs the en-US one above (silently, so its
+  // UI language never shows); the Korean one is for a person downloading by hand. Its `-ko-KR`
+  // tail keeps it out of the launcher's `<stem>-<version>-<os>-<arch>.msi` parse on purpose.
+  { arch: 'x64', suffix: '_ko-KR.msi', token: 'windows-x64', ext: '-ko-KR.msi' },
   // Not something the launcher installs (it takes the .msi), renamed so the two Windows
   // files sit next to each other under one stem.
   { arch: 'x64', suffix: '-setup.exe', token: 'windows-x64', ext: '-setup.exe' },

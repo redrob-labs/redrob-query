@@ -6,6 +6,20 @@ where behaviour may change.
 
 ## Unreleased
 
+### Fixed
+
+- The Windows installers are branded. The bundle publisher was tauri's default, the lower-case
+  `redrob` taken from the identifier, so Settings > Apps showed that publisher and Redrob Launcher,
+  which accepts only `Redrob`, did not recognise an installed Query (its Install button stayed). It
+  is `Redrob` now. The MSI `UpgradeCode` is pinned to the value tauri derived (`uuid5("Redrob
+  Query.exe.app.x64")`) so a later product rename cannot orphan installs, and the install identity
+  the launcher reads (display name, publisher, upgrade code, `redrob-query.exe`, asset names) is
+  documented in the README.
+- Both Windows installers speak English and Korean: the NSIS setup asks which language on start and
+  carries the Redrob Query icon, and WiX builds an en-US and a ko-KR MSI. The Korean MSI ships as
+  `redrob-query-<version>-windows-x64-ko-KR.msi`, a name the launcher does not parse on purpose (it
+  installs the English one), with its updater signature under `windows-x86_64-msi-ko-KR`.
+
 ### Changed
 
 - The release pipeline is the redrob-labs shared shape. Windows installers are Authenticode-signed

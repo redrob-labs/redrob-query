@@ -42,6 +42,10 @@ export const UPDATER_KEYS = [
   { suffix: '-macos-x86_64.app.tar.gz', keys: ['darwin-x86_64', 'darwin-x86_64-app'] },
   { suffix: '-windows-x64-setup.exe', keys: ['windows-x86_64', 'windows-x86_64-nsis'] },
   { suffix: '-windows-x64.msi', keys: ['windows-x86_64-msi'] },
+  // The Korean-language MSI. No installed client looks this key up (the updater resolves
+  // `windows-x86_64` and the bundle aliases above); it is here so the signed asset has a home
+  // instead of failing the manifest, and so a Korean install can be verified against latest.json.
+  { suffix: '-windows-x64-ko-KR.msi', keys: ['windows-x86_64-msi-ko-KR'] },
 ];
 
 export function assetUrl(repository, version, name) {

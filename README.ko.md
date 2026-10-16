@@ -79,6 +79,21 @@ Linux에서는 Tauri가 요구하는 WebKitGTK 4.1, JavaScriptCoreGTK 4.1, libso
 
 서명된 인스톨러는 **Signed desktop release** 워크플로만 만듭니다. `vMAJOR.MINOR.PATCH` 태그를 푸시하면(태그는 `package.json`의 버전과 같아야 합니다) Linux x64·macOS Intel·macOS Apple Silicon·Windows x64를 빌드하고, 업데이터 번들에 서명하고, macOS 빌드를 공증하고, Windows 인스톨러는 조직의 Azure Artifact Signing 계정으로 Authenticode 서명합니다 — 번들 직전에 잡이 OpenID Connect로 로그인하고 tauri가 `redrob-labs/.github`의 공용 서명 스크립트를 실행하므로 인증서 파일이나 클라이언트 시크릿은 어디에도 없습니다. 각 레그는 산출물을 [Redrob Launcher](https://github.com/redrob-labs/redrob-launcher)가 설치하는 이름으로 `release-*` 아티팩트에 올리고, 그 파일들로 `latest.json`을 쓰면서 모든 업데이터 서명을 실제 바이트와 대조한 뒤, 공용 `release-publish` 잡이 `SHA256SUMS.txt`·`redrob-launcher.json`과 함께 GitHub Release를 latest로 **발행**합니다(`-` 접미사가 있는 버전은 pre-release로 발행되어 `releases/latest`에 잡히지 않습니다). GitHub Releases가 업데이트 채널이라 `releases/latest/download/latest.json`은 가장 최근에 발행된 버전을 서비스합니다. 워크플로를 `version` 입력으로 수동 실행하면 드라이런입니다: 모든 레그를 빌드·서명·검증하고 아무것도 발행하지 않습니다. 자격 증명이 없으면 서명 없는 산출물을 발행하는 대신 릴리스를 중단합니다.
 
+### Windows 설치 식별자
+
+[Redrob Launcher](https://github.com/redrob-labs/redrob-launcher)는 설정 > 앱 항목과 아래 실행 파일로 설치된 Query를 찾습니다. 그래서 다음 값은 고정이며, 하나라도 바꾸면 런처 쪽이 깨집니다.
+
+| 항목 | 값 | 정의 위치 |
+| --- | --- | --- |
+| 표시 이름(MSI `ProductName`, NSIS 항목) | `Redrob Query` | `src-tauri/tauri.conf.json` `productName` |
+| 게시자 | `Redrob` | `bundle.publisher` |
+| MSI `UpgradeCode` | `44ba9cb6-541c-587e-bcf5-baba9586dd67` | `bundle.windows.wix.upgradeCode`(tauri의 `uuid5("Redrob Query.exe.app.x64")`, 제품명을 바꿔도 움직이지 않도록 고정) |
+| 실행 파일 | `redrob-query.exe` | `src-tauri` 패키지 이름 |
+| 설치 폴더 | MSI: `%ProgramFiles%\Redrob Query`, NSIS: 사용자별, 제거 항목의 `InstallLocation`에 기록 | tauri 기본값 |
+| 릴리스 자산 | `redrob-query-<version>-windows-x64.msi`(런처가 설치하는 것), `-windows-x64-ko-KR.msi`, `-windows-x64-setup.exe` | `scripts/launcher-asset-name.mjs` |
+
+두 인스톨러 모두 영어·한국어입니다. NSIS 설치기는 시작할 때 언어를 묻고, WiX는 언어별로 MSI를 하나씩 만들어 영어 MSI는 런처가, 한국어 MSI는 직접 내려받는 사람이 씁니다. 로그인은 Redrob Code의 것입니다. 엔진이 요청마다 런처의 공유 `account.json`을 읽으므로 런처 로그인이 곧 이 앱의 로그인이고 여기에는 아무것도 저장하지 않습니다(Redrob AI 설정 절 참고).
+
 ## 데스크톱 로컬 작업공간 데이터
 
 데스크톱 모드는 열린 쿼리 탭 최대 30개와 첫 페이지가 성공한 실행 이력 50개를 버전이 붙은 렌더러 로컬 스토리지에 저장합니다. 저장되는 것은 쿼리 텍스트와 탭·이력 메타데이터뿐이고, 결과 행·데이터베이스 자격 증명·AI 프롬프트는 절대 저장하지 않습니다. 빈 탭 초안도 유효하며 복원됩니다. 실행 이력은 첫 페이지에서 성공적으로 끝난, 비어 있지 않은 쿼리만 남깁니다. 쿼리 텍스트는 평문이고 그 안에 민감한 리터럴이 들어 있을 수 있으므로, 이력 메뉴에 **저장 중단 및 로컬 데이터 삭제**가 있습니다. 이 opt-out은 별도로 저장되어 재시작 후에도 사용자가 명시적으로 다시 켤 때까지 꺼진 상태로 유지됩니다. 잘못된·중복·엔진 불일치·과대·손상된 항목은 거부하며, 저장이 실패하면 성공했다고 말하지 않고 실패를 표시합니다.

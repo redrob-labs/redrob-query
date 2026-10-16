@@ -79,6 +79,21 @@ Linux requires the WebKitGTK 4.1, JavaScriptCoreGTK 4.1, libsoup 3, and librsvg 
 
 Signed installers are produced only by the **Signed desktop release** workflow, which a pushed `vMAJOR.MINOR.PATCH` tag starts (the tag must equal the version in `package.json`). It builds Linux x64, macOS Intel, macOS Apple Silicon, and Windows x64, signs the updater bundles, notarizes the macOS builds, and Authenticode-signs the Windows installers through the organisation's Azure Artifact Signing account -- the job logs in with OpenID Connect right before bundling and tauri runs the shared `redrob-labs/.github` signing script; no certificate file or client secret exists anywhere. Each leg uploads its files as a `release-*` artifact under the names [Redrob Launcher](https://github.com/redrob-labs/redrob-launcher) installs, `latest.json` is written from them and every updater signature is verified against its bytes, and the shared `release-publish` job then **publishes** the GitHub Release as latest with `SHA256SUMS.txt` and `redrob-launcher.json` beside the installers (a version with a `-` suffix is published as a pre-release, which `releases/latest` does not serve). GitHub Releases is the update channel, so `releases/latest/download/latest.json` serves the newest published version. A manual run of the workflow with a `version` input is a dry run: it builds, signs and verifies every leg and publishes nothing. Missing credentials stop the release rather than publishing unsigned artifacts.
 
+### Windows install identity
+
+[Redrob Launcher](https://github.com/redrob-labs/redrob-launcher) finds an installed Query through Settings > Apps and the exe below, so these values are fixed and changing any of them is a breaking change for the launcher:
+
+| What | Value | Where it is set |
+| --- | --- | --- |
+| Display name (MSI `ProductName`, NSIS entry) | `Redrob Query` | `src-tauri/tauri.conf.json` `productName` |
+| Publisher | `Redrob` | `bundle.publisher` |
+| MSI `UpgradeCode` | `44ba9cb6-541c-587e-bcf5-baba9586dd67` | `bundle.windows.wix.upgradeCode` (tauri's `uuid5("Redrob Query.exe.app.x64")`, pinned so a product rename cannot move it) |
+| Executable | `redrob-query.exe` | the `src-tauri` package name |
+| Install folder | MSI: `%ProgramFiles%\Redrob Query`; NSIS: per-user, recorded as `InstallLocation` in its uninstall entry | tauri defaults |
+| Release assets | `redrob-query-<version>-windows-x64.msi` (what the launcher installs), `-windows-x64-ko-KR.msi`, `-windows-x64-setup.exe` | `scripts/launcher-asset-name.mjs` |
+
+Both installers are English and Korean: the NSIS setup asks which on start, and WiX builds one MSI per language, so the English MSI is the launcher's and the Korean one is for a person downloading by hand. Signing in is Redrob Code's: the engine reads the launcher's shared `account.json` on every request, so a launcher sign-in is this app's sign-in with nothing stored here (see Redrob AI configuration).
+
 ## Desktop local workspace data
 
 Desktop mode stores up to 30 open query tabs and 50 successful first-page history entries in versioned renderer local storage. Only query text and tab/history metadata are stored, never result rows, database credentials, or AI prompts. Empty tab drafts are valid and restored; execution history retains only nonempty queries that completed successfully on the first page. Query text is plaintext and may itself contain sensitive literals, so the history menu provides **Stop saving & clear local data**. That opt-out is stored separately and remains disabled across restarts until the user explicitly re-enables saving. Invalid, duplicate, engine-incompatible, oversized, or corrupt entries are rejected; storage failure is shown instead of claiming a successful save.
