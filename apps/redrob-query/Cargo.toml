@@ -23,6 +23,8 @@ env_logger = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The system language on first run (Windows has no LANG); the same pin as redrob-canvas.
+sys-locale = "=0.3.2"
 tokio = { workspace = true }
 uuid = { workspace = true }
 

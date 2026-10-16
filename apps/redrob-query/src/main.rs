@@ -21,6 +21,7 @@ mod changes;
 mod editor;
 mod grid;
 mod highlight;
+mod i18n;
 mod mongo;
 mod profiles;
 mod schema;

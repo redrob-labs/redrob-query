@@ -4,6 +4,36 @@ The release workflow's notes point here, so this file is what a download's notes
 follow the `vMAJOR.MINOR.PATCH` tags that trigger a release; while the major is 0 a minor bump is
 where behaviour may change.
 
+## 0.4.0 - 2026-10-16
+
+### Changed
+
+- **The window is laid out like Redrob Canvas.** One theme owned by the shell (canvas's Pro
+  tokens, dark and light grounds, following the system with a Help > Theme override; Inter for the
+  interface, JetBrains Mono for SQL and grid cells, a system CJK fallback), a thin top bar with File
+  / Connection / Query / View / Help menus and a right slot showing the active connection with its
+  read-only / read-write badge beside the Redrob account, a left panel with the connections tree
+  (grouped by database, connect-state dots, filter) and the active connection's schema tree
+  (database > schema > tables > columns with dimmed types, filter; double-click inserts the name;
+  Select top 100 / Copy name / DDL on right-click), tabbed editors (Ctrl+T, Ctrl+W, Ctrl+1…9; a
+  tab shows its connection and a dirty dot) with the result area under a splitter as Grid /
+  Messages / Changes tabs, the Ask dock on the right (Ctrl+Shift+A), and a status line at the
+  bottom. Every string is in English and Korean (Help > Language).
+- **Running.** Ctrl+Enter runs the selection or the statement under the cursor, F5 the whole
+  text, Esc cancels with a spinner on the status line (`Pending::cancel` in the engine). Errors
+  go to the Messages tab and the red status line; there is no error dialog.
+- **Grid.** Monospace cells, header click sorts, column edges drag, click selects a cell and
+  Ctrl+C copies it (Ctrl+click several rows, Ctrl+C copies them as TSV), NULL dimmed italic,
+  long text ellipsized with the full value as a tooltip, row range and page controls at the bottom.
+- **Reviewed edits** stage in the grid, count on the Changes tab's badge, and show the exact SQL
+  the engine will run (bound values beside it) before Apply or Discard.
+- **First run** opens on an empty state with one action, New connection; the connection form is
+  a modal with a Test button and inline error text.
+- **View > History** lists past runs; click inserts into the editor, double-click opens a tab.
+  Help > Shortcuts lists the keys.
+- **Release manifest.** `redrob-launcher.json` names the launcher icon `redrob-query.png`,
+  uploaded as one more release asset.
+
 ## 0.3.0 - 2026-10-16
 
 ### Changed

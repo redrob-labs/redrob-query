@@ -400,6 +400,10 @@ jobs:
               python3 tools/release/make_deb.py "$RUNNER_TEMP/stage" "$VERSION" "$out/${base}.deb"
               # The licence set once, from Linux, rather than three times under the same name.
               cp LICENSE NOTICE UPSTREAM_NOTICES.md "$out/"
+              # The launcher's catalog icon: the brand PNG (square, 512 px, well under 1 MiB) as one
+              # more asset, named in redrob-launcher.json by the publish job (launcher_icon below;
+              # redrob-launcher docs/release-manifest.md).
+              cp resources/icons/hicolor/512x512/apps/redrob-query.png "$out/redrob-query.png"
               ;;
           esac
 
@@ -563,14 +567,15 @@ jobs:
             fi
           done
 
-          # The licence artifacts are unconditional. The checksums and redrob-launcher.json are
-          # the publish job's: it writes both over this same set of files.
+          # The licence artifacts and the launcher icon are unconditional. The checksums and
+          # redrob-launcher.json are the publish job's: it writes both over this same set of files.
           for pattern in \
             '^LICENSE$' \
             '^NOTICE$' \
-            '^UPSTREAM_NOTICES\.md$'; do
+            '^UPSTREAM_NOTICES\.md$' \
+            '^redrob-query\.png$'; do
             if ! printf '%s\n' $names | grep -qE "$pattern"; then
-              echo "::error::no asset matching ${pattern}; the licence texts and notices must accompany every binary"
+              echo "::error::no asset matching ${pattern}; the licence texts, notices and the launcher icon must accompany every binary"
               exit 1
             fi
           done
@@ -583,7 +588,8 @@ jobs:
           echo "Every built platform asset (${REQUIRED_ARCHIVES}) and the licence files are present."
 
   # The shared redrob-labs publish job: SHA256SUMS.txt over every asset, redrob-launcher.json (this
-  # app reads the launcher's shared account file directly), and the release v<version> created
+  # app reads the launcher's shared account file directly; `icon` names redrob-query.png, the
+  # brand PNG the Linux leg uploaded), and the release v<version> created
   # and PUBLISHED as latest (prerelease when the version carries a `-`). Only for a real tag, never
   # for a dry run, and only when every job before it succeeded. `tag` and `target` are passed
   # explicitly because this workflow is dispatched from a branch: github.sha is the branch head, not
@@ -600,6 +606,8 @@ jobs:
       version: ${{ needs.validate.outputs.version }}
       title: Redrob Query
       launcher_manifest: true
+      # The PNG the Linux leg uploaded among release-*: redrob-launcher.json names it as `icon`.
+      launcher_icon: redrob-query.png
       publish: true
       tag: ${{ inputs.tag }}
       target: ${{ needs.validate.outputs.sha }}
