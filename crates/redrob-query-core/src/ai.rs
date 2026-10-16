@@ -1,18 +1,22 @@
-//! Redrob chat-completion client, through the shared Redrob Code daemon.
+//! Redrob chat-completion client, straight to the Redrob console with the shared account.
 //!
-//! One `redrob serve --register` runs per user and every Redrob app attaches to it (redrob-code
-//! `docs/LOCAL-ENGINE-API.md`, section 3). The daemon holds the Redrob console key and calls the
-//! console with its own credential; this app sends the daemon's Basic secret, its app name and a
-//! session id on every chat request and never sees a console key on that path. There is
-//! deliberately no direct path to the console: two paths would hide whether masking applied.
+//! The launcher signs the computer in once and writes `account.json` (`crate::account`); this
+//! client reads that account when a request is made and posts to `{apiBaseUrl}/chat/completions`
+//! with `Authorization: Bearer <apiKey>` and model `auto`. There is no daemon in between any more:
+//! the Redrob Code engine path answered `auto` with "model not available" and swallowed the
+//! console's error body, so a person saw neither the real reason nor a way to sign in.
+//!
+//! The console's own `error.message` is surfaced verbatim (bounded, with the key never echoed by
+//! construction: it travels only in the header). A missing account is `DataError::AiAuthentication`,
+//! which the shell renders as "sign in with Redrob Launcher".
 
 use std::{
-    sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
 use futures_util::StreamExt;
-use redrob_engine_client::{Record, Unavailable, app_headers, openai_base};
 use reqwest::{Client, StatusCode, header::HeaderValue};
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
@@ -22,46 +26,28 @@ use uuid::Uuid;
 
 use crate::{
     AiAssistantRequest, AiChatRequest, AiChatResponse, AiMessage, AiRole, AiUsage, DataError,
-    DatabaseKind, QueryLanguage, Result, secret::SecretStore,
+    DatabaseKind, QueryLanguage, Result,
+    account::{self, AccountSource, SharedAccount},
 };
 
-/// The name the daemon labels this app's requests with (`x-redrob-app`).
-pub const ENGINE_APP: &str = "query";
-/// How long a daemon started by this app stays up with nobody attached.
-pub const DEFAULT_IDLE_EXIT_MINUTES: u32 = 10;
-/// Where a person gets Redrob Code when it is not installed: the launcher installs it.
-pub const INSTALL_URL: &str = "https://github.com/redrob-labs/redrob-launcher/releases/latest";
-/// The sentence shown when no `redrob` binary exists. The link is [`INSTALL_URL`].
-pub const NOT_INSTALLED_MESSAGE: &str =
-    "Redrob Code is not installed. Install it with Redrob Launcher.";
-/// The provider id the daemon lists the Redrob console under (`GET /provider`, `PUT /auth/redrob`).
-pub const REDROB_PROVIDER_ID: &str = "redrob";
-/// The daemon's own error code when it holds no console credential (LOCAL-ENGINE-API.md, Errors).
-const ENGINE_NOT_AUTHENTICATED: &str = "engine_not_authenticated";
-/// The daemon lists a credential-less Redrob provider with this placeholder; it is not a key.
-const PUBLIC_SENTINEL: &str = "public";
-/// The keyring slot an earlier version of this app saved its own console key in. It is only read
-/// to hand that key to the engine once, then deleted; profile storage still reserves the id.
+/// Where a person gets Redrob Launcher, which is where signing in happens.
+pub const INSTALL_URL: &str = account::LAUNCHER_URL;
+/// The sentence shown when no account is signed in. The link is [`INSTALL_URL`].
+pub const NOT_SIGNED_IN_MESSAGE: &str =
+    "Not signed in. Sign in with Redrob Launcher and this app will use that account.";
+/// The keyring slot an earlier version of this app saved its own console key in. Profile storage
+/// still reserves the id; nothing reads it any more.
 pub const AI_SECRET_ID: Uuid = Uuid::from_u128(0x7265_6472_6f62_4169_0000_0000_0000_0001);
 pub const MAX_AI_PROMPT_BYTES: usize = 8 * 1024;
 pub const MAX_AI_ACTIVE_QUERY_BYTES: usize = 64 * 1024;
 const MAX_ATTEMPTS: usize = 3;
 const AI_TEMPERATURE: f32 = 0.2;
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+/// How much of the console's `error.message` is shown; longer is not a message, it is a dump.
+const MAX_ERROR_MESSAGE_CHARS: usize = 400;
 
-/// What the app renders for a missing engine: the install sentence with its link, or the start
-/// failure's own reason. No fallback is named because there is none.
-#[must_use]
-pub fn unavailable_message(unavailable: &Unavailable) -> String {
-    match unavailable {
-        Unavailable::NotInstalled => format!("{NOT_INSTALLED_MESSAGE} {INSTALL_URL}"),
-        Unavailable::StartFailed(reason) => {
-            format!("The Redrob Code engine could not be started: {reason}")
-        }
-    }
-}
-
-/// Builds the provider request from the narrow, renderer-facing assistant contract.
+/// Builds the provider request from the narrow assistant contract.
 pub fn build_assistant_chat_request(input: &AiAssistantRequest) -> Result<AiChatRequest> {
     if input.prompt.trim().is_empty() {
         return Err(DataError::AiRejected("prompt cannot be empty".to_owned()));
@@ -137,78 +123,87 @@ pub fn build_assistant_chat_request(input: &AiAssistantRequest) -> Result<AiChat
     })
 }
 
-/// How the daemon is found: [`redrob_engine_client::require_as`] in the app, a closure in tests.
-pub type EngineResolver = Arc<dyn Fn() -> std::result::Result<Record, Unavailable> + Send + Sync>;
+/// How the account is found: [`account::current_account`] in the app, a closure in tests.
+pub type AccountResolver = Arc<dyn Fn() -> Option<SharedAccount> + Send + Sync>;
 
-/// Async client for the shared Redrob Code daemon.
+/// Async client for the Redrob console's OpenAI-compatible chat route.
 ///
-/// The daemon is found (or started) on the first request and its record kept. The record's secret
-/// rotates on every daemon start, so a 401 or a refused connection re-reads the record once and
-/// retries once; a second failure is reported. Every request carries the daemon's
-/// `Authorization`, `x-redrob-app: query` and this client's `x-redrob-session`.
+/// The account is read on every request (the person may sign in or out while the app is open), so
+/// nothing here caches a key. Every request carries `Authorization: Bearer <apiKey>` (marked
+/// sensitive), `x-redrob-app: query` and this client's `x-redrob-session`.
 pub struct AiClient {
     client: Client,
-    secrets: Arc<dyn SecretStore>,
     /// One id per client, so the console groups this app run's requests together.
     session: String,
-    record: Mutex<Option<Record>>,
-    resolver: EngineResolver,
+    resolver: AccountResolver,
 }
 
 impl AiClient {
-    /// Takes no network action: the daemon is looked up when the first request needs it.
-    pub fn new(secrets: Arc<dyn SecretStore>) -> Self {
-        Self::with_resolver(
-            secrets,
-            Arc::new(|| redrob_engine_client::require_as(ENGINE_APP, DEFAULT_IDLE_EXIT_MINUTES)),
-        )
+    /// Reads the account by the contract's precedence; `own_file` is this app's own `account.json`.
+    pub fn new(own_file: Option<PathBuf>) -> Self {
+        Self::with_resolver(Arc::new(move || {
+            account::current_account(own_file.as_deref().map(Path::new))
+        }))
     }
 
-    /// A client whose daemon lookup is `resolver` (tests point it at a fake daemon's record).
-    pub fn with_resolver(secrets: Arc<dyn SecretStore>, resolver: EngineResolver) -> Self {
-        // The daemon listens on 127.0.0.1 over plain HTTP; nothing here leaves the machine.
+    /// A client whose account lookup is `resolver` (tests point it at a fake console).
+    pub fn with_resolver(resolver: AccountResolver) -> Self {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(45))
-            .user_agent("Redrob-Query/0.2")
+            .timeout(Duration::from_secs(90))
+            .user_agent(concat!("Redrob-Query/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("static HTTP client configuration is valid");
         Self {
             client,
-            secrets,
             session: Uuid::new_v4().to_string(),
-            record: Mutex::new(None),
             resolver,
         }
     }
 
+    /// The account in force, read fresh. `None` means not signed in.
+    #[must_use]
+    pub fn account(&self) -> Option<SharedAccount> {
+        (self.resolver)()
+    }
+
+    /// Whether an account is signed in, and whose it is. Never a key.
+    #[must_use]
+    pub fn account_status(&self) -> AiKeyStatus {
+        self.account()
+            .as_ref()
+            .map_or_else(AiKeyStatus::signed_out, AiKeyStatus::from_account)
+    }
+
     pub async fn chat(&self, request: AiChatRequest) -> Result<AiChatResponse> {
         validate_request(&request)?;
+        let account = self.account().ok_or(DataError::AiAuthentication)?;
+        let url = account.chat_completions_url();
+        let wire = WireRequest::from(&request);
         let mut last_error = DataError::AiUnavailable;
 
         for attempt in 0..MAX_ATTEMPTS {
             let response = self
-                .send(|record| self.client.post(chat_endpoint(record)).json(&request))
+                .authorised(&account, self.client.post(&url).json(&wire))
+                .send()
                 .await;
             match response {
                 Ok(response) if response.status().is_success() => {
-                    let bytes = bounded_response(response, 2 * 1024 * 1024).await?;
+                    let bytes = bounded_response(response, MAX_RESPONSE_BYTES).await?;
                     return parse_response(&bytes);
                 }
                 Ok(response) => {
                     let status = response.status();
-                    last_error = classify_status(status);
+                    let body = bounded_response(response, MAX_ERROR_BODY_BYTES)
+                        .await
+                        .unwrap_or_default();
+                    last_error = classify_failure(status, &body);
                     if !retryable_status(status) || attempt + 1 == MAX_ATTEMPTS {
                         return Err(last_error);
                     }
                 }
-                // A missing engine or a daemon that is not signed in does not get better by asking
-                // again; a transport failure might.
-                Err(error @ (DataError::EngineUnavailable(_) | DataError::AiAuthentication)) => {
-                    return Err(error);
-                }
                 Err(error) => {
-                    last_error = error;
+                    last_error = transport_error(&error);
                     if attempt + 1 == MAX_ATTEMPTS {
                         return Err(last_error);
                     }
@@ -219,231 +214,94 @@ impl AiClient {
         Err(last_error)
     }
 
-    /// Whether the daemon is signed in to the Redrob console (`GET /provider`), and with whose key.
-    /// Read fresh on every call: the person may sign in or out elsewhere while this app is open.
-    pub async fn account_status(&self) -> Result<AiKeyStatus> {
-        let response = self
-            .send(|record| self.client.get(daemon_endpoint(record, "provider")))
-            .await?;
-        if !response.status().is_success() {
-            return Err(classify_status(response.status()));
-        }
-        let bytes = bounded_response(response, 2 * 1024 * 1024).await?;
-        let list: Value =
-            serde_json::from_slice(&bytes).map_err(|_| DataError::AiInvalidResponse)?;
-        Ok(AiKeyStatus::from_provider_list(&list))
-    }
-
-    /// Hands a console key to the daemon (`PUT /auth/redrob`), which keeps it from here on. A second
-    /// call rotates it. Nothing in this app holds the key afterwards.
-    pub async fn sign_in(&self, key: &str) -> Result<()> {
-        if key.trim().is_empty() {
-            return Err(DataError::SecretUnavailable);
-        }
-        let response = self.send(|record| self.auth_request(record, key)).await?;
-        accepted_key(response.status())
-    }
-
-    /// Finds or starts the daemon, off the async runtime: the client crate shells out to
-    /// `redrob service start` and probes with blocking HTTP.
-    async fn connect(&self) -> Result<Record> {
-        if let Some(record) = self.lock_record().clone() {
-            return Ok(record);
-        }
-        let resolver = Arc::clone(&self.resolver);
-        let record = tokio::task::spawn_blocking(move || resolver())
-            .await
-            .map_err(|_| DataError::AiUnavailable)?
-            .map_err(|unavailable| {
-                DataError::EngineUnavailable(unavailable_message(&unavailable))
-            })?;
-        *self.lock_record() = Some(record.clone());
-        self.migrate_legacy_key(&record).await;
-        Ok(record)
-    }
-
-    /// A key an earlier version of this app saved in the OS keyring is handed to the engine once
-    /// and deleted locally; the engine keeps it from then on. A failure leaves it for the next run.
-    async fn migrate_legacy_key(&self, record: &Record) {
-        let Ok(Some(key)) = self.secrets.get(AI_SECRET_ID) else {
-            return;
-        };
-        let accepted = self
-            .headers(record, self.auth_request(record, key.expose_secret()))
-            .send()
-            .await
-            .is_ok_and(|response| response.status().is_success());
-        if accepted {
-            let _ = self.secrets.delete(AI_SECRET_ID);
-        }
-    }
-
-    fn auth_request(&self, record: &Record, key: &str) -> reqwest::RequestBuilder {
-        self.client
-            .put(daemon_endpoint(
-                record,
-                &format!("auth/{REDROB_PROVIDER_ID}"),
-            ))
-            .json(&serde_json::json!({"type": "api", "key": key}))
-    }
-
-    fn lock_record(&self) -> std::sync::MutexGuard<'_, Option<Record>> {
-        self.record
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Sends one request to the daemon with its headers, retrying once with a fresh record when the
-    /// daemon has evidently restarted (connection refused, or 401 against the secret in hand). A 401
-    /// whose code says the daemon itself is not signed in is reported as such, not retried.
-    async fn send(
+    fn authorised(
         &self,
-        build: impl Fn(&Record) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response> {
-        let record = self.connect().await?;
-        let first = self.headers(&record, build(&record)).send().await;
-        match first {
-            Ok(response) if response.status() != StatusCode::UNAUTHORIZED => return Ok(response),
-            Ok(response) => {
-                let body = bounded_response(response, MAX_ERROR_BODY_BYTES)
-                    .await
-                    .unwrap_or_default();
-                if names_engine_not_authenticated(&body) {
-                    return Err(DataError::AiAuthentication);
-                }
-            }
-            Err(error) if !error.is_connect() => return Err(transport_error(&error)),
-            Err(_) => {}
-        }
-        *self.lock_record() = None;
-        let record = self.connect().await?;
-        self.headers(&record, build(&record))
-            .send()
-            .await
-            .map_err(|error| transport_error(&error))
-    }
-
-    fn headers(
-        &self,
-        record: &Record,
+        account: &SharedAccount,
         builder: reqwest::RequestBuilder,
     ) -> reqwest::RequestBuilder {
-        let mut builder = builder;
-        for (name, value) in app_headers(record, ENGINE_APP, Some(&self.session)) {
-            let Ok(mut header) = HeaderValue::from_str(&value) else {
-                continue;
-            };
-            if name == "Authorization" {
-                header.set_sensitive(true);
-            }
-            builder = builder.header(name, header);
-        }
+        let mut bearer = HeaderValue::from_str(&format!(
+            "Bearer {}",
+            account.api_key.expose_secret()
+        ))
+        .unwrap_or_else(|_| HeaderValue::from_static("Bearer"));
+        bearer.set_sensitive(true);
         builder
+            .header(reqwest::header::AUTHORIZATION, bearer)
+            .header("x-redrob-app", "query")
+            .header("x-redrob-session", &self.session)
     }
-}
-
-/// `<daemon>/v1/chat/completions`: the OpenAI-compatible route.
-fn chat_endpoint(record: &Record) -> String {
-    format!("{}/chat/completions", openai_base(record))
-}
-
-/// `<daemon>/<path>`: the daemon's own routes (`provider`, `auth/<provider>`).
-fn daemon_endpoint(record: &Record, path: &str) -> String {
-    format!("{}/{path}", record.url.trim_end_matches('/'))
 }
 
 fn transport_error(error: &reqwest::Error) -> DataError {
     if error.is_timeout() {
-        DataError::Timeout(Duration::from_secs(45))
+        DataError::Timeout(Duration::from_secs(90))
     } else {
         DataError::AiUnavailable
     }
 }
 
-/// The daemon's failure body could echo the payload; only the status is kept.
-fn accepted_key(status: StatusCode) -> Result<()> {
-    if status.is_success() {
-        Ok(())
-    } else {
-        Err(DataError::AiRejected(
-            "the engine did not accept the Redrob key".to_owned(),
-        ))
+/// The console's `error.message`, when its body carries one, trimmed to a sentence or two.
+fn error_message(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let message = value
+        .pointer("/error/message")
+        .or_else(|| value.get("message"))
+        .and_then(Value::as_str)?
+        .trim();
+    if message.is_empty() {
+        return None;
     }
+    let mut text: String = message.chars().take(MAX_ERROR_MESSAGE_CHARS).collect();
+    if text.len() < message.len() {
+        text.push('…');
+    }
+    Some(text)
 }
 
-/// Branches on the daemon's error `code`, never on its message, which is localized.
-fn names_engine_not_authenticated(body: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .pointer("/error/code")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .is_some_and(|code| code == ENGINE_NOT_AUTHENTICATED)
-}
-
-/// Whether the engine is signed in to the Redrob console, and with whose key. Never a key.
+/// Whether an account is signed in, and whose it is. Never a key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiKeyStatus {
     pub source: AiKeySource,
+    /// `accountName` and `apiKeyName` as the status line shows them; empty when signed out.
+    #[serde(default)]
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiKeySource {
-    /// The engine holds a console key handed to it by an app, its environment or its config.
-    Engine,
-    /// The engine uses Redrob Launcher's shared sign-in. Signing out happens there.
+    /// `REDROB_API_KEY` in the environment, or this app's own `account.json`.
+    Own,
+    /// Redrob Launcher's shared sign-in. Signing out happens there.
     Launcher,
-    /// The engine has no console key.
+    /// No account is signed in.
     None,
 }
 
 impl AiKeyStatus {
     #[must_use]
-    pub const fn signed_out() -> Self {
+    pub fn signed_out() -> Self {
         Self {
             source: AiKeySource::None,
+            label: String::new(),
         }
     }
 
-    /// Reads `GET /provider`: a `redrob` entry with a credential means signed in. The shape is the
-    /// one the other Redrob apps read (`{"all": [{"id", "source", "key", "options": {"apiKey"}}]}`).
     #[must_use]
-    pub fn from_provider_list(list: &Value) -> Self {
-        let Some(entry) = list.get("all").and_then(Value::as_array).and_then(|all| {
-            all.iter()
-                .find(|entry| entry.get("id").and_then(Value::as_str) == Some(REDROB_PROVIDER_ID))
-        }) else {
-            return Self::signed_out();
-        };
-        if entry
-            .pointer("/options/apiKey")
-            .and_then(Value::as_str)
-            .is_some_and(|key| key == PUBLIC_SENTINEL)
-        {
-            return Self::signed_out();
+    pub fn from_account(account: &SharedAccount) -> Self {
+        Self {
+            source: match account.source {
+                AccountSource::Launcher => AiKeySource::Launcher,
+                AccountSource::Environment | AccountSource::Own => AiKeySource::Own,
+            },
+            label: account.label(),
         }
-        let source = entry.get("source").and_then(Value::as_str);
-        let has_key = entry
-            .get("key")
-            .and_then(Value::as_str)
-            .is_some_and(|key| !key.trim().is_empty());
-        match source {
-            Some("launcher") => Self {
-                source: AiKeySource::Launcher,
-            },
-            Some("api" | "env") => Self {
-                source: AiKeySource::Engine,
-            },
-            _ if has_key => Self {
-                source: AiKeySource::Engine,
-            },
-            _ => Self::signed_out(),
-        }
+    }
+
+    #[must_use]
+    pub fn signed_in(&self) -> bool {
+        self.source != AiKeySource::None
     }
 }
 
@@ -499,18 +357,47 @@ fn retryable_status(status: StatusCode) -> bool {
     status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
 
-fn classify_status(status: StatusCode) -> DataError {
-    match status {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => DataError::AiAuthentication,
-        StatusCode::TOO_MANY_REQUESTS => DataError::AiUnavailable,
-        value if value.is_server_error() => DataError::AiUnavailable,
-        _ => DataError::AiRejected(format!("service returned HTTP {status}")),
+/// The console's own sentence when it gave one; the status class otherwise.
+fn classify_failure(status: StatusCode, body: &[u8]) -> DataError {
+    match (status, error_message(body)) {
+        (StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN, _) => DataError::AiAuthentication,
+        (StatusCode::TOO_MANY_REQUESTS, _) => DataError::AiUnavailable,
+        (value, Some(message)) if value.is_server_error() => {
+            DataError::AiRejected(format!("the console answered HTTP {status}: {message}"))
+        }
+        (value, None) if value.is_server_error() => DataError::AiUnavailable,
+        (_, Some(message)) => DataError::AiRejected(message),
+        (_, None) => DataError::AiRejected(format!("service returned HTTP {status}")),
+    }
+}
+
+/// The OpenAI-compatible request body: snake_case on the wire, whatever the models use in-app.
+#[derive(Serialize)]
+struct WireRequest<'a> {
+    model: &'a str,
+    messages: &'a [AiMessage],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+}
+
+impl<'a> From<&'a AiChatRequest> for WireRequest<'a> {
+    fn from(request: &'a AiChatRequest) -> Self {
+        Self {
+            model: &request.model,
+            messages: &request.messages,
+            temperature: request.temperature,
+            max_tokens: request.max_tokens,
+        }
     }
 }
 
 #[derive(Deserialize)]
 struct WireResponse {
+    #[serde(default)]
     id: String,
+    #[serde(default)]
     model: String,
     choices: Vec<WireChoice>,
     usage: Option<WireUsage>,
@@ -524,16 +411,18 @@ struct WireChoice {
 #[derive(Deserialize)]
 struct WireMessage {
     role: String,
-    content: String,
+    /// Some providers answer `null` content alongside tool calls; that is not an answer here.
+    #[serde(default)]
+    content: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct WireUsage {
-    #[serde(rename = "prompt_tokens")]
+    #[serde(rename = "prompt_tokens", default)]
     prompt: u32,
-    #[serde(rename = "completion_tokens")]
+    #[serde(rename = "completion_tokens", default)]
     completion: u32,
-    #[serde(rename = "total_tokens")]
+    #[serde(rename = "total_tokens", default)]
     total: u32,
 }
 
@@ -545,7 +434,8 @@ fn parse_response(bytes: &[u8]) -> Result<AiChatResponse> {
         .into_iter()
         .next()
         .ok_or(DataError::AiInvalidResponse)?;
-    if choice.message.content.is_empty() {
+    let content = choice.message.content.unwrap_or_default();
+    if content.is_empty() {
         return Err(DataError::AiInvalidResponse);
     }
     let role = match choice.message.role.as_str() {
@@ -559,7 +449,7 @@ fn parse_response(bytes: &[u8]) -> Result<AiChatResponse> {
         model: wire.model,
         message: AiMessage {
             role,
-            content: choice.message.content,
+            content,
         },
         usage: wire.usage.map(|usage| AiUsage {
             prompt_tokens: usage.prompt,
@@ -572,24 +462,20 @@ fn parse_response(bytes: &[u8]) -> Result<AiChatResponse> {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{HashMap, VecDeque},
+        collections::HashMap,
         io::{BufRead, BufReader, Read, Write},
         net::{TcpListener, TcpStream},
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, Mutex},
         thread,
         time::Duration as StdDuration,
     };
 
+    use secrecy::SecretString;
     use serde_json::json;
-
-    use crate::secret::MemorySecretStore;
 
     use super::*;
 
-    /// One request as the fake daemon saw it.
+    /// One request as the fake console saw it.
     #[derive(Clone, Debug)]
     struct Seen {
         method: String,
@@ -606,7 +492,7 @@ mod tests {
         }
     }
 
-    /// What the fake daemon answers with. `declared_length` lies in `Content-Length` when set.
+    /// What the fake console answers with. `declared_length` lies in `Content-Length` when set.
     struct Answer {
         status: u16,
         body: String,
@@ -633,20 +519,20 @@ mod tests {
         )
     }
 
-    /// A tiny stand-in for the shared daemon on 127.0.0.1: the wrong secret is 401 everywhere, as
-    /// the real daemon does; `/api/health` answers; everything else is up to `answer`.
-    struct FakeDaemon {
-        url: String,
-        secret: String,
+    /// A tiny stand-in for the console on 127.0.0.1: the wrong bearer is 401 everywhere, as the
+    /// real console does; everything else is up to `answer`.
+    struct FakeConsole {
+        base_url: String,
+        key: String,
         seen: Arc<Mutex<Vec<Seen>>>,
     }
 
-    impl FakeDaemon {
-        fn start(secret: &str, answer: impl Fn(&Seen) -> Answer + Send + Sync + 'static) -> Self {
+    impl FakeConsole {
+        fn start(key: &str, answer: impl Fn(&Seen) -> Answer + Send + Sync + 'static) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
             let seen = Arc::new(Mutex::new(Vec::new()));
-            let expected = redrob_engine_client::authorization(secret);
+            let expected = format!("Bearer {key}");
             let log = Arc::clone(&seen);
             thread::spawn(move || {
                 for stream in listener.incoming() {
@@ -658,10 +544,8 @@ mod tests {
                     let answer = if request.header("authorization") != Some(expected.as_str()) {
                         reply(
                             401,
-                            json!({"error": {"message": "unauthorized"}}).to_string(),
+                            json!({"error": {"message": "invalid api key"}}).to_string(),
                         )
-                    } else if request.path == "/api/health" {
-                        reply(200, json!({"healthy": true}).to_string())
                     } else {
                         answer(&request)
                     };
@@ -675,24 +559,23 @@ mod tests {
                 }
             });
             Self {
-                url: format!("http://127.0.0.1:{port}"),
-                secret: secret.into(),
+                base_url: format!("http://127.0.0.1:{port}/api/backend/v1"),
+                key: key.into(),
                 seen,
             }
         }
 
-        fn record(&self) -> Record {
-            self.record_with_secret(&self.secret)
+        fn account(&self) -> SharedAccount {
+            self.account_with_key(&self.key)
         }
 
-        fn record_with_secret(&self, secret: &str) -> Record {
-            Record {
-                id: format!("id-{secret}"),
-                version: "0.6.3".into(),
-                url: self.url.clone(),
-                port: self.url.rsplit(':').next().unwrap().parse().unwrap(),
-                pid: std::process::id(),
-                secret: secret.into(),
+        fn account_with_key(&self, key: &str) -> SharedAccount {
+            SharedAccount {
+                api_key: SecretString::from(key.to_owned()),
+                api_key_name: "Redrob Launcher".to_owned(),
+                account_name: "Acme".to_owned(),
+                api_base_url: self.base_url.clone(),
+                source: AccountSource::Launcher,
             }
         }
 
@@ -736,31 +619,8 @@ mod tests {
         })
     }
 
-    /// A resolver that answers from a script, repeating its last entry, and counts its calls.
-    fn scripted(
-        script: Vec<std::result::Result<Record, Unavailable>>,
-    ) -> (EngineResolver, Arc<AtomicUsize>) {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&calls);
-        let script = Mutex::new(VecDeque::from(script));
-        let resolver: EngineResolver = Arc::new(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-            let mut script = script.lock().unwrap();
-            if script.len() > 1 {
-                script.pop_front().unwrap()
-            } else {
-                script.front().cloned().unwrap()
-            }
-        });
-        (resolver, calls)
-    }
-
-    fn client_for(daemon: &FakeDaemon) -> (AiClient, Arc<AtomicUsize>) {
-        let (resolver, calls) = scripted(vec![Ok(daemon.record())]);
-        (
-            AiClient::with_resolver(Arc::new(MemorySecretStore::default()), resolver),
-            calls,
-        )
+    fn client_with(account: Option<SharedAccount>) -> AiClient {
+        AiClient::with_resolver(Arc::new(move || account.clone()))
     }
 
     fn test_chat_request() -> AiChatRequest {
@@ -776,28 +636,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_hits_the_daemon_v1_route_with_its_authorization_app_and_session() {
-        let daemon = FakeDaemon::start("s3cret", |request| {
+    async fn chat_hits_the_console_route_with_the_bearer_app_and_session() {
+        let console = FakeConsole::start("rk_s3cret", |request| {
             assert_eq!(request.method, "POST");
-            completion("chat-local", "Use an index.")
+            completion("chat-1", "Use an index.")
         });
-        let (client, calls) = client_for(&daemon);
+        let client = client_with(Some(console.account()));
 
         let response = client.chat(test_chat_request()).await.unwrap();
-        assert_eq!(response.id, "chat-local");
+        assert_eq!(response.id, "chat-1");
         assert_eq!(response.model, "mock-model");
         assert_eq!(response.message.content, "Use an index.");
         assert_eq!(response.usage.unwrap().total_tokens, 7);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-        let seen = daemon.seen();
+        let seen = console.seen();
         assert_eq!(seen.len(), 1, "{seen:?}");
         let request = &seen[0];
-        assert_eq!(request.path, "/v1/chat/completions");
-        assert_eq!(
-            request.header("authorization"),
-            Some(redrob_engine_client::authorization("s3cret").as_str())
-        );
+        assert_eq!(request.path, "/api/backend/v1/chat/completions");
+        assert_eq!(request.header("authorization"), Some("Bearer rk_s3cret"));
         assert_eq!(request.header("x-redrob-app"), Some("query"));
         let session = request.header("x-redrob-session").unwrap();
         assert!(Uuid::parse_str(session).is_ok(), "{session}");
@@ -806,322 +662,136 @@ mod tests {
                 .header("content-type")
                 .is_some_and(|value| value.starts_with("application/json"))
         );
-        // No console key travels on this path: the daemon's Basic secret is the only credential.
-        assert!(
-            !request
-                .header("authorization")
-                .unwrap()
-                .starts_with("Bearer")
-        );
 
+        // The OpenAI-compatible body: snake_case, the key nowhere in it.
         let body: Value = serde_json::from_str(&request.body).unwrap();
         assert_eq!(body["model"], "auto");
         assert_eq!(body["messages"][0]["role"], "user");
         assert_eq!(body["messages"][0]["content"], "show indexes");
         assert_eq!(body["temperature"], 0.2);
-        assert_eq!(body["maxTokens"], 128);
+        assert_eq!(body["max_tokens"], 128);
+        assert!(body.get("maxTokens").is_none());
+        assert!(!request.body.contains("rk_s3cret"));
     }
 
     #[tokio::test]
-    async fn a_401_against_a_stale_secret_re_reads_the_record_once_and_retries() {
-        let daemon = FakeDaemon::start("fresh", |_| completion("chat-fresh", "ok"));
-        // The record in hand names the secret of a daemon that has since restarted.
-        let (resolver, calls) = scripted(vec![
-            Ok(daemon.record_with_secret("stale")),
-            Ok(daemon.record()),
-        ]);
-        let client = AiClient::with_resolver(Arc::new(MemorySecretStore::default()), resolver);
-
-        let response = client.chat(test_chat_request()).await.unwrap();
-        assert_eq!(response.id, "chat-fresh");
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-        let seen = daemon.seen();
-        assert_eq!(seen.len(), 2, "{seen:?}");
-        assert_eq!(
-            seen[0].header("authorization"),
-            Some(redrob_engine_client::authorization("stale").as_str())
-        );
-        assert_eq!(
-            seen[1].header("authorization"),
-            Some(redrob_engine_client::authorization("fresh").as_str())
-        );
-
-        // The fresh record is kept: the next request needs no lookup.
-        client.chat(test_chat_request()).await.unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(daemon.seen().len(), 3);
-    }
-
-    #[tokio::test]
-    async fn a_401_that_persists_is_reported_not_retried_forever() {
-        let daemon = FakeDaemon::start("fresh", |_| completion("never", "no"));
-        let (resolver, calls) = scripted(vec![Ok(daemon.record_with_secret("stale"))]);
-        let client = AiClient::with_resolver(Arc::new(MemorySecretStore::default()), resolver);
+    async fn the_account_is_read_on_every_request_so_a_sign_in_counts_at_once() {
+        let console = FakeConsole::start("rk_fresh", |_| completion("chat-fresh", "ok"));
+        let slot: Arc<Mutex<Option<SharedAccount>>> = Arc::new(Mutex::new(None));
+        let read = Arc::clone(&slot);
+        let client = AiClient::with_resolver(Arc::new(move || read.lock().unwrap().clone()));
 
         assert!(matches!(
             client.chat(test_chat_request()).await,
             Err(DataError::AiAuthentication)
         ));
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(daemon.seen().len(), 2);
+        assert_eq!(client.account_status(), AiKeyStatus::signed_out());
+        assert!(console.seen().is_empty(), "no request without an account");
+
+        *slot.lock().unwrap() = Some(console.account());
+        let response = client.chat(test_chat_request()).await.unwrap();
+        assert_eq!(response.id, "chat-fresh");
+        let status = client.account_status();
+        assert_eq!(status.source, AiKeySource::Launcher);
+        assert_eq!(status.label, "Acme (Redrob Launcher)");
+        assert!(status.signed_in());
     }
 
     #[tokio::test]
-    async fn the_daemon_without_a_console_key_is_told_apart_by_its_code() {
-        let daemon = FakeDaemon::start("s", |_| {
+    async fn a_401_is_not_signed_in_and_is_not_retried() {
+        let console = FakeConsole::start("rk_fresh", |_| completion("never", "no"));
+        let client = client_with(Some(console.account_with_key("rk_stale")));
+
+        assert!(matches!(
+            client.chat(test_chat_request()).await,
+            Err(DataError::AiAuthentication)
+        ));
+        assert_eq!(console.seen().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_console_error_message_is_surfaced_without_the_key() {
+        let console = FakeConsole::start("rk_s", |_| {
             reply(
-                401,
-                json!({"error": {"message": "로그인이 필요합니다", "code": "engine_not_authenticated"}})
+                400,
+                json!({"error": {"message": "model auto is not available for this workspace", "type": "invalid_request_error"}})
                     .to_string(),
             )
         });
-        let (client, calls) = client_for(&daemon);
-
-        assert!(matches!(
-            client.chat(test_chat_request()).await,
-            Err(DataError::AiAuthentication)
-        ));
-        // Not a stale secret: no record re-read, no second request.
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(daemon.seen().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_missing_engine_renders_the_install_sentence_with_the_launcher_link() {
-        let (resolver, calls) = scripted(vec![Err(Unavailable::NotInstalled)]);
-        let client = AiClient::with_resolver(Arc::new(MemorySecretStore::default()), resolver);
+        let client = client_with(Some(console.account()));
 
         let error = client.chat(test_chat_request()).await.unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Redrob Code is not installed. Install it with Redrob Launcher. https://github.com/redrob-labs/redrob-launcher/releases/latest"
+            "AI request was rejected: model auto is not available for this workspace"
         );
-        assert!(matches!(error, DataError::EngineUnavailable(_)));
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "no retry against a missing engine"
-        );
-        assert_eq!(
-            client.account_status().await.unwrap_err().to_string(),
-            format!("{NOT_INSTALLED_MESSAGE} {INSTALL_URL}")
-        );
-
-        let (resolver, _) = scripted(vec![Err(Unavailable::StartFailed("port busy".into()))]);
-        let client = AiClient::with_resolver(Arc::new(MemorySecretStore::default()), resolver);
-        assert_eq!(
-            client
-                .chat(test_chat_request())
-                .await
-                .unwrap_err()
-                .to_string(),
-            "The Redrob Code engine could not be started: port busy"
-        );
-    }
-
-    /// The real lookup against a real (empty) environment: `REDROB_CODE_BIN` names a file that does
-    /// not exist and `REDROB_RUN_DIR` an empty directory. The process environment is shared and the
-    /// crate forbids `unsafe`, so the check runs in a child test process with that environment.
-    #[test]
-    fn not_installed_in_a_real_environment_reports_the_install_sentence() {
-        let dir = tempfile::tempdir().unwrap();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "ai::tests::child_without_an_engine_sees_the_install_sentence",
-                "--ignored",
-                "--nocapture",
-            ])
-            .env("REDROB_CODE_BIN", dir.path().join("missing-redrob"))
-            .env("REDROB_RUN_DIR", dir.path())
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(output.status.success(), "{stdout}\n{stderr}");
-        assert!(
-            stdout.contains("test result: ok. 1 passed"),
-            "{stdout}\n{stderr}"
-        );
+        assert!(!error.to_string().contains("rk_s"));
+        assert_eq!(console.seen().len(), 1, "a 400 is not retried");
     }
 
     #[tokio::test]
-    #[ignore = "run by not_installed_in_a_real_environment_reports_the_install_sentence"]
-    async fn child_without_an_engine_sees_the_install_sentence() {
-        assert!(std::env::var_os("REDROB_CODE_BIN").is_some());
-        let client = AiClient::new(Arc::new(MemorySecretStore::default()));
-        let error = client.chat(test_chat_request()).await.unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            format!("{NOT_INSTALLED_MESSAGE} {INSTALL_URL}")
-        );
-    }
-
-    #[tokio::test]
-    async fn sign_in_puts_the_key_to_the_daemon_and_status_reads_the_provider_list() {
-        let daemon = FakeDaemon::start("s", |request| {
-            match (request.method.as_str(), request.path.as_str()) {
-                ("PUT", "/auth/redrob") => {
-                    let body: Value = serde_json::from_str(&request.body).unwrap();
-                    assert_eq!(body, json!({"type": "api", "key": "rrk_test_key"}));
-                    reply(200, "true")
-                }
-                ("GET", "/provider") => reply(
-                    200,
-                    json!({"all": [{"id": "openai"}, {"id": "redrob", "source": "launcher"}]})
-                        .to_string(),
-                ),
-                other => panic!("unexpected {other:?}"),
-            }
-        });
-        let (client, _) = client_for(&daemon);
-
-        client.sign_in("rrk_test_key").await.unwrap();
-        assert!(matches!(
-            client.sign_in("  ").await,
-            Err(DataError::SecretUnavailable)
-        ));
-        assert_eq!(
-            client.account_status().await.unwrap(),
-            AiKeyStatus {
-                source: AiKeySource::Launcher
-            }
-        );
-        let seen = daemon.seen();
-        assert_eq!(seen.len(), 2, "{seen:?}");
-        assert_eq!(
-            (seen[0].method.as_str(), seen[0].path.as_str()),
-            ("PUT", "/auth/redrob")
-        );
-        assert_eq!(seen[0].header("x-redrob-app"), Some("query"));
-        assert_eq!(
-            (seen[1].method.as_str(), seen[1].path.as_str()),
-            ("GET", "/provider")
-        );
-        assert!(!seen[1].body.contains("rrk_test_key"));
-    }
-
-    #[tokio::test]
-    async fn the_engine_refusing_a_key_is_reported_without_echoing_it() {
-        let daemon = FakeDaemon::start("s", |_| {
+    async fn a_server_error_is_retried_then_reported_with_its_message() {
+        let console = FakeConsole::start("rk_s", |_| {
             reply(
-                400,
-                json!({"error": {"message": "rrk_bad echoed"}}).to_string(),
+                503,
+                json!({"error": {"message": "upstream provider timed out"}}).to_string(),
             )
         });
-        let (client, _) = client_for(&daemon);
-        let error = client.sign_in("rrk_bad").await.unwrap_err();
+        let client = client_with(Some(console.account()));
+
+        let error = client.chat(test_chat_request()).await.unwrap_err();
         assert!(
-            matches!(error, DataError::AiRejected(ref message) if !message.contains("rrk_bad")),
+            matches!(error, DataError::AiRejected(ref message) if message.contains("HTTP 503") && message.contains("upstream provider timed out")),
             "{error}"
         );
-    }
-
-    #[tokio::test]
-    async fn a_legacy_keyring_key_is_handed_to_the_engine_once_and_deleted() {
-        let daemon = FakeDaemon::start("s", |request| match request.path.as_str() {
-            "/auth/redrob" => reply(200, "true"),
-            _ => completion("chat-after-migration", "ok"),
-        });
-        let secrets = Arc::new(MemorySecretStore::default());
-        secrets.set(AI_SECRET_ID, "rrk_legacy").unwrap();
-        let (resolver, _) = scripted(vec![Ok(daemon.record())]);
-        let client =
-            AiClient::with_resolver(Arc::clone(&secrets) as Arc<dyn SecretStore>, resolver);
-
-        client.chat(test_chat_request()).await.unwrap();
-        let seen = daemon.seen();
-        assert_eq!(seen.len(), 2, "{seen:?}");
-        assert_eq!(
-            (seen[0].method.as_str(), seen[0].path.as_str()),
-            ("PUT", "/auth/redrob")
-        );
-        assert_eq!(
-            serde_json::from_str::<Value>(&seen[0].body).unwrap(),
-            json!({"type": "api", "key": "rrk_legacy"})
-        );
-        assert_eq!(seen[0].header("x-redrob-app"), Some("query"));
-        assert_eq!(seen[1].path, "/v1/chat/completions");
-        assert!(!seen[1].body.contains("rrk_legacy"));
-        assert!(
-            secrets.get(AI_SECRET_ID).unwrap().is_none(),
-            "the migrated key is gone from the keyring"
-        );
-
-        // A second chat migrates nothing: the record is cached and the slot is empty.
-        client.chat(test_chat_request()).await.unwrap();
-        assert_eq!(daemon.seen().len(), 3);
+        assert_eq!(console.seen().len(), MAX_ATTEMPTS);
     }
 
     #[test]
-    fn the_provider_list_tells_signed_in_from_public_and_absent() {
-        assert_eq!(
-            AiKeyStatus::from_provider_list(&json!({"all": []})),
-            AiKeyStatus::signed_out()
-        );
-        assert_eq!(
-            AiKeyStatus::from_provider_list(
-                &json!({"all": [{"id": "redrob", "options": {"apiKey": "public"}}]})
-            ),
-            AiKeyStatus::signed_out()
-        );
-        assert_eq!(
-            AiKeyStatus::from_provider_list(
-                &json!({"all": [{"id": "redrob", "source": "config"}]})
-            ),
-            AiKeyStatus::signed_out(),
-            "a config entry without a key is not a sign-in"
-        );
-        assert_eq!(
-            AiKeyStatus::from_provider_list(
-                &json!({"all": [{"id": "redrob", "source": "launcher"}]})
-            )
-            .source,
-            AiKeySource::Launcher
-        );
-        assert_eq!(
-            AiKeyStatus::from_provider_list(
-                &json!({"all": [{"id": "openai"}, {"id": "redrob", "source": "api", "key": "rrk_x"}]})
-            )
-            .source,
-            AiKeySource::Engine
-        );
-        assert_eq!(
-            AiKeyStatus::from_provider_list(&json!({"all": [{"id": "redrob", "key": "rrk_x"}]}))
-                .source,
-            AiKeySource::Engine
-        );
+    fn a_missing_account_renders_the_sign_in_sentence_with_the_launcher_link() {
+        let client = client_with(None);
+        assert_eq!(client.account_status(), AiKeyStatus::signed_out());
+        assert!(!client.account_status().signed_in());
+        assert!(NOT_SIGNED_IN_MESSAGE.contains("Redrob Launcher"));
+        assert!(INSTALL_URL.starts_with("https://github.com/redrob-labs/redrob-launcher"));
         assert_eq!(
             serde_json::to_value(AiKeyStatus::signed_out()).unwrap(),
-            json!({"source": "none"})
+            json!({"source": "none", "label": ""})
         );
     }
 
     #[tokio::test]
     async fn ai_client_rejects_declared_oversized_response() {
-        let daemon = FakeDaemon::start("s", |_| Answer {
+        let console = FakeConsole::start("rk_s", |_| Answer {
             status: 200,
             body: String::new(),
-            declared_length: Some(2 * 1024 * 1024 + 1),
+            declared_length: Some(MAX_RESPONSE_BYTES + 1),
         });
-        let (client, _) = client_for(&daemon);
+        let client = client_with(Some(console.account()));
 
         assert!(matches!(
             client.chat(test_chat_request()).await,
             Err(DataError::AiInvalidResponse)
         ));
-        assert_eq!(daemon.seen().len(), 1);
+        assert_eq!(console.seen().len(), 1);
     }
 
     #[test]
-    fn the_daemon_sign_in_code_is_read_from_the_error_code_not_the_message() {
-        assert!(names_engine_not_authenticated(
-            br#"{"error":{"message":"localized","code":"engine_not_authenticated"}}"#
-        ));
-        assert!(!names_engine_not_authenticated(
-            br#"{"error":{"message":"engine_not_authenticated"}}"#
-        ));
-        assert!(!names_engine_not_authenticated(b"not json"));
+    fn the_error_message_is_read_from_the_body_and_bounded() {
+        assert_eq!(
+            error_message(br#"{"error":{"message":"localized","code":"x"}}"#).as_deref(),
+            Some("localized")
+        );
+        assert_eq!(
+            error_message(br#"{"message":"flat"}"#).as_deref(),
+            Some("flat")
+        );
+        assert_eq!(error_message(b"not json"), None);
+        assert_eq!(error_message(br#"{"error":{"message":"   "}}"#), None);
+        let long = format!(r#"{{"error":{{"message":"{}"}}}}"#, "x".repeat(1000));
+        let shown = error_message(long.as_bytes()).unwrap();
+        assert_eq!(shown.chars().count(), MAX_ERROR_MESSAGE_CHARS + 1);
+        assert!(shown.ends_with('…'));
     }
 
     #[test]
@@ -1145,6 +815,10 @@ mod tests {
             Err(DataError::AiInvalidResponse)
         ));
         assert!(matches!(
+            parse_response(br#"{"choices":[{"message":{"role":"assistant","content":null}}]}"#),
+            Err(DataError::AiInvalidResponse)
+        ));
+        assert!(matches!(
             parse_response(b"not json"),
             Err(DataError::AiInvalidResponse)
         ));
@@ -1153,15 +827,15 @@ mod tests {
     #[test]
     fn classifies_auth_client_and_retryable_errors() {
         assert!(matches!(
-            classify_status(StatusCode::UNAUTHORIZED),
+            classify_failure(StatusCode::UNAUTHORIZED, b""),
             DataError::AiAuthentication
         ));
         assert!(matches!(
-            classify_status(StatusCode::BAD_REQUEST),
+            classify_failure(StatusCode::BAD_REQUEST, b""),
             DataError::AiRejected(_)
         ));
         assert!(matches!(
-            classify_status(StatusCode::SERVICE_UNAVAILABLE),
+            classify_failure(StatusCode::SERVICE_UNAVAILABLE, b""),
             DataError::AiUnavailable
         ));
         assert!(retryable_status(StatusCode::TOO_MANY_REQUESTS));

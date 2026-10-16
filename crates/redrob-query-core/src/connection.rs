@@ -35,6 +35,7 @@ use crate::{
     MetadataNode, MetadataRequest, MutationPlan, MutationResult, MutationRisk, QueryClassification,
     QueryColumn, QueryLanguage, QueryRequest, QueryResultPage, QueryStats, Result,
     ai::{AI_SECRET_ID, AiClient, AiKeyStatus, build_assistant_chat_request},
+    keys::{self, TableKeys},
     profile_store::{
         JournalOperation, JournalPhase, PersistencePhase, ProfileJournal, ProfileRepository,
         RepositoryOpenError, deserialize_journal, profiles_from_map, reconcile, remove_journal,
@@ -127,7 +128,13 @@ impl DataService {
     /// produces a Demo-only, fail-closed service.
     #[must_use]
     pub fn persistent(path: impl Into<PathBuf>) -> Self {
-        Self::build_persistent(Arc::new(KeyringSecretStore), path.into())
+        let path = path.into();
+        // This app's own `account.json`, beside the profile file: the launcher's Connect (or a
+        // person) may write one; it wins over the shared file (`account` module, rule 4).
+        let own_account = path.parent().map(|dir| dir.join("account.json"));
+        let mut service = Self::build_persistent(Arc::new(KeyringSecretStore), path);
+        service.ai = AiClient::new(own_account);
+        service
     }
 
     /// Creates an ephemeral service with an injectable secret store for tests.
@@ -186,7 +193,7 @@ impl DataService {
             profile_load_warnings,
             recovery_blocked,
             persistent_storage_unavailable,
-            ai: AiClient::new(Arc::clone(&secrets)),
+            ai: AiClient::new(None),
             secrets,
         }
     }
@@ -743,12 +750,6 @@ impl DataService {
         }
     }
 
-    /// Hands a Redrob console key to the shared Redrob Code engine, which keeps it. Nothing is
-    /// written to this app's own storage.
-    pub async fn ai_sign_in(&self, secret: &str) -> Result<()> {
-        self.ai.sign_in(secret).await
-    }
-
     async fn connection_test_secret(
         &self,
         profile: &ConnectionProfile,
@@ -1001,6 +1002,28 @@ impl DataService {
         }
     }
 
+    /// The primary key, foreign keys and indexes of one table (or the indexes of one `MongoDB`
+    /// collection), for the structure panel. Names are bound values where the dialect allows it.
+    pub async fn table_keys(
+        &self,
+        connection_id: Uuid,
+        schema: Option<String>,
+        table: String,
+    ) -> Result<TableKeys> {
+        match self.ensure_connected(connection_id).await? {
+            ActiveConnection::PostgreSql(pool) => {
+                keys::postgres_table_keys(&pool, schema.as_deref(), &table).await
+            }
+            ActiveConnection::MySql(pool) => {
+                keys::mysql_table_keys(&pool, schema.as_deref(), &table).await
+            }
+            ActiveConnection::SQLite(pool) => keys::sqlite_table_keys(&pool, &table).await,
+            ActiveConnection::Mongo { client, database } => {
+                keys::mongo_collection_keys(&client, &database, &table).await
+            }
+        }
+    }
+
     /// Create a table or add a column from the form (see `ddl`). Refused on a read-only profile.
     pub async fn apply_table_change(&self, connection_id: Uuid, change: TableChange) -> Result<()> {
         self.ensure_persistent_storage_available()?;
@@ -1086,9 +1109,11 @@ impl DataService {
         self.ai.chat(build_assistant_chat_request(&input)?).await
     }
 
-    /// Whether the engine is signed in to the Redrob console, for the settings surface. Never a key.
-    pub async fn ai_key_status(&self) -> Result<AiKeyStatus> {
-        self.ai.account_status().await
+    /// Whether a Redrob account is signed in (the launcher's shared file, or this app's own), for
+    /// the status line. Read fresh on every call; never a key.
+    #[must_use]
+    pub fn ai_key_status(&self) -> AiKeyStatus {
+        self.ai.account_status()
     }
 
     async fn profile(&self, id: Uuid) -> Result<ConnectionProfile> {
