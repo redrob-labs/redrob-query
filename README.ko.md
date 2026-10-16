@@ -149,6 +149,22 @@ Ask는 Redrob Launcher가 이 컴퓨터를 로그인시킨 계정을 씁니다. 
 그대로 보여 줍니다. 계정이 없으면 Ask 도크가 그렇다고 말하고 런처를 열어 줍니다. 이 앱에는 자체 로그인이
 없습니다.
 
+## Redrob Code에서 조작
+
+앱이 열려 있는 동안 자기 도구를 공유 Redrob Code 데몬에 루프백 MCP(`app:query`)로 제공하므로, 어느 Redrob
+표면의 에이전트든(휴대폰 채팅 포함) 이 앱을 움직일 수 있습니다. 데몬은 선택 사항이며 없으면 앱은 그대로
+동작합니다. 도구는 짧은 TSV 텍스트로 답하고 패널이 쓰는 엔진 경로를 그대로 지나가므로, 브리지로 들어온
+질의도 탭에 입력한 것과 똑같이 한도와 게이트를 받습니다.
+
+- `list_connections` - 저장된 연결 목록: id, 이름, 드라이버, 연결 여부.
+- `connect {id}` - 저장된 연결을 id 또는 이름으로 연결하고, 올라오면 답합니다.
+- `list_tables {connection?, schema?}` - 연결된 데이터베이스의 표·뷰·컬렉션.
+- `describe_table {connection?, table}` - 한 표의 열(이름, 타입, null 허용).
+- `run_sql {connection?, sql, max_rows?}` - 읽기 전용 문장 하나를 실행. TSV 헤더와 행(기본 200행), 그다음
+  개수·시간·더 있는지 여부를 담은 요약 한 줄.
+- `open_in_editor {sql, connection?}` - 실행하지 않고 새 편집기 탭에 텍스트를 넣습니다.
+- `export_result {path, format}` - 마지막 `run_sql` 결과(없으면 활성 탭의 그리드)를 CSV 또는 TSV로 씁니다.
+
 ## 현재 경계
 
 - 자유 형식 쓰기 SQL은 없습니다. 변경은 검토한 편집 집합과 표 폼으로만 갑니다. 고치려면 단일 열 기본 키가

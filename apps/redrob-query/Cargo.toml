@@ -16,6 +16,9 @@ path = "src/main.rs"
 
 [dependencies]
 redrob-query-core = { path = "../../crates/redrob-query-core" }
+# The Redrob Code app bridge: serves this app's tools to the shared daemon over loopback MCP.
+# TODO pin to the tag of the redrob-code release that ships it
+redrob-app-bridge = { git = "https://github.com/redrob-labs/redrob-code", branch = "feat/channels-app-bridge" }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "wayland", "x11", "persistence", "default_fonts"] }
 egui = { workspace = true }
 egui_extras = { workspace = true }
