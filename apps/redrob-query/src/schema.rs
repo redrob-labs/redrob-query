@@ -219,7 +219,7 @@ impl SchemaBrowser {
             }
             let grouped = groups.len() > 1 || groups.first().is_some_and(|(s, _)| !s.is_empty());
             for (schema, nodes) in groups {
-                let body = |ui: &mut Ui| {
+                let mut body = |ui: &mut Ui| {
                     for node in nodes {
                         let expanded = tree.expanded.get(&node.id).copied().unwrap_or(false);
                         let is_selected = selected

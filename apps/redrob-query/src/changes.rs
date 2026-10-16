@@ -310,7 +310,10 @@ impl ChangesPanel {
                             );
                         }
                     }
-                    (Ok(_), Some(Err(reason))) | (Err(reason), _) => {
+                    (Ok(_), Some(Err(reason))) => {
+                        ui.label(RichText::new(reason).small().color(tokens.warning));
+                    }
+                    (Err(reason), _) => {
                         ui.label(RichText::new(reason).small().color(tokens.warning));
                     }
                     (Ok(_), None) => {}
