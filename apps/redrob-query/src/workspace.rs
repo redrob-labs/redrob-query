@@ -60,6 +60,8 @@ pub struct WorkspaceFile {
     /// The AI dock and the structure panel are remembered open or closed.
     pub ai_dock_open: bool,
     pub structure_open: bool,
+    /// Help > Theme: `system`, `light` or `dark`.
+    pub theme: String,
 }
 
 impl WorkspaceFile {

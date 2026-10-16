@@ -1,8 +1,9 @@
-//! The Profiles tree and the connection form.
+//! The Connections tree and the connection form.
 //!
 //! Built-in profiles (the Demo `SQLite` database) are immutable; user profiles can be added, edited,
-//! tested and removed. Passwords go to the OS keyring through the engine and are never kept here
-//! beyond the form's own text field, which is cleared when the form closes.
+//! tested and removed. Profiles are grouped by database kind, each row has a connect-state dot,
+//! and a filter box narrows the tree. Passwords go to the OS keyring through the engine and are
+//! never kept here beyond the form's own text field, which is cleared when the form closes.
 
 use std::collections::HashMap;
 
@@ -13,7 +14,8 @@ use redrob_query_core::{
 };
 use uuid::Uuid;
 
-use crate::theme;
+use crate::i18n::{t, tf};
+use crate::theme::{self, Tokens};
 
 /// What the panel asks the app to do.
 #[derive(Debug)]
@@ -31,6 +33,7 @@ pub struct ProfilesPanel {
     pub profiles: Vec<ConnectionProfile>,
     pub status: HashMap<Uuid, ConnectionStatus>,
     pub selected: Option<Uuid>,
+    pub filter: String,
     list: Option<Pending<Vec<ConnectionProfile>>>,
     connects: HashMap<Uuid, Pending<ConnectionStatus>>,
     disconnects: HashMap<Uuid, Pending<()>>,
@@ -38,6 +41,8 @@ pub struct ProfilesPanel {
     pub form: Option<ProfileForm>,
     confirm_remove: Option<Uuid>,
     pub load_warnings: Vec<String>,
+    /// The list arrived at least once (the empty state waits for it).
+    pub loaded: bool,
 }
 
 impl ProfilesPanel {
@@ -46,6 +51,7 @@ impl ProfilesPanel {
             profiles: Vec::new(),
             status: HashMap::new(),
             selected: None,
+            filter: String::new(),
             list: Some(workspace.list_profiles()),
             connects: HashMap::new(),
             disconnects: HashMap::new(),
@@ -53,6 +59,7 @@ impl ProfilesPanel {
             form: None,
             confirm_remove: None,
             load_warnings: workspace.profile_load_warnings(),
+            loaded: false,
         }
     }
 
@@ -70,10 +77,44 @@ impl ProfilesPanel {
             .is_some_and(|s| s.state == ConnectionState::Connected)
     }
 
+    pub fn is_connecting(&self, id: Uuid) -> bool {
+        self.connects.contains_key(&id)
+    }
+
     pub fn connect(&mut self, workspace: &Workspace, id: Uuid) {
         self.connects
             .entry(id)
             .or_insert_with(|| workspace.connect(id));
+    }
+
+    pub fn disconnect(&mut self, workspace: &Workspace, id: Uuid) {
+        self.disconnects
+            .entry(id)
+            .or_insert_with(|| workspace.disconnect(id));
+    }
+
+    pub fn new_connection(&mut self) {
+        self.form = Some(ProfileForm::new_profile());
+    }
+
+    pub fn edit(&mut self, id: Uuid) {
+        if let Some(profile) = self.profile(id).cloned() {
+            self.form = Some(ProfileForm::edit(profile));
+        }
+    }
+
+    pub fn ask_remove(&mut self, id: Uuid) {
+        self.confirm_remove = Some(id);
+    }
+
+    /// The profile the user has a hand on: the selected one.
+    pub fn active(&self) -> Option<&ConnectionProfile> {
+        self.selected.and_then(|id| self.profile(id))
+    }
+
+    /// Whether there are only built-in profiles (the first-run empty state).
+    pub fn only_built_in(&self) -> bool {
+        self.loaded && self.profiles.iter().all(|p| p.built_in)
     }
 
     /// Drains finished operations; call once per frame before drawing.
@@ -82,6 +123,7 @@ impl ProfilesPanel {
             && let Some(result) = list.poll()
         {
             self.list = None;
+            self.loaded = true;
             match result {
                 Ok(mut profiles) => {
                     profiles.sort_by(|a, b| {
@@ -108,6 +150,7 @@ impl ProfilesPanel {
                     let message = status.message.clone();
                     self.status.insert(id, status);
                     if connected {
+                        self.selected = Some(id);
                         events.push(ProfilesEvent::Connected(id));
                         if let Some(profile) = self.profile(id).cloned() {
                             events.push(ProfilesEvent::OpenQuery(profile));
@@ -165,54 +208,79 @@ impl ProfilesPanel {
         }
     }
 
+    /// The tree: a header with the filter box and New, then the groups.
     pub fn ui(&mut self, ui: &mut Ui, workspace: &Workspace, events: &mut Vec<ProfilesEvent>) {
+        let tokens = Tokens::of(ui);
         ui.horizontal(|ui| {
-            ui.heading("Profiles");
+            ui.label(RichText::new(t("Connections")).font(theme::semibold(12.5)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .button("＋ New")
-                    .on_hover_text("Add a connection profile")
+                    .small_button("＋")
+                    .on_hover_text(t("New connection…"))
                     .clicked()
                 {
-                    self.form = Some(ProfileForm::new_profile());
+                    self.new_connection();
                 }
                 if ui
                     .small_button("⟳")
-                    .on_hover_text("Reload profiles")
+                    .on_hover_text(t("Reload the connection list"))
                     .clicked()
                 {
                     self.refresh(workspace);
                 }
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.filter)
+                        .hint_text(t("Filter"))
+                        .desired_width(ui.available_width()),
+                );
             });
         });
         for warning in &self.load_warnings {
-            ui.label(RichText::new(warning).small().color(theme::CAUTION));
+            ui.label(RichText::new(warning).small().color(tokens.warning));
         }
-        ui.separator();
 
         let mut action: Option<(Uuid, RowAction)> = None;
+        let filter = self.filter.trim().to_lowercase();
         egui::ScrollArea::vertical()
             .id_salt("profiles")
             .auto_shrink([false, true])
             .max_height(ui.available_height() * 0.45)
             .show(ui, |ui| {
-                let (built_in, user): (Vec<_>, Vec<_>) =
-                    self.profiles.iter().partition(|p| p.built_in);
+                let shown: Vec<&ConnectionProfile> = self
+                    .profiles
+                    .iter()
+                    .filter(|p| filter.is_empty() || p.name.to_lowercase().contains(&filter))
+                    .collect();
+                let built_in: Vec<&ConnectionProfile> =
+                    shown.iter().copied().filter(|p| p.built_in).collect();
                 if !built_in.is_empty() {
-                    ui.label(RichText::new("Built-in").small().weak());
+                    group_label(ui, t("Built-in"));
                     for profile in built_in {
                         if let Some(a) = self.profile_row(ui, profile) {
                             action = Some(a);
                         }
                     }
                 }
-                ui.label(RichText::new("Your connections").small().weak());
-                if user.is_empty() {
-                    ui.label(RichText::new("None yet. Press New to add one.").weak());
+                let mut kinds: Vec<DatabaseKind> = Vec::new();
+                for profile in shown.iter().filter(|p| !p.built_in) {
+                    if !kinds.contains(&profile.kind) {
+                        kinds.push(profile.kind);
+                    }
                 }
-                for profile in user {
-                    if let Some(a) = self.profile_row(ui, profile) {
-                        action = Some(a);
+                if kinds.is_empty() && filter.is_empty() {
+                    group_label(ui, t("Your connections"));
+                    ui.label(
+                        RichText::new(t("None yet. Press ＋ to add one."))
+                            .small()
+                            .color(tokens.text_faint),
+                    );
+                }
+                for kind in kinds {
+                    group_label(ui, kind_name(kind));
+                    for profile in shown.iter().filter(|p| !p.built_in && p.kind == kind) {
+                        if let Some(a) = self.profile_row(ui, profile) {
+                            action = Some(a);
+                        }
                     }
                 }
             });
@@ -230,56 +298,13 @@ impl ProfilesPanel {
                         self.connect(workspace, id);
                     }
                 }
-                RowAction::Disconnect => {
-                    self.disconnects
-                        .entry(id)
-                        .or_insert_with(|| workspace.disconnect(id));
-                }
-                RowAction::Edit => {
-                    if let Some(profile) = self.profile(id).cloned() {
-                        self.form = Some(ProfileForm::edit(profile));
-                    }
-                }
+                RowAction::Disconnect => self.disconnect(workspace, id),
+                RowAction::Edit => self.edit(id),
                 RowAction::Remove => self.confirm_remove = Some(id),
             }
         }
 
-        if let Some(id) = self.confirm_remove {
-            let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
-            let mut open = true;
-            let mut decided = None;
-            egui::Window::new("Remove profile")
-                .collapsible(false)
-                .resizable(false)
-                .open(&mut open)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ui.ctx(), |ui| {
-                    ui.label(format!(
-                        "Remove \"{name}\" and its saved password? The database itself is not touched."
-                    ));
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add(egui::Button::new(RichText::new("Remove").color(egui::Color32::WHITE)).fill(theme::DANGER))
-                            .clicked()
-                        {
-                            decided = Some(true);
-                        }
-                        if ui.button("Cancel").clicked() {
-                            decided = Some(false);
-                        }
-                    });
-                });
-            match decided {
-                Some(true) => {
-                    self.confirm_remove = None;
-                    self.removes.insert(id, workspace.remove_profile(id));
-                }
-                Some(false) => self.confirm_remove = None,
-                None if !open => self.confirm_remove = None,
-                None => {}
-            }
-        }
-
+        self.remove_modal(ui.ctx(), workspace);
         if let Some(form) = &mut self.form {
             let mut keep = true;
             form.ui(ui.ctx(), workspace, &mut keep);
@@ -289,22 +314,57 @@ impl ProfilesPanel {
         }
     }
 
+    fn remove_modal(&mut self, ctx: &egui::Context, workspace: &Workspace) {
+        let Some(id) = self.confirm_remove else { return };
+        let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
+        let modal = egui::Modal::new(egui::Id::new("remove-profile")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading(t("Remove connection"));
+            ui.label(tf(
+                "Remove \"{name}\" and its saved password? The database itself is not touched.",
+                &[("name", &name)],
+            ));
+            ui.add_space(8.0);
+            let mut decided = None;
+            ui.horizontal(|ui| {
+                if ui.add(theme::danger_button(ui, t("Remove"))).clicked() {
+                    decided = Some(true);
+                }
+                if ui.button(t("Cancel")).clicked() {
+                    decided = Some(false);
+                }
+            });
+            decided
+        });
+        match modal.inner {
+            Some(true) => {
+                self.confirm_remove = None;
+                self.removes.insert(id, workspace.remove_profile(id));
+            }
+            Some(false) => self.confirm_remove = None,
+            None if modal.should_close() => self.confirm_remove = None,
+            None => {}
+        }
+    }
+
     fn profile_row(&self, ui: &mut Ui, profile: &ConnectionProfile) -> Option<(Uuid, RowAction)> {
+        let tokens = Tokens::of(ui);
         let mut action = None;
         let connected = self.is_connected(profile.id);
         let connecting = self.connects.contains_key(&profile.id);
         let selected = self.selected == Some(profile.id);
         ui.horizontal(|ui| {
             let dot = if connected {
-                theme::SUCCESS
+                tokens.success
             } else if !profile.capabilities.connect {
-                theme::DANGER
+                tokens.danger
             } else {
-                ui.visuals().weak_text_color()
+                tokens.text_faint
             };
             theme::status_dot(ui, dot);
-            let label = format!("{}  {}", kind_glyph(profile.kind), profile.name);
-            let response = ui.selectable_label(selected, label);
+            let response = ui
+                .selectable_label(selected, &profile.name)
+                .on_hover_text(describe(profile, self.status.get(&profile.id)));
             if response.clicked() {
                 action = Some((profile.id, RowAction::Select));
             }
@@ -313,25 +373,25 @@ impl ProfilesPanel {
             }
             response.context_menu(|ui| {
                 if connected {
-                    if ui.button("New query tab").clicked() {
+                    if ui.button(t("New query tab")).clicked() {
                         action = Some((profile.id, RowAction::Connect));
                         ui.close();
                     }
-                    if ui.button("Disconnect").clicked() {
+                    if ui.button(t("Disconnect")).clicked() {
                         action = Some((profile.id, RowAction::Disconnect));
                         ui.close();
                     }
-                } else if ui.button("Connect").clicked() {
+                } else if ui.button(t("Connect")).clicked() {
                     action = Some((profile.id, RowAction::Connect));
                     ui.close();
                 }
                 if !profile.built_in {
                     ui.separator();
-                    if ui.button("Edit…").clicked() {
+                    if ui.button(t("Edit…")).clicked() {
                         action = Some((profile.id, RowAction::Edit));
                         ui.close();
                     }
-                    if ui.button("Remove…").clicked() {
+                    if ui.button(t("Remove…")).clicked() {
                         action = Some((profile.id, RowAction::Remove));
                         ui.close();
                     }
@@ -341,29 +401,24 @@ impl ProfilesPanel {
                 if connecting {
                     ui.spinner();
                 } else if connected {
-                    if ui.small_button("Query").clicked() {
+                    if ui.small_button(t("Query")).clicked() {
                         action = Some((profile.id, RowAction::Connect));
                     }
-                } else if profile.capabilities.connect && ui.small_button("Connect").clicked() {
+                } else if profile.capabilities.connect
+                    && ui.small_button(t("Connect")).clicked()
+                {
                     action = Some((profile.id, RowAction::Connect));
                 }
             });
         });
-        if selected {
-            ui.indent("detail", |ui| {
-                let text = describe(profile);
-                ui.label(RichText::new(text).small().weak());
-                if let Some(status) = self.status.get(&profile.id) {
-                    let mut line = status.message.clone();
-                    if let Some(ms) = status.latency_ms {
-                        line.push_str(&format!(" ({ms} ms)"));
-                    }
-                    ui.label(RichText::new(line).small());
-                }
-            });
-        }
         action
     }
+}
+
+fn group_label(ui: &mut Ui, text: &str) {
+    let tokens = Tokens::of(ui);
+    ui.add_space(4.0);
+    ui.label(RichText::new(text.to_uppercase()).small().color(tokens.text_faint));
 }
 
 enum RowAction {
@@ -372,16 +427,6 @@ enum RowAction {
     Disconnect,
     Edit,
     Remove,
-}
-
-pub fn kind_glyph(kind: DatabaseKind) -> &'static str {
-    match kind {
-        DatabaseKind::PostgreSql => "PG",
-        DatabaseKind::MySql => "My",
-        DatabaseKind::SQLite => "Lite",
-        DatabaseKind::MongoDb => "Mongo",
-        DatabaseKind::SqlServer => "MSSQL",
-    }
 }
 
 pub fn kind_name(kind: DatabaseKind) -> &'static str {
@@ -394,7 +439,8 @@ pub fn kind_name(kind: DatabaseKind) -> &'static str {
     }
 }
 
-fn describe(profile: &ConnectionProfile) -> String {
+/// The tooltip of a row: kind, host or file, database, mode, and the last status.
+fn describe(profile: &ConnectionProfile, status: Option<&ConnectionStatus>) -> String {
     let c = &profile.config;
     let mut text = kind_name(profile.kind).to_owned();
     match profile.kind {
@@ -415,13 +461,24 @@ fn describe(profile: &ConnectionProfile) -> String {
             }
         }
     }
-    if profile.read_only {
-        text.push_str(" · read-only");
+    text.push_str(" · ");
+    text.push_str(if profile.read_only {
+        t("read-only")
+    } else {
+        t("read-write")
+    });
+    if let Some(status) = status {
+        text.push('\n');
+        text.push_str(&status.message);
+        if let Some(ms) = status.latency_ms {
+            text.push_str(&format!(" ({ms} ms)"));
+        }
     }
     text
 }
 
-/// The connection form: a window over the app with the fields of one profile.
+/// The connection form: a modal over the app with the fields of one profile, a Test button and
+/// inline error text.
 pub struct ProfileForm {
     pub profile: ConnectionProfile,
     pub password: String,
@@ -509,7 +566,7 @@ impl ProfileForm {
                         events.push(ProfilesEvent::Notice(warning, false));
                     }
                     events.push(ProfilesEvent::Notice(
-                        format!("Saved profile \"{}\"", outcome.profile.name),
+                        tf("Saved connection \"{name}\"", &[("name", &outcome.profile.name)]),
                         false,
                     ));
                     self.password.clear();
@@ -559,34 +616,34 @@ impl ProfileForm {
 
     pub fn ui(&mut self, ctx: &egui::Context, workspace: &Workspace, keep: &mut bool) {
         let title = if self.editing {
-            "Edit connection"
+            t("Edit connection")
         } else {
-            "New connection"
+            t("New connection")
         };
-        let mut open = true;
-        egui::Window::new(title)
-            .collapsible(false)
-            .resizable(false)
-            .default_width(460.0)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .open(&mut open)
-            .show(ctx, |ui| self.fields(ui, workspace, keep));
-        if !open {
+        let modal = egui::Modal::new(egui::Id::new("connection-form")).show(ctx, |ui| {
+            ui.set_width(480.0);
+            ui.heading(title);
+            ui.add_space(6.0);
+            self.fields(ui, workspace, keep);
+        });
+        if modal.should_close() {
+            self.password.clear();
             *keep = false;
         }
     }
 
     fn fields(&mut self, ui: &mut Ui, workspace: &Workspace, keep: &mut bool) {
+        let tokens = Tokens::of(ui);
         let busy = self.test.is_some() || self.save.is_some();
         egui::Grid::new("profile-form")
             .num_columns(2)
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
-                ui.label("Name");
-                ui.add(egui::TextEdit::singleline(&mut self.profile.name).desired_width(300.0));
+                ui.label(t("Name"));
+                ui.add(egui::TextEdit::singleline(&mut self.profile.name).desired_width(320.0));
                 ui.end_row();
 
-                ui.label("Database");
+                ui.label(t("Database"));
                 let before = self.profile.kind;
                 egui::ComboBox::from_id_salt("kind")
                     .selected_text(kind_name(self.profile.kind))
@@ -612,7 +669,7 @@ impl ProfileForm {
                 ui.end_row();
 
                 if self.profile.kind == DatabaseKind::SQLite {
-                    ui.label("File");
+                    ui.label(t("File"));
                     ui.horizontal(|ui| {
                         let path = self
                             .profile
@@ -621,10 +678,10 @@ impl ProfileForm {
                             .get_or_insert_with(String::new);
                         ui.add(
                             egui::TextEdit::singleline(path)
-                                .desired_width(220.0)
+                                .desired_width(236.0)
                                 .hint_text(":memory:"),
                         );
-                        if ui.button("Browse…").clicked()
+                        if ui.button(t("Browse…")).clicked()
                             && let Some(picked) = rfd::FileDialog::new()
                                 .add_filter("SQLite", &["db", "sqlite", "sqlite3"])
                                 .pick_file()
@@ -634,50 +691,50 @@ impl ProfileForm {
                     });
                     ui.end_row();
                 } else {
-                    ui.label("Host");
+                    ui.label(t("Host"));
                     ui.add(
                         egui::TextEdit::singleline(
                             self.profile.config.host.get_or_insert_with(String::new),
                         )
-                        .desired_width(300.0),
+                        .desired_width(320.0),
                     );
                     ui.end_row();
                     if !(self.profile.kind == DatabaseKind::MongoDb && self.profile.config.srv) {
-                        ui.label("Port");
+                        ui.label(t("Port"));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.port_text).desired_width(100.0),
                         );
                         ui.end_row();
                     }
-                    ui.label("Database");
+                    ui.label(t("Database"));
                     ui.add(
                         egui::TextEdit::singleline(
                             self.profile.config.database.get_or_insert_with(String::new),
                         )
-                        .desired_width(300.0),
+                        .desired_width(320.0),
                     );
                     ui.end_row();
-                    ui.label("User");
+                    ui.label(t("User"));
                     ui.add(
                         egui::TextEdit::singleline(
                             self.profile.config.username.get_or_insert_with(String::new),
                         )
-                        .desired_width(300.0),
+                        .desired_width(320.0),
                     );
                     ui.end_row();
-                    ui.label("Password");
+                    ui.label(t("Password"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.password)
                             .password(true)
-                            .desired_width(300.0)
+                            .desired_width(320.0)
                             .hint_text(if self.editing {
-                                "unchanged unless typed"
+                                t("unchanged unless typed")
                             } else {
                                 ""
                             }),
                     );
                     ui.end_row();
-                    ui.label("Options");
+                    ui.label(t("Options"));
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.profile.config.tls, "TLS");
                         if self.profile.kind == DatabaseKind::MongoDb {
@@ -695,24 +752,29 @@ impl ProfileForm {
                         ui.end_row();
                     }
                 }
-                ui.label("Edits");
+                ui.label(t("Edits"));
                 ui.checkbox(
                     &mut self.profile.read_only,
-                    "Read-only (uncheck to allow reviewed edits)",
+                    t("Read-only (untick to allow reviewed edits)"),
                 );
                 ui.end_row();
             });
 
+        ui.add_space(6.0);
         if let Some((text, ok)) = &self.test_result {
-            let colour = if *ok { theme::SUCCESS } else { theme::DANGER };
-            ui.label(RichText::new(text).color(colour));
+            let colour = if *ok { tokens.success } else { tokens.danger };
+            ui.add(egui::Label::new(RichText::new(text).color(colour)).wrap());
         }
         if let Some(error) = &self.error {
-            ui.label(RichText::new(error).color(theme::DANGER));
+            ui.add(egui::Label::new(RichText::new(error).color(tokens.danger)).wrap());
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled(!busy, egui::Button::new("Test")).clicked() {
+            if ui
+                .add_enabled(!busy, egui::Button::new(t("Test")))
+                .on_hover_text(t("Connect once with these settings and report"))
+                .clicked()
+            {
                 self.commit_fields();
                 self.error = None;
                 self.test_result = None;
@@ -724,27 +786,29 @@ impl ProfileForm {
                     Err(error) => self.error = Some(error.to_string()),
                 }
             }
-            if ui
-                .add_enabled(!busy, theme::primary_button("Save"))
-                .clicked()
-            {
-                self.commit_fields();
-                self.error = None;
-                match self.profile.validate() {
-                    Ok(()) => {
-                        self.save =
-                            Some(workspace.save_profile(self.profile.clone(), self.secret()))
-                    }
-                    Err(error) => self.error = Some(error.to_string()),
-                }
-            }
-            if ui.button("Cancel").clicked() {
-                self.password.clear();
-                *keep = false;
-            }
             if busy {
                 ui.spinner();
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(!busy, theme::primary_button(ui, t("Save")))
+                    .clicked()
+                {
+                    self.commit_fields();
+                    self.error = None;
+                    match self.profile.validate() {
+                        Ok(()) => {
+                            self.save =
+                                Some(workspace.save_profile(self.profile.clone(), self.secret()))
+                        }
+                        Err(error) => self.error = Some(error.to_string()),
+                    }
+                }
+                if ui.button(t("Cancel")).clicked() {
+                    self.password.clear();
+                    *keep = false;
+                }
+            });
         });
     }
 }

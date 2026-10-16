@@ -119,6 +119,7 @@ branch and publishes nothing.
 | `account.json` | This app's own Redrob sign-in, if the launcher's Connect or you wrote one; wins over the shared file |
 | `workspace.json` | Open tabs (query text only) and the run history; never result rows, passwords or prompts |
 | `ui.ron` | eframe's window geometry and panel sizes |
+| `language.json` | Help > Language: `auto` or a code (`en`, `ko`) |
 
 Directory: `%APPDATA%\Redrob Query` on Windows, `~/Library/Application Support/Redrob Query` on macOS,
 `$XDG_CONFIG_HOME/redrob-query` (`~/.config/redrob-query`) elsewhere; `REDROB_QUERY_CONFIG_DIR`

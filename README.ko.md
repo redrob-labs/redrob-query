@@ -117,6 +117,7 @@ cargo test -p redrob-query-core --locked -- --ignored
 | `account.json` | 런처의 Connect나 사용자가 써 둔 이 앱 자체의 Redrob 로그인. 공용 파일보다 우선 |
 | `workspace.json` | 열린 탭(쿼리 텍스트만)과 실행 이력. 결과 행·비밀번호·프롬프트는 저장하지 않음 |
 | `ui.ron` | eframe의 창 위치와 패널 크기 |
+| `language.json` | 도움말 > 언어: `auto` 또는 코드(`en`, `ko`) |
 
 디렉터리는 Windows `%APPDATA%\Redrob Query`, macOS `~/Library/Application Support/Redrob Query`, 그 외
 `$XDG_CONFIG_HOME/redrob-query`(`~/.config/redrob-query`)이며 `REDROB_QUERY_CONFIG_DIR`로 바꿀 수 있습니다.

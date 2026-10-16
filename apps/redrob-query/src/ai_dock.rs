@@ -1,4 +1,4 @@
-//! The AI dock: ask for a query in plain words, get a draft back, put it in the editor.
+//! The Ask dock: ask for a query in plain words, get a draft back, put it in the editor.
 //!
 //! Each turn sends only the prompt and the active tab's text (never result rows or credentials)
 //! to the console with the shared account. Fenced `sql` / `mql` / `json` blocks in the answer each
@@ -10,7 +10,8 @@ use redrob_query_core::{
     ai::{AiKeySource, AiKeyStatus, NOT_SIGNED_IN_MESSAGE},
 };
 
-use crate::theme;
+use crate::i18n::{t, tf};
+use crate::theme::{self, Tokens};
 
 #[derive(Clone, Debug)]
 pub struct Turn {
@@ -71,10 +72,11 @@ impl AiDock {
         active: Option<(DatabaseKind, QueryLanguage, String)>,
         events: &mut Vec<AiEvent>,
     ) {
+        let tokens = Tokens::of(ui);
         ui.horizontal(|ui| {
-            ui.heading("Ask");
+            ui.label(RichText::new(t("Ask")).font(theme::semibold(12.5)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Clear").clicked() {
+                if ui.small_button(t("Clear")).clicked() {
                     self.turns.clear();
                     self.error = None;
                 }
@@ -82,23 +84,32 @@ impl AiDock {
         });
         match self.status.source {
             AiKeySource::None => {
-                ui.label(RichText::new(NOT_SIGNED_IN_MESSAGE).color(theme::CAUTION));
-                if ui.button("Open Redrob Launcher").clicked() {
+                ui.add(
+                    egui::Label::new(RichText::new(t(NOT_SIGNED_IN_MESSAGE)).color(tokens.warning))
+                        .wrap(),
+                );
+                if ui.button(t("Open Redrob Launcher")).clicked() {
                     let _ = webbrowser::open(Workspace::launcher_url());
                 }
             }
             AiKeySource::Launcher => {
                 ui.label(
-                    RichText::new(format!("{} · via Redrob Launcher", self.status.label))
-                        .small()
-                        .weak(),
+                    RichText::new(tf(
+                        "{name} · via Redrob Launcher",
+                        &[("name", &self.status.label)],
+                    ))
+                    .small()
+                    .color(tokens.text_faint),
                 );
             }
             AiKeySource::Own => {
                 ui.label(
-                    RichText::new(format!("{} · this app's own key", self.status.label))
-                        .small()
-                        .weak(),
+                    RichText::new(tf(
+                        "{name} · this app's own key",
+                        &[("name", &self.status.label)],
+                    ))
+                    .small()
+                    .color(tokens.text_faint),
                 );
             }
         }
@@ -113,15 +124,26 @@ impl AiDock {
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 if self.turns.is_empty() {
-                    ui.label(RichText::new(
-                        "Describe the query you want. The active tab's text is sent along as context; result rows never are.",
-                    ).weak());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(t(
+                                "Describe the query you want. The active tab's text is sent along as context; result rows never are.",
+                            ))
+                            .color(tokens.text_faint),
+                        )
+                        .wrap(),
+                    );
                 }
                 for (index, turn) in self.turns.iter().enumerate() {
-                    let who = if turn.user { "You" } else { "Redrob" };
-                    ui.label(RichText::new(who).small().strong().color(if turn.user { ui.visuals().text_color() } else { theme::REDROB_BLUE }));
+                    let who = if turn.user { t("You") } else { "Redrob" };
+                    let colour = if turn.user {
+                        tokens.text
+                    } else {
+                        tokens.accent_text
+                    };
+                    ui.label(RichText::new(who).small().strong().color(colour));
                     if turn.user {
-                        ui.label(&turn.text);
+                        ui.add(egui::Label::new(&turn.text).wrap());
                     } else {
                         render_answer(ui, index, &turn.text, events);
                     }
@@ -130,11 +152,11 @@ impl AiDock {
                 if self.pending.is_some() {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(RichText::new("Thinking…").weak());
+                        ui.label(RichText::new(t("Thinking…")).color(tokens.text_faint));
                     });
                 }
                 if let Some(error) = &self.error {
-                    ui.label(RichText::new(error).color(theme::DANGER));
+                    ui.add(egui::Label::new(RichText::new(error).color(tokens.danger)).wrap());
                 }
             });
 
@@ -146,9 +168,9 @@ impl AiDock {
                 .desired_rows(3)
                 .desired_width(f32::INFINITY)
                 .hint_text(if active.is_some() {
-                    "e.g. customers who ordered twice this month, newest first"
+                    t("e.g. customers who ordered twice this month, newest first")
                 } else {
-                    "Open a query tab first"
+                    t("Open a query tab first")
                 }),
         );
         let submit = response.has_focus()
@@ -159,7 +181,7 @@ impl AiDock {
             if (ui
                 .add_enabled(
                     can_ask && !self.prompt.trim().is_empty(),
-                    theme::primary_button("Ask (Ctrl+Enter)"),
+                    theme::primary_button(ui, t("Ask (Ctrl+Enter)")),
                 )
                 .clicked()
                 || (submit && can_ask))
@@ -218,12 +240,12 @@ fn render_answer(ui: &mut Ui, index: usize, text: &str, events: &mut Vec<AiEvent
                 });
                 ui.horizontal(|ui| {
                     if ui
-                        .add(theme::primary_button("Insert into editor"))
+                        .add(theme::primary_button(ui, t("Insert into editor")))
                         .clicked()
                     {
                         events.push(AiEvent::Insert(piece.trim().to_owned()));
                     }
-                    if ui.small_button("Copy").clicked() {
+                    if ui.small_button(t("Copy")).clicked() {
                         ui.ctx().copy_text(piece.trim().to_owned());
                     }
                 });

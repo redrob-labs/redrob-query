@@ -10,7 +10,8 @@ use redrob_query_core::{
 use uuid::Uuid;
 
 use crate::schema::split_table_id;
-use crate::theme;
+use crate::i18n::t;
+use crate::theme::{self, Tokens};
 
 pub enum StructureEvent {
     /// A DDL change was applied: reload the schema tree of this connection.
@@ -117,13 +118,13 @@ impl StructurePanel {
 
     pub fn ui(&mut self, ui: &mut Ui, workspace: &Workspace, read_only_profile: bool) {
         ui.horizontal(|ui| {
-            ui.heading("Structure");
+            ui.label(RichText::new(t("Structure")).font(theme::semibold(12.5)));
             if let Some(target) = &self.target {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if target.kind != DatabaseKind::MongoDb
                         && ui
-                            .small_button("＋ Column")
-                            .on_hover_text("Add a column to this table")
+                            .small_button(t("＋ Column"))
+                            .on_hover_text(t("Add a column to this table"))
                             .clicked()
                     {
                         let (schema, table) = split_table_id(&target.node, target.kind);
@@ -138,7 +139,7 @@ impl StructurePanel {
             }
         });
         let Some(target) = self.target.clone() else {
-            ui.label(RichText::new("Select a table in the schema browser.").weak());
+            ui.label(RichText::new(t("Select a table in the schema tree.")).weak());
             return;
         };
         ui.label(RichText::new(&target.node.name).strong().monospace());
@@ -149,13 +150,13 @@ impl StructurePanel {
             .id_salt("structure")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.label(RichText::new("Columns").small().strong());
+                ui.label(RichText::new(t("Columns")).small().strong());
                 match &self.columns {
                     None => {
                         ui.spinner();
                     }
                     Some(columns) if columns.is_empty() => {
-                        ui.label(RichText::new("No columns reported.").weak());
+                        ui.label(RichText::new(t("No columns reported.")).weak());
                     }
                     Some(columns) => {
                         let keys = self.keys.clone().unwrap_or_default();
@@ -168,7 +169,7 @@ impl StructurePanel {
                                     let is_key = keys.primary.contains(&column.name);
                                     let name = RichText::new(&column.name).monospace();
                                     ui.label(if is_key {
-                                        name.color(theme::REDROB_BLUE)
+                                        name.color(Tokens::of(ui).accent_text)
                                     } else {
                                         name
                                     });
@@ -200,7 +201,7 @@ impl StructurePanel {
                 if let Some(keys) = &self.keys {
                     if !keys.foreign.is_empty() {
                         ui.add_space(6.0);
-                        ui.label(RichText::new("Foreign keys").small().strong());
+                        ui.label(RichText::new(t("Foreign keys")).small().strong());
                         for fk in &keys.foreign {
                             let mut line = format!(
                                 "{} → {} ({})",
@@ -224,7 +225,7 @@ impl StructurePanel {
                     }
                     if !keys.indexes.is_empty() {
                         ui.add_space(6.0);
-                        ui.label(RichText::new("Indexes").small().strong());
+                        ui.label(RichText::new(t("Indexes")).small().strong());
                         for index in &keys.indexes {
                             let mut tags = Vec::new();
                             if index.primary {
@@ -243,7 +244,7 @@ impl StructurePanel {
                                     ui.label(
                                         RichText::new(tags.join(", "))
                                             .small()
-                                            .color(theme::REDROB_BLUE),
+                                            .color(Tokens::of(ui).accent_text),
                                     );
                                 }
                             });
@@ -391,9 +392,9 @@ impl TableChangeForm {
         busy: bool,
     ) {
         let title = if self.create {
-            "Create table"
+            t("Create table")
         } else {
-            "Add column"
+            t("Add column")
         };
         let mut open = true;
         egui::Window::new(title)
@@ -408,7 +409,7 @@ impl TableChangeForm {
                     .spacing([12.0, 6.0])
                     .show(ui, |ui| {
                         if matches!(self.kind, DatabaseKind::PostgreSql | DatabaseKind::MySql) {
-                            ui.label("Schema");
+                            ui.label(t("Schema"));
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.schema)
                                     .desired_width(200.0)
@@ -416,7 +417,7 @@ impl TableChangeForm {
                             );
                             ui.end_row();
                         }
-                        ui.label("Table");
+                        ui.label(t("Table"));
                         ui.add_enabled(
                             self.create,
                             egui::TextEdit::singleline(&mut self.table).desired_width(300.0),
@@ -425,7 +426,7 @@ impl TableChangeForm {
                     });
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(if self.create { "Columns" } else { "Column" })
+                    RichText::new(if self.create { t("Columns") } else { t("Column") })
                         .small()
                         .strong(),
                 );
@@ -436,10 +437,10 @@ impl TableChangeForm {
                     .num_columns(5)
                     .spacing([10.0, 4.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Name").small().weak());
-                        ui.label(RichText::new("Type").small().weak());
-                        ui.label(RichText::new("Nullable").small().weak());
-                        ui.label(RichText::new("Primary").small().weak());
+                        ui.label(RichText::new(t("Name")).small().weak());
+                        ui.label(RichText::new(t("Type")).small().weak());
+                        ui.label(RichText::new(t("Nullable")).small().weak());
+                        ui.label(RichText::new(t("Primary")).small().weak());
                         ui.label("");
                         ui.end_row();
                         for (index, column) in self.columns.iter_mut().enumerate() {
@@ -483,7 +484,7 @@ impl TableChangeForm {
                 if let Some(index) = remove {
                     self.columns.remove(index);
                 }
-                if self.create && ui.small_button("＋ column").clicked() {
+                if self.create && ui.small_button(t("＋ column")).clicked() {
                     self.columns.push(ColumnRow::default());
                 }
                 if let Ok(change) = self.change()
@@ -494,22 +495,22 @@ impl TableChangeForm {
                 }
                 if read_only {
                     ui.label(
-                        RichText::new("This profile is read-only; the change will be refused.")
-                            .color(theme::CAUTION),
+                        RichText::new(t("This connection is read-only; the change will be refused."))
+                            .color(Tokens::of(ui).warning),
                     );
                 }
                 if let Some(error) = &self.error {
-                    ui.label(RichText::new(error).color(theme::DANGER));
+                    ui.label(RichText::new(error).color(Tokens::of(ui).danger));
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(!busy && !read_only, theme::primary_button("Apply"))
+                        .add_enabled(!busy && !read_only, theme::primary_button(ui, t("Apply")))
                         .clicked()
                     {
                         *submit = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t("Cancel")).clicked() {
                         *keep = false;
                     }
                     if busy {

@@ -34,6 +34,8 @@ use crate::{
 /// A result that is on its way. Poll it once per frame; it answers exactly once.
 pub struct Pending<T> {
     receiver: Option<oneshot::Receiver<Result<T>>>,
+    /// The engine task behind the answer, so the shell's Esc can stop waiting for it.
+    task: Option<tokio::task::AbortHandle>,
 }
 
 impl<T> Pending<T> {
@@ -43,6 +45,16 @@ impl<T> Pending<T> {
         let _ = sender.send(value);
         Self {
             receiver: Some(receiver),
+            task: None,
+        }
+    }
+
+    /// Stop waiting: the engine task is aborted at its next await point (a driver that is
+    /// mid-request finishes or times out on its own), and the next [`Self::poll`] answers with a
+    /// cancellation error.
+    pub fn cancel(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
         }
     }
 
@@ -58,9 +70,12 @@ impl<T> Pending<T> {
             Err(oneshot::error::TryRecvError::Empty) => None,
             Err(oneshot::error::TryRecvError::Closed) => {
                 self.receiver = None;
-                Some(Err(DataError::Unsupported(
-                    "the operation was dropped before it answered".to_owned(),
-                )))
+                let message = if self.task.is_none() {
+                    "cancelled"
+                } else {
+                    "the operation was dropped before it answered"
+                };
+                Some(Err(DataError::Unsupported(message.to_owned())))
             }
         }
     }
@@ -125,7 +140,7 @@ impl Workspace {
         let (sender, receiver) = oneshot::channel();
         let future = make(Arc::clone(&self.service));
         let wake = self.wake.lock().ok().and_then(|slot| slot.clone());
-        self.runtime.spawn(async move {
+        let handle = self.runtime.spawn(async move {
             let value = future.await;
             let _ = sender.send(value);
             if let Some(wake) = wake {
@@ -134,6 +149,7 @@ impl Workspace {
         });
         Pending {
             receiver: Some(receiver),
+            task: Some(handle.abort_handle()),
         }
     }
 
