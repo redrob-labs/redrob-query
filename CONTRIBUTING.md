@@ -53,14 +53,14 @@ from `origin/main`, so tagging straight off `develop` fails instead of shipping.
 
 ```bash
 git switch develop && git pull
-git switch -c release/0.4.0
+git switch -c release/0.5.0
 # bump the version in Cargo.toml, write the CHANGELOG section, run the gate
 # open a pull request into develop and merge it; then a pull request develop -> main
 # (merge commit) and tag main:
 git switch main && git pull
-git tag -a v0.4.0 -m "Redrob Query v0.4.0"
-git push origin refs/tags/v0.4.0:refs/tags/v0.4.0
-gh workflow run release.yml --ref main -f tag=v0.4.0
+git tag -a v0.5.0 -m "Redrob Query v0.5.0"
+git push origin refs/tags/v0.5.0:refs/tags/v0.5.0
+gh workflow run release.yml --ref main -f tag=v0.5.0
 # then merge main back into develop
 ```
 

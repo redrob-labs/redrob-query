@@ -54,13 +54,13 @@ ruleset은 pull request가 *어느* 브랜치에서 왔는지를 표현할 수 �
 
 ```bash
 git switch develop && git pull
-git switch -c release/0.4.0
+git switch -c release/0.5.0
 # Cargo.toml의 버전을 올리고 CHANGELOG 절을 쓰고 게이트를 돌립니다
 # develop으로 풀 리퀘스트를 열어 머지하고, develop -> main 풀 리퀘스트(머지 커밋)를 머지한 뒤 main에 태그를 뗍니다:
 git switch main && git pull
-git tag -a v0.4.0 -m "Redrob Query v0.4.0"
-git push origin refs/tags/v0.4.0:refs/tags/v0.4.0
-gh workflow run release.yml --ref main -f tag=v0.4.0
+git tag -a v0.5.0 -m "Redrob Query v0.5.0"
+git push origin refs/tags/v0.5.0:refs/tags/v0.5.0
+gh workflow run release.yml --ref main -f tag=v0.5.0
 # 그다음 main을 develop으로 다시 머지합니다
 ```
 

@@ -4,6 +4,18 @@ The release workflow's notes point here, so this file is what a download's notes
 follow the `vMAJOR.MINOR.PATCH` tags that trigger a release; while the major is 0 a minor bump is
 where behaviour may change.
 
+## 0.5.0 - 2026-10-17
+
+### Added
+
+- **Control from Redrob Code.** While the app is open it serves its tools to the shared Redrob
+  Code daemon over loopback MCP as `app:query` (redrob-code v0.7.0 app-bridge protocol), so the
+  agent in any Redrob surface can drive it: `list_connections`, `connect`, `list_tables`,
+  `describe_table`, `run_sql` (one read-only statement, TSV, 200 rows by default), `open_in_editor`
+  and `export_result` (CSV / TSV). Every tool goes through the same engine paths the panels use, so
+  a bridged query is bounded and gated exactly like one typed into a tab; the daemon is optional and
+  without one the app runs as before.
+
 ## 0.4.0 - 2026-10-16
 
 ### Changed

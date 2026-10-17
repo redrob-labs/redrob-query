@@ -3998,7 +3998,7 @@ dependencies = [
 
 [[package]]
 name = "redrob-query"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "arboard",
  "eframe",
@@ -4020,7 +4020,7 @@ dependencies = [
 
 [[package]]
 name = "redrob-query-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "bigdecimal",
