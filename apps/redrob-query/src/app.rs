@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::account::AccountWatch;
 use crate::ai_dock::{AiDock, AiEvent};
+use crate::app_bridge::Bridge;
 use crate::changes::{ChangesEvent, ChangesPanel};
 use crate::editor::{QueryTab, TabEvent};
 use crate::highlight::Dialect;
@@ -72,15 +73,15 @@ const SHORTCUTS: &[(&str, &str)] = &[
 ];
 
 pub struct QueryApp {
-    workspace: Workspace,
-    profiles: ProfilesPanel,
+    pub(crate) workspace: Workspace,
+    pub(crate) profiles: ProfilesPanel,
     schema: SchemaBrowser,
     structure: StructurePanel,
     changes: ChangesPanel,
     ai: AiDock,
     account: AccountWatch,
-    tabs: Vec<QueryTab>,
-    active: usize,
+    pub(crate) tabs: Vec<QueryTab>,
+    pub(crate) active: usize,
     history: Vec<HistoryEntry>,
     show_structure: bool,
     show_ai: bool,
@@ -91,8 +92,10 @@ pub struct QueryApp {
     status: Option<Status>,
     language: i18n::Language,
     theme_pref: ThemePref,
-    tab_counter: usize,
+    pub(crate) tab_counter: usize,
     dirty_since_save: bool,
+    /// The Redrob Code app bridge (`app_bridge.rs`); the app runs without the daemon too.
+    pub(crate) bridge: Bridge,
 }
 
 impl QueryApp {
@@ -118,6 +121,7 @@ impl QueryApp {
         });
         let repaint = ctx.clone();
         workspace.set_wake(move || repaint.request_repaint());
+        let bridge = Bridge::start(ctx);
 
         let mut tabs: Vec<QueryTab> = saved
             .tabs
@@ -152,12 +156,13 @@ impl QueryApp {
             theme_pref,
             tab_counter,
             dirty_since_save: false,
+            bridge,
             workspace,
         }
     }
 
     /// Show `text` on the status line (an error in the error colour).
-    fn notify(&mut self, text: impl Into<String>, is_error: bool) {
+    pub(crate) fn notify(&mut self, text: impl Into<String>, is_error: bool) {
         let text = text.into();
         if is_error {
             log::warn!("{text}");
@@ -174,7 +179,7 @@ impl QueryApp {
     }
 
     /// The connection the shell acts on: the active tab's, else the selected one.
-    fn active_profile(&self) -> Option<&ConnectionProfile> {
+    pub(crate) fn active_profile(&self) -> Option<&ConnectionProfile> {
         self.tabs
             .get(self.active)
             .and_then(|tab| self.profile(tab.connection_id))
@@ -211,7 +216,7 @@ impl QueryApp {
         self.dirty_since_save = false;
     }
 
-    fn push_tab(&mut self, mut tab: QueryTab) {
+    pub(crate) fn push_tab(&mut self, mut tab: QueryTab) {
         if self.tabs.len() >= crate::workspace::MAX_TABS {
             self.notify(
                 tf(
@@ -228,7 +233,7 @@ impl QueryApp {
         self.dirty_since_save = true;
     }
 
-    fn open_tab_for(&mut self, profile: &ConnectionProfile, text: Option<String>) {
+    pub(crate) fn open_tab_for(&mut self, profile: &ConnectionProfile, text: Option<String>) {
         // Re-use an open tab on this connection that is still its untouched starter.
         if text.is_none()
             && let Some(index) = self.tabs.iter().position(|t| {
@@ -1275,6 +1280,7 @@ impl QueryApp {
 impl eframe::App for QueryApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.poll();
+        self.serve_bridge();
         self.handle_shortcuts(ui.ctx());
 
         self.top_bar(ui);
@@ -1356,6 +1362,7 @@ impl eframe::App for QueryApp {
     }
 
     fn on_exit(&mut self) {
+        self.bridge.stop();
         self.save_workspace();
     }
 }
