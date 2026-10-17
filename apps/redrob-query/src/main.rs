@@ -17,6 +17,7 @@
 mod account;
 mod ai_dock;
 mod app;
+mod app_bridge;
 mod changes;
 mod editor;
 mod grid;

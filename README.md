@@ -154,6 +154,24 @@ environment, then this app's own `account.json`, win over it. The key is sent on
 refuses. Without an account the Ask dock says so and offers to open the launcher; this app has no
 sign-in of its own.
 
+## Control from Redrob Code
+
+While the app is open it serves its tools to the shared Redrob Code daemon over loopback MCP (as
+`app:query`), so the agent in any Redrob surface, a phone chat included, can drive it. The daemon is
+optional: without one the app runs as before. The tools answer short TSV text and go through the
+same engine paths the panels use, so a bridged query is bounded and gated exactly like one typed
+into a tab.
+
+- `list_connections` - the saved connections: id, name, driver, connected.
+- `connect {id}` - connect a saved connection by id or name; answers when it is up.
+- `list_tables {connection?, schema?}` - tables, views or collections of a connected database.
+- `describe_table {connection?, table}` - the columns (name, type, nullable) of one table.
+- `run_sql {connection?, sql, max_rows?}` - run one read-only statement; TSV header and rows
+  (200 by default), then a summary line with the count, the time and whether more rows exist.
+- `open_in_editor {sql, connection?}` - put the text in a new editor tab without running it.
+- `export_result {path, format}` - write the last `run_sql` result (else the active tab's grid) as
+  CSV or TSV.
+
 ## Current boundaries
 
 - No free-form write SQL: changes go through the reviewed edit set and the table forms. Tables need a
