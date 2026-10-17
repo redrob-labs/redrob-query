@@ -95,7 +95,7 @@ pub struct QueryApp {
     pub(crate) tab_counter: usize,
     dirty_since_save: bool,
     /// The Redrob Code app bridge (`app_bridge.rs`); the app runs without the daemon too.
-    bridge: Bridge,
+    pub(crate) bridge: Bridge,
 }
 
 impl QueryApp {

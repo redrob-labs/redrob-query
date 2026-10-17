@@ -75,10 +75,13 @@ enum Job {
     },
 }
 
+/// What a metadata step does with the nodes it loaded.
+type MetadataThen = Box<dyn FnOnce(&Workspace, Vec<MetadataNode>) -> StepOutcome>;
+
 /// A metadata load and what to do with its nodes: answer, or load once more.
 struct MetadataStep {
     pending: Pending<Vec<MetadataNode>>,
-    then: Box<dyn FnOnce(&Workspace, Vec<MetadataNode>) -> StepOutcome>,
+    then: MetadataThen,
 }
 
 enum StepOutcome {
@@ -358,12 +361,10 @@ impl QueryApp {
                 } else if self.profiles.is_connecting(id) {
                     Err(Job::Connect { id, name })
                 } else {
-                    let why = self
-                        .profiles
-                        .status
-                        .get(&id)
-                        .map(|s| s.message.clone())
-                        .unwrap_or_else(|| "see the app's status line".to_owned());
+                    let why = self.profiles.status.get(&id).map_or_else(
+                        || "see the app's status line".to_owned(),
+                        |s| s.message.clone(),
+                    );
                     Ok(Err(format!("could not connect {name}: {why}")))
                 }
             }
